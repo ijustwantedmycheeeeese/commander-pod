@@ -1,0 +1,990 @@
+const express = require("express");
+const fs = require("fs");
+const crypto = require("crypto");
+const app = express();
+const http = require("http").createServer(app);
+const io = require("socket.io")(http);
+
+app.use(express.static("public"));
+app.use(express.json({ limit: "1mb" }));
+
+// ---------------- persistent storage (users + decks) ----------------
+
+const DATA_DIR = "/app/data";
+try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
+
+function loadJSON(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return fallback; }
+}
+function saveJSON(file, data) {
+  try { fs.writeFileSync(file, JSON.stringify(data)); } catch (e) { console.error("Failed to save " + file, e); }
+}
+const USERS_FILE = DATA_DIR + "/users.json";
+const DECKS_FILE = DATA_DIR + "/decks.json";
+let users = loadJSON(USERS_FILE, {});
+let decks = loadJSON(DECKS_FILE, {});
+function saveUsers() { saveJSON(USERS_FILE, users); }
+function saveDecks() { saveJSON(DECKS_FILE, decks); }
+
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString("hex");
+}
+function verifyPassword(password, salt, hash) {
+  const test = Buffer.from(hashPassword(password, salt), "hex");
+  const stored = Buffer.from(hash, "hex");
+  if (test.length !== stored.length) return false;
+  return crypto.timingSafeEqual(test, stored);
+}
+
+let sessions = {}; // token -> username
+
+// ---------------- game state ----------------
+
+const COLORS = ["#ef4444", "#3b82f6", "#22c55e", "#eab308", "#a855f7", "#ec4899", "#14b8a6", "#f97316"];
+let colorIndex = 0;
+function nextColor() { return COLORS[colorIndex++ % COLORS.length]; }
+function randInt(n) { return Math.floor(Math.random() * n); }
+function newId() { return "c_" + Date.now() + "_" + randInt(100000); }
+
+let cards = {};        // battlefield/hand cards, keyed by id
+let players = {};      // socket.id -> player state
+let targets = {};      // cardId -> [playerId, ...]
+let gameState = { log: [] };
+let chatLog = [];
+let voiceParticipants = new Set();
+
+const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End Step"];
+let turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 };
+let combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+
+const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = randInt(i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+function classifyType(type) {
+  if (!type) return "artifact";
+  const t = type.toLowerCase();
+  if (t.includes("land")) return "mana";
+  if (t.includes("creature")) return "creature";
+  return "artifact"; // artifacts, enchantments, planeswalkers, instants/sorceries, etc.
+}
+
+function basicLandColor(type) {
+  if (!type) return null;
+  if (type.includes("Plains")) return "W";
+  if (type.includes("Island")) return "U";
+  if (type.includes("Swamp")) return "B";
+  if (type.includes("Mountain")) return "R";
+  if (type.includes("Forest")) return "G";
+  return null;
+}
+
+function parsePT(v) {
+  const n = parseInt(v, 10);
+  return isNaN(n) ? 0 : n;
+}
+
+function parseManaCost(costStr) {
+  const cost = { generic: 0, W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, hybrid: [], x: false };
+  if (!costStr) return cost;
+  const tokens = costStr.match(/\{[^}]+\}/g) || [];
+  tokens.forEach((tok) => {
+    const inner = tok.slice(1, -1).toUpperCase();
+    if (inner === "X") { cost.x = true; return; }
+    if (/^\d+$/.test(inner)) { cost.generic += parseInt(inner); return; }
+    if (["W", "U", "B", "R", "G", "C"].includes(inner)) { cost[inner]++; return; }
+    if (inner.includes("/")) {
+      const parts = inner.split("/").filter((p) => ["W", "U", "B", "R", "G", "C"].includes(p));
+      if (parts.length) cost.hybrid.push(parts);
+      return;
+    }
+    cost.generic += 1; // unknown symbol (e.g. phyrexian) — fall back to 1 generic
+  });
+  return cost;
+}
+
+function canAffordAndPay(pool, cost, xValue) {
+  const p = { ...pool };
+  for (const c of ["W", "U", "B", "R", "G", "C"]) {
+    if (p[c] < cost[c]) return null;
+    p[c] -= cost[c];
+  }
+  for (const pair of cost.hybrid) {
+    const colorWithMana = pair.find((c) => p[c] > 0);
+    if (!colorWithMana) return null;
+    p[colorWithMana]--;
+  }
+  let genericNeeded = cost.generic + (xValue || 0);
+  const spendOrder = ["C", "W", "U", "B", "R", "G"];
+  for (const c of spendOrder) {
+    while (genericNeeded > 0 && p[c] > 0) { p[c]--; genericNeeded--; }
+  }
+  if (genericNeeded > 0) return null;
+  return p;
+}
+
+function extractCardFields(c) {
+  const face = (c.card_faces && c.card_faces[0]) || {};
+  return {
+    name: c.name,
+    img: c.image_uris ? c.image_uris.normal : (face.image_uris ? face.image_uris.normal : null),
+    type: c.type_line || face.type_line || "",
+    manaCost: c.mana_cost || face.mana_cost || "",
+    power: c.power !== undefined ? c.power : face.power,
+    toughness: c.toughness !== undefined ? c.toughness : face.toughness
+  };
+}
+
+function maskCard(card, viewerId) {
+  if (card.faceDown && card.owner !== viewerId) {
+    return { id: card.id, tapped: card.tapped, faceDown: true, zoneType: card.zoneType, owner: card.owner, ownerColor: card.ownerColor, name: null, img: null, type: null, manaCost: null, power: null, toughness: null, counters: 0, isCommander: card.isCommander };
+  }
+  return card;
+}
+
+function broadcastCard(card) {
+  for (const [sid, sock] of io.sockets.sockets) {
+    sock.emit("cardUpdate", maskCard(card, sid));
+  }
+}
+
+function broadcastTargets() { io.emit("targets", targets); }
+function broadcastTurn() { io.emit("turnState", turn); }
+function broadcastCombat() { io.emit("combatState", combat); }
+function broadcastVoiceRoster() { io.emit("voiceRoster", Array.from(voiceParticipants)); }
+
+function playersView(viewerId) {
+  const out = {};
+  for (const id in players) {
+    const p = players[id];
+    out[id] = {
+      name: p.name,
+      color: p.color,
+      life: p.life,
+      cmdr: p.cmdr,
+      poison: p.poison,
+      mulligans: p.mulligans,
+      handKept: p.handKept,
+      mana: p.mana,
+      landsPlayedThisTurn: p.landsPlayedThisTurn,
+      landDropBonus: p.landDropBonus,
+      commanders: p.commanders,
+      graveyard: p.graveyard,
+      exile: p.exile,
+      libraryCount: p.library.length,
+      library: id === viewerId ? p.library : undefined
+    };
+  }
+  return out;
+}
+
+function broadcastPlayers() {
+  for (const [sid, sock] of io.sockets.sockets) {
+    sock.emit("players", playersView(sid));
+  }
+}
+
+function pushLog(msg) {
+  gameState.log.push(msg);
+  if (gameState.log.length > 150) gameState.log.shift();
+  io.emit("log", msg);
+}
+
+function spawnBattlefieldCard({ name, img, type, manaCost, power, toughness, owner, faceDown, zoneType, isCommander }) {
+  const p = players[owner];
+  const id = newId();
+  const card = {
+    id, name, img, type: type || "", manaCost: manaCost || "", power, toughness,
+    zoneType: zoneType || classifyType(type),
+    tapped: false, faceDown: !!faceDown, counters: 0,
+    owner, ownerColor: p ? p.color : "#999",
+    isCommander: !!isCommander
+  };
+  cards[id] = card;
+  broadcastCard(card);
+  return card;
+}
+
+function drawN(ownerId, n) {
+  const p = players[ownerId];
+  if (!p) return 0;
+  let drawn = 0;
+  for (let i = 0; i < n && p.library.length > 0; i++) {
+    const entry = p.library.shift();
+    spawnBattlefieldCard({ ...entry, owner: ownerId, faceDown: true, zoneType: "hand" });
+    drawn++;
+  }
+  return drawn;
+}
+
+function returnAllHandToLibrary(ownerId) {
+  const p = players[ownerId];
+  if (!p) return;
+  const toRemove = [];
+  for (const id in cards) {
+    if (cards[id].owner === ownerId && cards[id].zoneType === "hand") {
+      const c = cards[id];
+      p.library.push({ name: c.name, img: c.img, type: c.type || "", manaCost: c.manaCost || "", power: c.power, toughness: c.toughness });
+      toRemove.push(id);
+    }
+  }
+  toRemove.forEach((id) => {
+    delete cards[id];
+    if (targets[id]) delete targets[id];
+    io.emit("cardRemove", id);
+  });
+  if (toRemove.length) broadcastTargets();
+}
+
+function attemptPlay(p, card, targetZoneType, xValue) {
+  if (targetZoneType === "mana") {
+    const allowed = 1 + (p.landDropBonus || 0);
+    if ((p.landsPlayedThisTurn || 0) >= allowed) {
+      return { ok: false, error: `You've already played your land${allowed > 1 ? "s" : ""} this turn (${allowed} allowed).` };
+    }
+    p.landsPlayedThisTurn = (p.landsPlayedThisTurn || 0) + 1;
+    return { ok: true };
+  }
+  const cost = parseManaCost(card.manaCost);
+  const remaining = canAffordAndPay(p.mana, cost, xValue);
+  if (!remaining) {
+    return { ok: false, error: `Not enough mana to cast ${card.name || "this card"}.` };
+  }
+  p.mana = remaining;
+  return { ok: true };
+}
+
+function sendToGraveyardInternal(card) {
+  delete cards[card.id];
+  if (targets[card.id]) delete targets[card.id];
+  io.emit("cardRemove", card.id);
+  const owner = players[card.owner];
+  if (owner) owner.graveyard.push({ name: card.name, img: card.img, type: card.type || "", manaCost: card.manaCost || "", power: card.power, toughness: card.toughness });
+}
+
+// ---------------- turn engine ----------------
+
+function advancePhase() {
+  if (!turn.started || turn.order.length === 0) return;
+  const oldPhase = turn.phase;
+  let idx = PHASES.indexOf(turn.phase);
+  idx++;
+  if (idx >= PHASES.length) {
+    idx = 0;
+    turn.activeIndex = (turn.activeIndex + 1) % turn.order.length;
+    turn.turnNumber++;
+  }
+  turn.phase = PHASES[idx];
+  const activeId = turn.order[turn.activeIndex];
+  const activePlayer = players[activeId];
+
+  for (const pid in players) players[pid].mana = EMPTY_MANA(); // mana empties every step/phase
+
+  if (oldPhase === "Combat" && turn.phase !== "Combat") {
+    combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+  }
+  if (turn.phase === "Combat") {
+    combat = { step: "declareAttackers", attackers: {}, blocks: {}, defendersPending: [] };
+  }
+
+  if (activePlayer && turn.phase === "Untap") {
+    activePlayer.landsPlayedThisTurn = 0;
+    for (const id in cards) {
+      if (cards[id].owner === activeId && cards[id].tapped) {
+        cards[id].tapped = false;
+        broadcastCard(cards[id]);
+      }
+    }
+  }
+  if (activePlayer && turn.phase === "Draw") {
+    const isVeryFirstTurn = turn.turnNumber === 1 && turn.activeIndex === 0;
+    if (!isVeryFirstTurn) {
+      const drew = drawN(activeId, 1);
+      if (drew) pushLog(`${activePlayer.name} drew a card for the turn`);
+    } else {
+      pushLog(`${activePlayer.name} skips their draw (playing first)`);
+    }
+  }
+  broadcastTurn();
+  broadcastCombat();
+  broadcastPlayers();
+  if (activePlayer) pushLog(`${activePlayer.name} — ${turn.phase}${turn.phase === "Untap" ? ` (Turn ${turn.turnNumber})` : ""}`);
+}
+
+function resolveCombatDamage() {
+  const deaths = [];
+  for (const [attackerId, defenderId] of Object.entries(combat.attackers)) {
+    const attacker = cards[attackerId];
+    if (!attacker) continue;
+    const atkPower = parsePT(attacker.power) + (attacker.counters || 0);
+    const atkTough = parsePT(attacker.toughness) + (attacker.counters || 0);
+    const blockerId = combat.blocks[attackerId];
+    if (blockerId && cards[blockerId]) {
+      const blocker = cards[blockerId];
+      const defPower = parsePT(blocker.power) + (blocker.counters || 0);
+      const defTough = parsePT(blocker.toughness) + (blocker.counters || 0);
+      pushLog(`${attacker.name || "A face-down creature"} (${atkPower}/${atkTough}) fights ${blocker.name || "a face-down creature"} (${defPower}/${defTough})`);
+      if (atkPower >= defTough) deaths.push(blocker);
+      if (defPower >= atkTough) deaths.push(attacker);
+    } else {
+      const defender = players[defenderId];
+      if (defender) {
+        defender.life -= atkPower;
+        if (attacker.isCommander) defender.cmdr = (defender.cmdr || 0) + atkPower;
+        pushLog(`${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
+      }
+    }
+  }
+  const seen = new Set();
+  deaths.forEach((c) => { if (!seen.has(c.id) && cards[c.id]) { seen.add(c.id); sendToGraveyardInternal(c); } });
+  combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+  broadcastCombat();
+  broadcastPlayers();
+}
+
+// ---------------- decklist parsing + resolution ----------------
+
+function parseDecklistLine(line) {
+  line = line.replace(/#.*/, "").trim();
+  if (!line) return null;
+  let qty = 1;
+  let rest = line;
+  const qtyMatch = rest.match(/^(\d+)\s*x?\s+(.*)$/i);
+  if (qtyMatch) { qty = Math.max(1, parseInt(qtyMatch[1])); rest = qtyMatch[2]; }
+  rest = rest.replace(/\s*[\(\[][A-Za-z0-9]+[\)\]]\s*\d*\s*$/, "").trim();
+  if (!rest) return null;
+  return { qty, name: rest };
+}
+
+async function resolveAndSetLibrary(socket, p, text) {
+  try {
+    const lines = (text || "").split("\n");
+    const wanted = [];
+    for (const line of lines) {
+      const parsed = parseDecklistLine(line);
+      if (parsed) for (let i = 0; i < parsed.qty; i++) wanted.push(parsed.name);
+    }
+    if (wanted.length === 0) { socket.emit("importResult", { success: false, error: "Nothing parsed from that list." }); return; }
+    if (wanted.length > 250) { socket.emit("importResult", { success: false, error: "That's too many cards (limit 250)." }); return; }
+
+    const found = [];
+    for (let i = 0; i < wanted.length; i += 75) {
+      const batch = wanted.slice(i, i + 75);
+      const identifiers = batch.map((n) => ({ name: n }));
+      const r = await fetch("https://api.scryfall.com/cards/collection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "User-Agent": "CommanderVTT/8.0" },
+        body: JSON.stringify({ identifiers })
+      });
+      const json = await r.json();
+      (json.data || []).forEach((c) => {
+        const fields = extractCardFields(c);
+        if (fields.img) found.push(fields);
+      });
+    }
+    shuffle(found);
+    p.library = found;
+    broadcastPlayers();
+    socket.emit("importResult", { success: true, requested: wanted.length, found: found.length });
+    pushLog(`${p.name} loaded a ${wanted.length}-card decklist (${found.length} found)`);
+  } catch (e) {
+    socket.emit("importResult", { success: false, error: "Import failed — check your connection and try again." });
+  }
+}
+
+// ---------------- HTTP API ----------------
+
+app.post("/api/register", (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.json({ success: false, error: "Username and password required." });
+  if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) return res.json({ success: false, error: "Username must be 3-20 letters, numbers, or underscores." });
+  if (password.length < 4) return res.json({ success: false, error: "Password must be at least 4 characters." });
+  if (users[username]) return res.json({ success: false, error: "That username is already taken." });
+  const salt = crypto.randomBytes(16).toString("hex");
+  users[username] = { salt, hash: hashPassword(password, salt) };
+  saveUsers();
+  const token = crypto.randomBytes(24).toString("hex");
+  sessions[token] = username;
+  res.json({ success: true, token, username });
+});
+
+app.post("/api/login", (req, res) => {
+  const { username, password } = req.body || {};
+  const u = users[username];
+  if (!u || !verifyPassword(password || "", u.salt, u.hash)) {
+    return res.json({ success: false, error: "Incorrect username or password." });
+  }
+  const token = crypto.randomBytes(24).toString("hex");
+  sessions[token] = username;
+  res.json({ success: true, token, username });
+});
+
+app.post("/api/spawn", async (req, res) => {
+  try {
+    const name = req.body.name || "";
+    const url = "https://api.scryfall.com/cards/named?fuzzy=" + encodeURIComponent(name);
+    const r = await fetch(url, { headers: { "User-Agent": "CommanderVTT/8.0", "Accept": "application/json" } });
+    const json = await r.json();
+    const fields = extractCardFields(json);
+    if (!fields.img) return res.json({ success: false });
+    res.json({ success: true, ...fields });
+  } catch (e) {
+    res.json({ success: false });
+  }
+});
+
+app.get("/api/autocomplete", async (req, res) => {
+  try {
+    const q = req.query.q || "";
+    if (q.length < 2) return res.json({ data: [] });
+    const r = await fetch("https://api.scryfall.com/cards/autocomplete?q=" + encodeURIComponent(q));
+    const json = await r.json();
+    res.json({ data: json.data || [] });
+  } catch (e) {
+    res.json({ data: [] });
+  }
+});
+
+// ---------------- Socket.IO ----------------
+
+io.on("connection", (socket) => {
+  const token = socket.handshake.auth && socket.handshake.auth.token;
+  const username = sessions[token];
+  if (!username) {
+    socket.emit("authError", "Session expired — please log in again.");
+    socket.disconnect(true);
+    return;
+  }
+
+  players[socket.id] = {
+    username,
+    name: username,
+    color: nextColor(),
+    life: 40, cmdr: 0, poison: 0,
+    library: [], graveyard: [], exile: [],
+    commanders: [null, null],
+    mulligans: 0, handKept: false,
+    mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0
+  };
+
+  if (turn.started) {
+    turn.order.push(socket.id);
+    broadcastTurn();
+  }
+
+  const maskedCards = {};
+  for (const id in cards) maskedCards[id] = maskCard(cards[id], socket.id);
+  socket.emit("init", {
+    cards: maskedCards,
+    gameState,
+    players: playersView(socket.id),
+    targets,
+    turn,
+    combat,
+    chat: chatLog,
+    voiceRoster: Array.from(voiceParticipants),
+    myId: socket.id,
+    decks: Object.keys(decks[username] || {})
+  });
+  broadcastPlayers();
+
+  socket.on("setName", (name) => {
+    if (!players[socket.id]) return;
+    players[socket.id].name = (name || "Player").toString().slice(0, 24);
+    broadcastPlayers();
+  });
+
+  socket.on("statChange", ({ key, val }) => {
+    if (!players[socket.id] || !["life", "cmdr", "poison"].includes(key)) return;
+    players[socket.id][key] += val;
+    broadcastPlayers();
+  });
+
+  // ---- mana / land drops ----
+
+  socket.on("addMana", (color) => {
+    const p = players[socket.id];
+    if (!p || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
+    p.mana[color] = (p.mana[color] || 0) + 1;
+    broadcastPlayers();
+  });
+
+  socket.on("removeMana", (color) => {
+    const p = players[socket.id];
+    if (!p || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
+    p.mana[color] = Math.max(0, (p.mana[color] || 0) - 1);
+    broadcastPlayers();
+  });
+
+  socket.on("landDropBonus", (delta) => {
+    const p = players[socket.id];
+    if (!p) return;
+    p.landDropBonus = Math.max(0, (p.landDropBonus || 0) + delta);
+    broadcastPlayers();
+  });
+
+  // ---- battlefield cards ----
+
+  socket.on("spawnCard", (data) => {
+    spawnBattlefieldCard({ name: data.name, img: data.img, type: data.type, manaCost: data.manaCost, power: data.power, toughness: data.toughness, owner: socket.id, faceDown: data.faceDown, zoneType: classifyType(data.type) });
+    const who = players[socket.id] ? players[socket.id].name : "Someone";
+    pushLog(data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
+  });
+
+  socket.on("changeZone", ({ id, zoneType, x }) => {
+    const card = cards[id];
+    const p = players[socket.id];
+    if (!card || !p || card.owner !== socket.id) return;
+    if (!["mana", "creature", "artifact", "hand"].includes(zoneType)) return;
+
+    if (card.zoneType === "hand" && zoneType !== "hand") {
+      const result = attemptPlay(p, card, zoneType, x);
+      if (!result.ok) { socket.emit("actionError", result.error); return; }
+      card.zoneType = zoneType;
+      card.faceDown = false;
+      broadcastCard(card);
+      broadcastPlayers();
+      pushLog(`${p.name} played ${card.name || "a card"}`);
+      return;
+    }
+    card.zoneType = zoneType;
+    card.faceDown = zoneType === "hand";
+    broadcastCard(card);
+  });
+
+  socket.on("playCard", (data) => {
+    const id = typeof data === "string" ? data : data.id;
+    const xValue = (typeof data === "object" && data.x) || 0;
+    const card = cards[id];
+    const p = players[socket.id];
+    if (!card || !p || card.owner !== socket.id) return;
+    const targetZoneType = classifyType(card.type);
+    const result = attemptPlay(p, card, targetZoneType, xValue);
+    if (!result.ok) { socket.emit("actionError", result.error); return; }
+    card.zoneType = targetZoneType;
+    card.faceDown = false;
+    broadcastCard(card);
+    broadcastPlayers();
+    pushLog(`${p.name} played ${card.name || "a card"}`);
+  });
+
+  socket.on("tap", (id) => {
+    const card = cards[id];
+    if (!card || card.owner !== socket.id) return;
+    const wasTapped = card.tapped;
+    card.tapped = !card.tapped;
+    broadcastCard(card);
+    if (!wasTapped && card.tapped && card.zoneType === "mana") {
+      const color = basicLandColor(card.type);
+      if (color) {
+        const p = players[socket.id];
+        p.mana[color] = (p.mana[color] || 0) + 1;
+        broadcastPlayers();
+        pushLog(`${p.name} tapped ${card.name} for {${color}}`);
+      }
+    }
+  });
+
+  socket.on("flip", (id) => {
+    const card = cards[id];
+    if (!card || card.owner !== socket.id) return;
+    card.faceDown = !card.faceDown;
+    broadcastCard(card);
+    const who = players[socket.id] ? players[socket.id].name : "Someone";
+    pushLog(`${who} flipped a card`);
+  });
+
+  socket.on("counter", ({ id, delta }) => {
+    const card = cards[id];
+    if (!card || card.owner !== socket.id) return;
+    card.counters = (card.counters || 0) + delta;
+    broadcastCard(card);
+  });
+
+  socket.on("removeCard", (id) => {
+    const card = cards[id];
+    if (!card || card.owner !== socket.id) return;
+    delete cards[id];
+    if (targets[id]) { delete targets[id]; broadcastTargets(); }
+    io.emit("cardRemove", id);
+  });
+
+  socket.on("untapAll", () => {
+    for (const id in cards) {
+      if (cards[id].owner === socket.id && cards[id].tapped) {
+        cards[id].tapped = false;
+        broadcastCard(cards[id]);
+      }
+    }
+    const who = players[socket.id] ? players[socket.id].name : "Someone";
+    pushLog(`${who} untapped all their permanents`);
+  });
+
+  // ---- targeting (open to everyone) ----
+
+  socket.on("toggleTarget", (cardId) => {
+    if (!cards[cardId]) return;
+    const existing = targets[cardId] || [];
+    const already = existing.includes(socket.id);
+    const updated = already ? existing.filter((id) => id !== socket.id) : [...existing, socket.id];
+    if (updated.length === 0) delete targets[cardId]; else targets[cardId] = updated;
+    broadcastTargets();
+    const who = players[socket.id] ? players[socket.id].name : "Someone";
+    pushLog(`${who} ${already ? "removed a target from" : "targeted"} a card`);
+  });
+
+  // ---- zone transitions: battlefield -> graveyard/exile/library (owner only) ----
+
+  function moveOut(cardId, zone, pos) {
+    const card = cards[cardId];
+    if (!card || card.owner !== socket.id) return;
+    const owner = card.owner;
+    delete cards[cardId];
+    if (targets[cardId]) { delete targets[cardId]; broadcastTargets(); }
+    io.emit("cardRemove", cardId);
+    if (!players[owner]) return;
+    const entry = { name: card.name, img: card.img, type: card.type || "", manaCost: card.manaCost || "", power: card.power, toughness: card.toughness };
+    if (zone === "graveyard") players[owner].graveyard.push(entry);
+    else if (zone === "exile") players[owner].exile.push(entry);
+    else if (zone === "library") {
+      if (pos === "top") players[owner].library.unshift(entry);
+      else players[owner].library.push(entry);
+    }
+    broadcastPlayers();
+    const ownerName = players[owner].name;
+    pushLog(`${ownerName}'s ${card.name || "face-down card"} went to ${zone}`);
+  }
+
+  socket.on("toGraveyard", (id) => moveOut(id, "graveyard"));
+  socket.on("toExile", (id) => moveOut(id, "exile"));
+  socket.on("toLibraryTop", (id) => moveOut(id, "library", "top"));
+  socket.on("toLibraryBottom", (id) => moveOut(id, "library", "bottom"));
+
+  // ---- zone transitions: graveyard/exile -> battlefield/hand (owner only) ----
+
+  socket.on("zoneToBattlefield", ({ zone, index }) => {
+    const p = players[socket.id];
+    if (!p || !p[zone] || !p[zone][index]) return;
+    const entry = p[zone].splice(index, 1)[0];
+    spawnBattlefieldCard({ ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
+    broadcastPlayers();
+    pushLog(`${p.name} returned ${entry.name} to the battlefield`);
+  });
+
+  socket.on("zoneToHand", ({ zone, index }) => {
+    const p = players[socket.id];
+    if (!p || !p[zone] || !p[zone][index]) return;
+    const entry = p[zone].splice(index, 1)[0];
+    spawnBattlefieldCard({ ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
+    broadcastPlayers();
+    pushLog(`${p.name} returned a card to their hand`);
+  });
+
+  // ---- library management (owner only) ----
+
+  socket.on("shuffleLibrary", () => {
+    const p = players[socket.id];
+    if (!p) return;
+    shuffle(p.library);
+    broadcastPlayers();
+    pushLog(`${p.name} shuffled their library`);
+  });
+
+  socket.on("drawCard", (count) => {
+    const p = players[socket.id];
+    if (!p) return;
+    const drawn = drawN(socket.id, Math.max(1, Math.min(10, count || 1)));
+    broadcastPlayers();
+    if (drawn) pushLog(`${p.name} drew ${drawn} card${drawn > 1 ? "s" : ""}`);
+  });
+
+  socket.on("drawSpecific", (index) => {
+    const p = players[socket.id];
+    if (!p || !p.library[index]) return;
+    const entry = p.library.splice(index, 1)[0];
+    spawnBattlefieldCard({ ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
+    broadcastPlayers();
+    pushLog(`${p.name} searched their library for a card`);
+  });
+
+  socket.on("millCard", (count) => {
+    const p = players[socket.id];
+    if (!p) return;
+    const n = Math.max(1, Math.min(20, count || 1));
+    let milled = 0;
+    for (let i = 0; i < n && p.library.length > 0; i++) {
+      p.graveyard.push(p.library.shift());
+      milled++;
+    }
+    broadcastPlayers();
+    if (milled) pushLog(`${p.name} milled ${milled} card${milled > 1 ? "s" : ""}`);
+  });
+
+  socket.on("importDeck", (text) => {
+    const p = players[socket.id];
+    if (!p) return;
+    resolveAndSetLibrary(socket, p, text);
+  });
+
+  // ---- opening hand / mulligan ----
+
+  socket.on("drawOpeningHand", () => {
+    const p = players[socket.id];
+    if (!p) return;
+    returnAllHandToLibrary(socket.id);
+    shuffle(p.library);
+    drawN(socket.id, 7);
+    p.mulligans = 0;
+    p.handKept = false;
+    broadcastPlayers();
+    pushLog(`${p.name} drew their opening hand`);
+  });
+
+  socket.on("mulligan", () => {
+    const p = players[socket.id];
+    if (!p || p.mulligans >= 2) return;
+    returnAllHandToLibrary(socket.id);
+    shuffle(p.library);
+    drawN(socket.id, 7);
+    p.mulligans += 1;
+    broadcastPlayers();
+    pushLog(`${p.name} took a mulligan (${p.mulligans}/2)`);
+  });
+
+  socket.on("keepHand", () => {
+    const p = players[socket.id];
+    if (!p) return;
+    p.handKept = true;
+    broadcastPlayers();
+    pushLog(`${p.name} kept their hand and is ready`);
+  });
+
+  // ---- persistent decks ----
+
+  socket.on("saveDeck", ({ name, text }) => {
+    if (!players[socket.id]) return;
+    name = (name || "").toString().trim().slice(0, 40);
+    if (!name || !text) return;
+    if (!decks[username]) decks[username] = {};
+    decks[username][name] = text.toString().slice(0, 20000);
+    saveDecks();
+    socket.emit("deckSaved", name);
+    socket.emit("deckList", Object.keys(decks[username]));
+  });
+
+  socket.on("deleteDeck", (name) => {
+    if (!decks[username]) return;
+    delete decks[username][name];
+    saveDecks();
+    socket.emit("deckList", Object.keys(decks[username]));
+  });
+
+  socket.on("loadDeck", (name) => {
+    const p = players[socket.id];
+    if (!p) return;
+    const text = decks[username] && decks[username][name];
+    if (!text) { socket.emit("importResult", { success: false, error: "Deck not found." }); return; }
+    resolveAndSetLibrary(socket, p, text);
+  });
+
+  // ---- commander zone ----
+
+  socket.on("setCommander", ({ slot, name, img, type, manaCost, power, toughness }) => {
+    const p = players[socket.id];
+    if (!p || slot < 0 || slot > 1) return;
+    p.commanders[slot] = { name, img, type: type || "", manaCost: manaCost || "", power, toughness, tax: 0 };
+    broadcastPlayers();
+    pushLog(`${p.name} set their commander: ${name}`);
+  });
+
+  socket.on("clearCommander", (slot) => {
+    const p = players[socket.id];
+    if (!p || slot < 0 || slot > 1) return;
+    p.commanders[slot] = null;
+    broadcastPlayers();
+  });
+
+  socket.on("commanderTax", ({ slot, delta }) => {
+    const p = players[socket.id];
+    if (!p || !p.commanders[slot]) return;
+    p.commanders[slot].tax = Math.max(0, p.commanders[slot].tax + delta);
+    broadcastPlayers();
+  });
+
+  socket.on("castCommander", (slot) => {
+    const p = players[socket.id];
+    if (!p || !p.commanders[slot]) return;
+    const cmd = p.commanders[slot];
+    spawnBattlefieldCard({ ...cmd, owner: socket.id, faceDown: false, zoneType: classifyType(cmd.type), isCommander: true });
+    cmd.tax += 2;
+    broadcastPlayers();
+    pushLog(`${p.name} cast their commander: ${cmd.name} (tax now ${cmd.tax})`);
+  });
+
+  // ---- turn structure ----
+
+  socket.on("startGame", () => {
+    turn.order = Object.keys(players);
+    turn.activeIndex = 0;
+    turn.phase = "Main 1";
+    turn.turnNumber = 1;
+    turn.started = true;
+    combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+    for (const pid in players) {
+      players[pid].mana = EMPTY_MANA();
+      players[pid].landsPlayedThisTurn = 0;
+    }
+    broadcastTurn();
+    broadcastCombat();
+    broadcastPlayers();
+    pushLog(`Game started! Turn order: ${turn.order.map((id) => (players[id] ? players[id].name : "?")).join(" → ")}`);
+  });
+
+  socket.on("nextPhase", () => {
+    if (!turn.started) return;
+    if (turn.order[turn.activeIndex] !== socket.id) return;
+    advancePhase();
+  });
+
+  // ---- combat ----
+
+  socket.on("declareAttackers", (assignments) => {
+    if (!turn.started || turn.order[turn.activeIndex] !== socket.id) return;
+    if (combat.step !== "declareAttackers") return;
+    const validAttackers = {};
+    const defendersSet = new Set();
+    for (const [cardId, defenderId] of Object.entries(assignments || {})) {
+      const card = cards[cardId];
+      if (!card || card.owner !== socket.id || card.zoneType !== "creature" || card.tapped) continue;
+      if (!players[defenderId] || defenderId === socket.id) continue;
+      validAttackers[cardId] = defenderId;
+      defendersSet.add(defenderId);
+      card.tapped = true;
+      broadcastCard(card);
+    }
+    combat.attackers = validAttackers;
+    combat.blocks = {};
+    combat.defendersPending = Array.from(defendersSet);
+    combat.step = defendersSet.size > 0 ? "declareBlockers" : "damage";
+    broadcastCombat();
+    const activeName = players[socket.id] ? players[socket.id].name : "?";
+    pushLog(`${activeName} declared ${Object.keys(validAttackers).length} attacker(s)`);
+    if (combat.step === "damage") resolveCombatDamage();
+  });
+
+  socket.on("declareBlockers", (assignments) => {
+    if (combat.step !== "declareBlockers") return;
+    if (!combat.defendersPending.includes(socket.id)) return;
+    const usedBlockers = new Set(Object.values(combat.blocks).filter(Boolean));
+    for (const [attackerId, blockerId] of Object.entries(assignments || {})) {
+      if (combat.attackers[attackerId] !== socket.id) continue;
+      if (blockerId) {
+        if (usedBlockers.has(blockerId)) continue;
+        const blockerCard = cards[blockerId];
+        if (!blockerCard || blockerCard.owner !== socket.id || blockerCard.zoneType !== "creature" || blockerCard.tapped) continue;
+        combat.blocks[attackerId] = blockerId;
+        usedBlockers.add(blockerId);
+      } else {
+        combat.blocks[attackerId] = null;
+      }
+    }
+    combat.defendersPending = combat.defendersPending.filter((id) => id !== socket.id);
+    broadcastCombat();
+    const p = players[socket.id];
+    pushLog(`${p ? p.name : "?"} declared blockers`);
+    if (combat.defendersPending.length === 0) {
+      combat.step = "damage";
+      broadcastCombat();
+      resolveCombatDamage();
+    }
+  });
+
+  // ---- chat ----
+
+  socket.on("chatMessage", (text) => {
+    const p = players[socket.id];
+    if (!p || !text) return;
+    const msg = { name: p.name, color: p.color, text: String(text).slice(0, 500), ts: Date.now() };
+    chatLog.push(msg);
+    if (chatLog.length > 200) chatLog.shift();
+    io.emit("chatMessage", msg);
+  });
+
+  // ---- voice signaling (WebRTC mesh; server only relays) ----
+
+  socket.on("voiceJoin", () => {
+    voiceParticipants.forEach((existingId) => {
+      socket.emit("voiceShouldOffer", { toId: existingId });
+    });
+    voiceParticipants.add(socket.id);
+    broadcastVoiceRoster();
+  });
+
+  socket.on("voiceLeave", () => {
+    voiceParticipants.delete(socket.id);
+    broadcastVoiceRoster();
+  });
+
+  socket.on("voiceSignal", ({ toId, data }) => {
+    const target = io.sockets.sockets.get(toId);
+    if (target) target.emit("voiceSignal", { fromId: socket.id, data });
+  });
+
+  // ---- misc ----
+
+  socket.on("log", (msg) => pushLog(msg));
+
+  socket.on("clearBoard", () => {
+    for (const id in cards) {
+      const c = cards[id];
+      if (players[c.owner]) players[c.owner].library.push({ name: c.name, img: c.img, type: c.type || "", manaCost: c.manaCost || "", power: c.power, toughness: c.toughness });
+    }
+    cards = {};
+    targets = {};
+    for (const pid in players) {
+      const p = players[pid];
+      p.graveyard.forEach((e) => p.library.push(e));
+      p.exile.forEach((e) => p.library.push(e));
+      p.graveyard = [];
+      p.exile = [];
+      shuffle(p.library);
+      p.life = 40; p.cmdr = 0; p.poison = 0;
+      p.commanders.forEach((c) => { if (c) c.tax = 0; });
+      p.mulligans = 0;
+      p.handKept = false;
+      p.mana = EMPTY_MANA();
+      p.landsPlayedThisTurn = 0;
+      p.landDropBonus = 0;
+    }
+    gameState.log = [];
+    turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 };
+    combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+    io.emit("cleared");
+    broadcastPlayers();
+    broadcastTargets();
+    broadcastTurn();
+    broadcastCombat();
+  });
+
+  socket.on("disconnect", () => {
+    delete players[socket.id];
+    voiceParticipants.delete(socket.id);
+    broadcastVoiceRoster();
+    const idx = turn.order.indexOf(socket.id);
+    if (idx !== -1) {
+      turn.order.splice(idx, 1);
+      if (turn.order.length === 0) turn.started = false;
+      else if (idx < turn.activeIndex) turn.activeIndex--;
+      else if (turn.activeIndex >= turn.order.length) turn.activeIndex = 0;
+      broadcastTurn();
+    }
+    broadcastPlayers();
+  });
+});
+
+http.listen(8087, () => { console.log("Commander Engine Listening on 8087"); });

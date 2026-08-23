@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Commander Sandbox</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(ellipse at top, #1c1611 0%, #0a0806 100%); color: #e8dfc8; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; height: 100vh; }
+    .mtg-title { font-family: 'Cinzel', serif; letter-spacing: 0.04em; color: #d4af37; }
+    input, button, select, textarea { padding: 6px 10px; background: #241c12; border: 1px solid #5a4423; color: #e8dfc8; border-radius: 6px; font-size: 13px; font-family: inherit; }
+    button { cursor: pointer; background: linear-gradient(180deg, #4a3820, #2e2210); border: 1px solid #6b4f27; font-weight: 600; transition: background 0.15s; color: #e8d9b0; }
+    button:hover { background: linear-gradient(180deg, #5c4628, #3a2a15); }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button.secondary { background: #33302b; border-color: #4a4640; }
+    button.secondary:hover { background: #45403a; }
+    button.danger { background: linear-gradient(180deg, #7a1f1f, #4a1010); border-color: #9a3030; }
+    button.danger:hover { background: linear-gradient(180deg, #8f2626, #5c1414); }
+    button.mini-btn, .mini-btn { padding: 3px 7px; font-size: 11px; background: #33302b; border-radius: 4px; border-color: #4a4640; }
+    button.mini-btn:hover, .mini-btn:hover { background: #45403a; }
+    .flex-row { display: flex; gap: 8px; align-items: center; }
+
+    #auth-screen { position: fixed; inset: 0; background: #0a0806; display: flex; align-items: center; justify-content: center; z-index: 500; }
+    #auth-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 24px; width: 320px; box-shadow: 0 0 40px rgba(212,175,55,0.08); }
+    #auth-box input { width: 100%; margin-bottom: 8px; }
+    #auth-error { color: #f87171; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+
+    #app-root { display: none; flex-direction: column; height: 100vh; }
+
+    #top-bar { height: 54px; background: linear-gradient(180deg, #201810, #140f0a); border-bottom: 2px solid #5a4423; display: flex; align-items: center; padding: 0 15px; gap: 10px; justify-content: space-between; flex-wrap: nowrap; flex-shrink: 0; }
+
+    #main-container { display: flex; flex: 1; overflow: hidden; }
+    #sidebar { width: 270px; background: #14110d; border-right: 2px solid #4a3820; display: flex; flex-direction: column; box-sizing: border-box; flex-shrink: 0; height: 100%; overflow-y: auto; }
+    #commander-dock { width: 250px; background: #14110d; border-left: 2px solid #4a3820; overflow-y: auto; flex-shrink: 0; height: 100%; }
+    .panel { padding: 12px; border-bottom: 1px solid #2e2618; }
+    .panel h3 { margin: 0 0 8px 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #c9a860; font-family: 'Cinzel', serif; }
+    #log-box, #chat-box { flex: 1; overflow-y: auto; padding: 10px; font-family: ui-monospace, monospace; font-size: 11px; color: #b0a888; background: #0b0906; min-height: 100px; }
+    #log-box div, #chat-box div { padding: 2px 0; border-bottom: 1px solid #1c170f; }
+
+    .player-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #221c12; }
+    .player-row:last-child { border-bottom: none; }
+    .player-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 6px currentColor; }
+    .player-info { flex: 1; min-width: 0; }
+    .player-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .player-stats { font-size: 11px; color: #a89a70; display: flex; gap: 8px; flex-wrap: wrap; }
+    .you-badge { font-size: 10px; background: #6b4f27; padding: 1px 5px; border-radius: 4px; margin-left: 4px; }
+
+    .stat-widget { background: #1c170f; padding: 10px; border-radius: 8px; border: 1px solid #3a2e18; }
+    .stat-row { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+    .stat-btn { padding: 2px 8px; font-size: 13px; background: #33302b; }
+
+    #board-column { flex: 1; display: flex; flex-direction: column; overflow: hidden; height: 100%; }
+    #turn-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: linear-gradient(180deg, #1a140d, #100c08); border-bottom: 1px solid #4a3820; flex-shrink: 0; }
+    #board-tabs { display: flex; gap: 4px; padding: 6px 12px; background: #100c08; border-bottom: 1px solid #4a3820; overflow-x: auto; flex-shrink: 0; }
+    .board-tab { background: #241c12; border: none; border-bottom: 3px solid transparent; padding: 6px 12px; font-size: 12px; border-radius: 4px 4px 0 0; cursor: pointer; color: #c9bc98; }
+    .board-tab.active { background: #322618; color: #f0e6c8; }
+
+    #table-wrapper { flex: 1; position: relative; background: radial-gradient(ellipse at center, #16241a 0%, #0a120c 100%); overflow: auto; }
+    #playmat { width: 3000px; height: 1260px; position: relative; background-image: radial-gradient(#1a2e1e 15%, transparent 15%); background-size: 30px 30px; transform-origin: top left; }
+
+    .zone-band { position: absolute; border: 1px solid rgba(212,175,55,0.2); border-radius: 10px; }
+    .zone-band.zone-creature { background: rgba(239,68,68,0.05); }
+    .zone-band.zone-artifact { background: rgba(168,85,247,0.05); }
+    .zone-band.zone-mana { background: rgba(34,197,94,0.05); }
+    .zone-band.zone-hand { background: rgba(59,130,246,0.07); border-style: dashed; }
+    .zone-band-label { position: absolute; top: 4px; left: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(212,175,55,0.5); font-family: 'Cinzel', serif; }
+
+    .card { width: 108px; height: 150px; position: absolute; border-radius: 7px; box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,175,55,0.12); border: 3px solid #444; background: #1a1a1d; user-select: none; overflow: hidden; z-index: 2; transition: left 0.15s ease, top 0.15s ease; }
+    .card img { width: 100%; height: 120px; object-fit: cover; pointer-events: none; display: block; }
+    .card .card-label { font-size: 10px; padding: 2px 4px; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card.tapped { transform: rotate(90deg); }
+    .card.dragging { transition: none; z-index: 60; }
+    .card.face-down-mine { box-shadow: 0 0 0 2px #f59e0b inset; }
+    .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
+    .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+
+    #preview-panel { position: fixed; top: 64px; right: 16px; width: 260px; z-index: 50; background: #171310; border: 1px solid #5a4423; border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); display: none; }
+    #preview-panel img { width: 100%; border-radius: 6px; display: block; }
+    #preview-panel .pv-name { font-size: 12px; text-align: center; margin-top: 6px; color: #ddd; }
+
+    #context-menu { position: fixed; z-index: 100; background: #1c1710; border: 1px solid #5a4423; border-radius: 6px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display: none; min-width: 190px; }
+    #context-menu button { display: block; width: 100%; text-align: left; background: transparent; border: none; border-radius: 0; padding: 8px 12px; font-weight: 400; font-size: 12px; }
+    #context-menu button:hover { background: #4a3820; }
+    #context-menu hr { border: none; border-top: 1px solid #4a3820; margin: 2px 0; }
+
+    #zoom-row input[type=range] { width: 100px; }
+
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: none; align-items: center; justify-content: center; z-index: 200; }
+    .modal-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 18px; max-width: 640px; width: 90%; max-height: 80vh; overflow-y: auto; }
+    .modal-box h2 { margin-top: 0; font-size: 16px; font-family: 'Cinzel', serif; color: #d4af37; }
+    .modal-close-row { display: flex; justify-content: flex-end; margin-top: 12px; gap: 8px; }
+
+    .zone-card-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
+    .zone-card-thumb { width: 44px; height: 61px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+    .zone-card-name { flex: 1; font-size: 13px; }
+    .zone-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+    .cmdr-player-box { padding: 10px 12px; border-bottom: 1px solid #2e2618; }
+    .cmdr-slot { background: #1c170f; border: 1px solid #3a2e18; border-radius: 6px; padding: 8px; margin-top: 6px; }
+    .cmdr-thumb { width: 100%; border-radius: 5px; margin-bottom: 4px; }
+    .cmdr-name { font-size: 12px; font-weight: 600; }
+    .cmdr-tax { font-size: 11px; color: #eab308; margin: 3px 0; }
+    .cmdr-slot .flex-row { margin-top: 4px; }
+
+    #help-modal ul { padding-left: 18px; font-size: 13px; line-height: 1.7; }
+    #help-modal li strong { color: #d4af37; }
+
+    .mana-pip { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; font-size: 10px; font-weight: 700; margin-right: 3px; border: 1px solid rgba(0,0,0,0.5); }
+  </style>
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+  <div id="auth-screen">
+    <div id="auth-box">
+      <h2 class="mtg-title" style="margin-top:0;">Commander Pod</h2>
+      <input type="text" id="auth-username" placeholder="Username">
+      <input type="password" id="auth-password" placeholder="Password">
+      <div id="auth-error"></div>
+      <div class="flex-row">
+        <button onclick="submitAuth('login')" style="flex:1;">Log In</button>
+        <button onclick="submitAuth('register')" class="secondary" style="flex:1;">Register</button>
+      </div>
+      <p style="font-size:11px;color:#8a7a55;margin-top:12px;">New here? Pick a username and password and hit Register.</p>
+    </div>
+  </div>
+
+  <div id="app-root">
+    <div id="top-bar">
+      <div class="flex-row">
+        <strong class="mtg-title">Commander Pod</strong>
+        <input type="text" id="cardSearch" placeholder="Search card to spawn..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)">
+        <datalist id="cardSuggestions"></datalist>
+        <button onclick="requestSpawn(false)">Spawn Face Up</button>
+        <button onclick="requestSpawn(true)" class="secondary">Spawn Face Down</button>
+        <button onclick="openImportModal()" class="secondary">Import Deck</button>
+      </div>
+      <div class="flex-row">
+        <div id="zoom-row" class="flex-row">
+          <span style="font-size:12px;color:#a89a70;">Zoom</span>
+          <input type="range" min="50" max="150" value="100" oninput="setZoom(this.value)">
+        </div>
+        <select id="diceType"><option value="20">D20</option><option value="6">D6</option><option value="2">Coin Flip</option></select>
+        <button onclick="rollDice()" style="background:linear-gradient(180deg,#5b3a8a,#3a2560);">Roll</button>
+        <button onclick="untapAll()" class="secondary">Untap All</button>
+        <button onclick="triggerClear()" class="danger">New Game</button>
+        <button onclick="openHelpModal()" class="secondary">?</button>
+        <button onclick="logout()" class="secondary">Log Out</button>
+      </div>
+    </div>
+
+    <div id="main-container">
+      <div id="sidebar">
+        <div class="panel">
+          <h3>My Status</h3>
+          <div class="stat-widget">
+            <div class="stat-row"><span>Life</span><div><button class="stat-btn" onclick="changeStat('life',-1)">-</button> <strong id="lbl-life">40</strong> <button class="stat-btn" onclick="changeStat('life',1)">+</button></div></div>
+            <div class="stat-row"><span>Cmdr Dmg</span><div><button class="stat-btn" onclick="changeStat('cmdr',-1)">-</button> <strong id="lbl-cmdr">0</strong> <button class="stat-btn" onclick="changeStat('cmdr',1)">+</button></div></div>
+            <div class="stat-row"><span>Poison</span><div><button class="stat-btn" onclick="changeStat('poison',-1)">-</button> <strong id="lbl-poison">0</strong> <button class="stat-btn" onclick="changeStat('poison',1)">+</button></div></div>
+          </div>
+          <input type="text" id="playerName" placeholder="Set Nickname..." onchange="updateName()" style="width:100%;margin-top:8px;">
+        </div>
+        <div class="panel">
+          <h3>Mana Pool</h3>
+          <div id="mana-pool-display"></div>
+          <div class="flex-row" style="margin-top:6px;flex-wrap:wrap;gap:4px;">
+            <button class="mini-btn" onclick="addMana('W')">+W</button>
+            <button class="mini-btn" onclick="addMana('U')">+U</button>
+            <button class="mini-btn" onclick="addMana('B')">+B</button>
+            <button class="mini-btn" onclick="addMana('R')">+R</button>
+            <button class="mini-btn" onclick="addMana('G')">+G</button>
+            <button class="mini-btn" onclick="addMana('C')">+C</button>
+          </div>
+          <div style="font-size:11px;color:#a89a70;margin-top:8px;">Land drops: <span id="land-drop-info"></span></div>
+          <div class="flex-row" style="margin-top:4px;">
+            <button class="mini-btn" onclick="landDropBonus(1)">+1 extra drop</button>
+            <button class="mini-btn" onclick="landDropBonus(-1)">-1</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Opening Hand</h3>
+          <div id="opening-hand-status" style="font-size:12px;color:#a89a70;margin-bottom:6px;">Not drawn yet.</div>
+          <div class="flex-row">
+            <button class="mini-btn" onclick="drawOpeningHand()">Draw 7</button>
+            <button class="mini-btn" id="mulligan-btn" onclick="mulligan()">Mulligan</button>
+            <button class="mini-btn" id="keep-hand-btn" onclick="keepHand()">Keep Hand</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Voice Chat <span style="font-weight:400;font-size:10px;color:#e0a030;">(experimental)</span></h3>
+          <div class="flex-row">
+            <button class="mini-btn" id="voice-join-btn" onclick="joinVoice()">Join Voice</button>
+            <button class="mini-btn" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
+          </div>
+          <div id="voice-roster" style="font-size:11px;color:#a89a70;margin-top:6px;">No one in voice.</div>
+        </div>
+        <div class="panel">
+          <h3>Players</h3>
+          <div id="player-list"></div>
+        </div>
+        <div class="panel">
+          <h3>My Decks</h3>
+          <div id="deck-list"></div>
+        </div>
+        <div id="log-chat-wrap" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <div class="flex-row" style="padding:6px 12px;border-bottom:1px solid #2e2618;">
+            <button class="mini-btn" id="tab-log-btn" onclick="showLogTab('log')">Game Log</button>
+            <button class="mini-btn" id="tab-chat-btn" onclick="showLogTab('chat')">Chat</button>
+          </div>
+          <div id="log-box"></div>
+          <div id="chat-box" style="display:none;"></div>
+          <div id="chat-input-row" class="flex-row" style="display:none;padding:8px;">
+            <input type="text" id="chat-input" placeholder="Say something..." style="flex:1;" onkeydown="if(event.key==='Enter'){sendChat();}">
+            <button class="mini-btn" onclick="sendChat()">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="board-column">
+        <div id="turn-bar">
+          <span id="turn-info">No game in progress</span>
+          <button id="start-game-btn" class="mini-btn" onclick="startGame()">Start Game</button>
+          <button id="next-phase-btn" class="mini-btn" onclick="nextPhaseFn()" style="display:none;">Next Phase →</button>
+          <button id="combat-action-btn" class="mini-btn" style="display:none;"></button>
+        </div>
+        <div id="board-tabs"></div>
+        <div id="table-wrapper">
+          <div id="playmat"></div>
+        </div>
+      </div>
+
+      <div id="commander-dock">
+        <div class="panel"><h3>Commander Zone</h3></div>
+        <div id="commander-dock-body"></div>
+      </div>
+    </div>
+
+    <div id="preview-panel"><img id="preview-img" src=""><div class="pv-name" id="preview-name"></div></div>
+
+    <div id="context-menu">
+      <button data-action="play">Play to Battlefield</button>
+      <button data-action="tap">Tap / Untap</button>
+      <button data-action="flip">Flip Face Up/Down</button>
+      <button data-action="target">Target / Untarget</button>
+      <hr>
+      <button data-action="counterUp">+1 Counter</button>
+      <button data-action="counterDown">-1 Counter</button>
+      <hr>
+      <button data-action="toGraveyard">Send to Graveyard</button>
+      <button data-action="toExile">Send to Exile</button>
+      <button data-action="toLibrary">Return to Library (Top)</button>
+      <hr>
+      <button data-action="remove" style="color:#f87171;">Remove Permanently</button>
+    </div>
+
+    <div class="modal-overlay" id="zone-modal">
+      <div class="modal-box">
+        <h2 id="zone-modal-title">Zone</h2>
+        <div id="zone-modal-body"></div>
+        <div class="modal-close-row"><button class="secondary" onclick="closeZoneModal()">Close</button></div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="import-modal">
+      <div class="modal-box">
+        <h2>Import Decklist</h2>
+        <p style="font-size:12px;color:#a89a70;">Paste one card per line: <code>1 Sol Ring</code> or just <code>Sol Ring</code>. Set/collector codes like <code>(C21) 263</code> are ignored. Replaces your current library, shuffled.</p>
+        <textarea id="import-textarea" rows="12" style="width:100%;" placeholder="1 Sol Ring&#10;1 Command Tower&#10;1 Arcane Signet&#10;..."></textarea>
+        <div class="flex-row" style="margin-top:8px;">
+          <input type="text" id="deck-save-name" placeholder="Deck name (to save for later)" style="flex:1;">
+          <button class="secondary" onclick="saveDeck()">Save Deck</button>
+        </div>
+        <div id="import-status" style="font-size:12px;color:#a89a70;margin-top:6px;"></div>
+        <div class="modal-close-row">
+          <button class="secondary" onclick="closeImportModal()">Cancel</button>
+          <button onclick="submitImport()">Import Now</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="attackers-modal">
+      <div class="modal-box">
+        <h2>Declare Attackers</h2>
+        <div id="attackers-modal-body"></div>
+        <div class="modal-close-row">
+          <button class="secondary" onclick="closeAttackersModal()">No Attacks</button>
+          <button onclick="confirmAttackers()">Confirm Attacks</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="blockers-modal">
+      <div class="modal-box">
+        <h2>Declare Blockers</h2>
+        <div id="blockers-modal-body"></div>
+        <div class="modal-close-row">
+          <button class="secondary" onclick="submitBlockers(true)">No Blocks</button>
+          <button onclick="submitBlockers(false)">Confirm Blocks</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="help-modal">
+      <div class="modal-box">
+        <h2>How to Play</h2>
+        <ul>
+          <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
+          <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly.</li>
+          <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more).</li>
+          <li>Playing anything else checks your <strong>mana pool</strong> against the card's real cost — you need the mana or it won't go through.</li>
+          <li>Tap a <strong>basic land</strong> (Plains/Island/Swamp/Mountain/Forest) to auto-add its color to your pool. Other mana sources (rocks, dual lands, etc.) — add mana manually with the +W/+U/etc. buttons. Mana empties at the end of every step/phase, like the real rules.</li>
+          <li><strong>Double-click</strong> your own card to tap/untap it. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
+          <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
+          <li><strong>Start Game</strong> begins turn order — only the active player sees Next Phase, stepping through Untap (auto-untaps + resets land drops) → Upkeep → Draw (auto-draws, skipped turn 1 for the starting player) → Main 1 → Combat → Main 2 → End Step.</li>
+          <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
+          <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board.</li>
+          <li><strong>Chat</strong> and <strong>Voice Chat</strong> (experimental, peer-to-peer) are in the sidebar.</li>
+        </ul>
+        <div class="modal-close-row"><button onclick="closeHelpModal()">Got it</button></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io({ autoConnect: false });
+    const MANA_COLORS = { W: "#f8f6d8", U: "#0e68ab", B: "#2a2a2e", R: "#d3202a", G: "#00733e", C: "#c9c9c9" };
+    const MANA_TEXT = { W: "#000", U: "#fff", B: "#fff", R: "#fff", G: "#fff", C: "#000" };
+    function coloredPip(bg, fg, label) {
+      return `<span class="mana-pip" style="background:${bg};color:${fg};">${label}</span>`;
+    }
+    function manaPip(color, label) { return coloredPip(MANA_COLORS[color] || "#666", MANA_TEXT[color] || "#fff", label); }
+    function manaCostPips(costStr) {
+      const tokens = (costStr || "").match(/\{[^}]+\}/g) || [];
+      return tokens.map((t) => {
+        const inner = t.slice(1, -1).toUpperCase();
+        if (["W", "U", "B", "R", "G", "C"].includes(inner)) return manaPip(inner, "");
+        return coloredPip("#555", "#fff", inner);
+      }).join("");
+    }
+    function costHasX(costStr) { return /\{X\}/i.test(costStr || ""); }
+
+    // ---------------- auth ----------------
+
+    function connectWithToken(t) {
+      socket.auth = { token: t };
+      socket.connect();
+    }
+
+    async function submitAuth(mode) {
+      const username = document.getElementById("auth-username").value.trim();
+      const password = document.getElementById("auth-password").value;
+      const errEl = document.getElementById("auth-error");
+      errEl.innerText = "";
+      if (!username || !password) { errEl.innerText = "Enter a username and password."; return; }
+      try {
+        const res = await fetch("/api/" + mode, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+        const data = await res.json();
+        if (data.success) {
+          localStorage.setItem("mtgToken", data.token);
+          connectWithToken(data.token);
+        } else {
+          errEl.innerText = data.error || "Something went wrong.";
+        }
+      } catch (e) {
+        errEl.innerText = "Could not reach server.";
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem("mtgToken");
+      location.reload();
+    }
+
+    socket.on("authError", (msg) => {
+      localStorage.removeItem("mtgToken");
+      document.getElementById("auth-error").innerText = msg || "Please log in again.";
+      document.getElementById("auth-screen").style.display = "flex";
+      document.getElementById("app-root").style.display = "none";
+    });
+    socket.on("connect_error", () => {
+      document.getElementById("auth-error").innerText = "Connection error — retrying...";
+    });
+
+    const savedToken = localStorage.getItem("mtgToken");
+    if (savedToken) connectWithToken(savedToken);
+
+    // ---------------- board zone definitions (top to bottom) ----------------
+
+    const ZONES = [
+      { key: "creature", label: "Creatures", y: 20, height: 320 },
+      { key: "artifact", label: "Artifacts & Enchantments", y: 360, height: 320 },
+      { key: "mana", label: "Lands / Mana", y: 700, height: 320 },
+      { key: "hand", label: "Hand", y: 1040, height: 190 }
+    ];
+    const ZONE_X = 420;
+    const ZONE_WIDTH = 2500;
+    const PILE_X = 20;
+
+    function zoneDef(key) { return ZONES.find((z) => z.key === key); }
+    function zoneForY(y) {
+      let best = ZONES[0], bestDist = Infinity;
+      for (const z of ZONES) {
+        const center = z.y + z.height / 2;
+        const d = Math.abs(y - center);
+        if (d < bestDist) { bestDist = d; best = z; }
+      }
+      return best;
+    }
+    function idOrder(id) {
+      const parts = id.split("_");
+      return parts.length > 1 ? (parseInt(parts[1]) || 0) : 0;
+    }
+    function layoutGrid(zone, cardsInZone) {
+      cardsInZone.sort((a, b) => idOrder(a.id) - idOrder(b.id));
+      const cardW = 108, cardH = 150, gap = 14;
+      const perRow = Math.max(1, Math.floor(ZONE_WIDTH / (cardW + gap)));
+      cardsInZone.forEach((card, i) => {
+        const row = Math.floor(i / perRow);
+        const col = i % perRow;
+        card._layoutX = ZONE_X + col * (cardW + gap);
+        card._layoutY = zone.y + 24 + row * (cardH + 10);
+      });
+    }
+    function layoutHand(zone, cardsInZone) {
+      cardsInZone.sort((a, b) => idOrder(a.id) - idOrder(b.id));
+      const n = cardsInZone.length;
+      if (n === 0) return;
+      const cardW = 108, idealGap = 14;
+      const idealSpacing = cardW + idealGap;
+      const spacing = n <= 1 ? 0 : Math.min(idealSpacing, (ZONE_WIDTH - cardW) / (n - 1));
+      cardsInZone.forEach((card, i) => {
+        card._layoutX = ZONE_X + i * spacing;
+        card._layoutY = zone.y + Math.max(20, (zone.height - 150) / 2);
+      });
+    }
+
+    // ---------------- state ----------------
+
+    const playmat = document.getElementById("playmat");
+    const logBox = document.getElementById("log-box");
+    const playerListEl = document.getElementById("player-list");
+    const contextMenu = document.getElementById("context-menu");
+    const previewPanel = document.getElementById("preview-panel");
+
+    let myId = null;
+    let players = {};
+    let targets = {};
+    let allCards = {};
+    let cardEls = {};
+    let activeCardId = null;
+    let activeBoardOwner = null;
+    let currentTurn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 };
+    let currentCombat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+
+    socket.on("init", (data) => {
+      document.getElementById("auth-screen").style.display = "none";
+      document.getElementById("app-root").style.display = "flex";
+
+      myId = data.myId;
+      activeBoardOwner = myId;
+      players = data.players;
+      targets = data.targets || {};
+      allCards = data.cards;
+      currentTurn = data.turn || currentTurn;
+      currentCombat = data.combat || currentCombat;
+
+      document.getElementById("playerName").value = (players[myId] && players[myId].name) || "";
+      renderPlayerList();
+      renderDeckList(data.decks);
+      renderCommanderDock();
+      renderBoardTabs();
+      renderVisibleBoard();
+      renderTurnState(currentTurn);
+      renderCombatState(currentCombat);
+      renderOpeningHandStatus();
+      renderManaPool();
+
+      showLogTab("log");
+      logBox.innerHTML = "";
+      data.gameState.log.forEach(appendLog);
+      document.getElementById("chat-box").innerHTML = "";
+      (data.chat || []).forEach(appendChat);
+      renderVoiceRoster(data.voiceRoster || []);
+    });
+
+    socket.on("players", (data) => {
+      players = data;
+      renderPlayerList();
+      renderCommanderDock();
+      renderBoardTabs();
+      renderOpeningHandStatus();
+      renderManaPool();
+    });
+
+    socket.on("targets", (data) => { targets = data; applyAllTargetRings(); });
+    socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); });
+    socket.on("combatState", (data) => { currentCombat = data; renderCombatState(currentCombat); });
+    socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
+
+    socket.on("cardUpdate", (card) => {
+      allCards[card.id] = card;
+      renderVisibleBoard();
+    });
+
+    socket.on("cardRemove", (id) => {
+      delete allCards[id];
+      delete targets[id];
+      renderVisibleBoard();
+    });
+
+    socket.on("cleared", () => { allCards = {}; renderVisibleBoard(); });
+
+    socket.on("log", appendLog);
+    socket.on("chatMessage", appendChat);
+
+    socket.on("importResult", (res) => {
+      const status = document.getElementById("import-status");
+      status.innerText = res.success
+        ? `Imported ${res.found}/${res.requested} cards into your library (shuffled).`
+        : "Error: " + res.error;
+    });
+
+    socket.on("deckSaved", () => { document.getElementById("import-status").innerText = "Deck saved!"; });
+    socket.on("deckList", (names) => renderDeckList(names));
+
+    // ---------------- players / decks / commander / turn UI ----------------
+
+    function renderPlayerList() {
+      playerListEl.innerHTML = "";
+      Object.entries(players).forEach(([id, p]) => {
+        const row = document.createElement("div");
+        row.className = "player-row";
+        row.innerHTML = `
+          <div class="player-dot" style="background:${p.color};color:${p.color};"></div>
+          <div class="player-info">
+            <div class="player-name">${escapeHtml(p.name)}${id === myId ? '<span class="you-badge">YOU</span>' : ''}</div>
+            <div class="player-stats"><span>❤ ${p.life}</span><span>⚔ ${p.cmdr}</span><span>☠ ${p.poison}</span>${p.mulligans ? `<span>Mull ${p.mulligans}/2</span>` : ""}${p.handKept ? "<span>✅ Ready</span>" : ""}</div>
+          </div>`;
+        playerListEl.appendChild(row);
+      });
+    }
+
+    function renderManaPool() {
+      const me = players[myId];
+      const el = document.getElementById("mana-pool-display");
+      if (!me || !el) return;
+      const m = me.mana || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+      const total = Object.values(m).reduce((a, b) => a + b, 0);
+      el.innerHTML = `<div style="margin-bottom:4px;font-size:12px;">Total: <strong>${total}</strong></div>` +
+        ["W", "U", "B", "R", "G", "C"].map((c) => manaPip(c, m[c] || 0)).join("");
+      const allowed = 1 + (me.landDropBonus || 0);
+      document.getElementById("land-drop-info").innerText = `${me.landsPlayedThisTurn || 0} / ${allowed} used`;
+    }
+
+    function renderOpeningHandStatus() {
+      const me = players[myId];
+      const statusEl = document.getElementById("opening-hand-status");
+      const mulliganBtn = document.getElementById("mulligan-btn");
+      const keepBtn = document.getElementById("keep-hand-btn");
+      if (!me) return;
+      if (me.handKept) {
+        statusEl.innerText = "Hand kept — you're ready.";
+        mulliganBtn.disabled = true;
+        keepBtn.disabled = true;
+      } else if (me.mulligans > 0) {
+        statusEl.innerText = `Mulligans used: ${me.mulligans}/2`;
+        mulliganBtn.disabled = me.mulligans >= 2;
+        keepBtn.disabled = false;
+      } else {
+        statusEl.innerText = "Not drawn yet.";
+        mulliganBtn.disabled = false;
+        keepBtn.disabled = false;
+      }
+    }
+
+    function renderDeckList(names) {
+      const el = document.getElementById("deck-list");
+      el.innerHTML = "";
+      if (!names || names.length === 0) {
+        el.innerHTML = "<div style='color:#8a7a55;font-size:12px;'>No saved decks yet.</div>";
+        return;
+      }
+      names.forEach((name) => {
+        const row = document.createElement("div");
+        row.className = "player-row";
+        const label = document.createElement("div");
+        label.style.cssText = "flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        label.innerText = name;
+        const loadBtn = document.createElement("button");
+        loadBtn.className = "mini-btn"; loadBtn.innerText = "Load";
+        loadBtn.onclick = () => { if (confirm(`Load "${name}"? This replaces your current library.`)) socket.emit("loadDeck", name); };
+        const delBtn = document.createElement("button");
+        delBtn.className = "mini-btn"; delBtn.style.background = "#7a1f1f"; delBtn.innerText = "Del";
+        delBtn.onclick = () => { if (confirm(`Delete saved deck "${name}"?`)) socket.emit("deleteDeck", name); };
+        row.appendChild(label); row.appendChild(loadBtn); row.appendChild(delBtn);
+        el.appendChild(row);
+      });
+    }
+
+    function renderCommanderDock() {
+      const dock = document.getElementById("commander-dock-body");
+      dock.innerHTML = "";
+      Object.entries(players).forEach(([pid, p]) => {
+        const box = document.createElement("div");
+        box.className = "cmdr-player-box";
+        let html = `<div style="color:${p.color};font-weight:700;font-size:12px;">${escapeHtml(p.name)}${pid === myId ? " (you)" : ""}</div>`;
+        for (let slot = 0; slot < 2; slot++) {
+          const cmd = p.commanders ? p.commanders[slot] : null;
+          if (cmd) {
+            html += `<div class="cmdr-slot">
+              <img src="${cmd.img}" class="cmdr-thumb">
+              <div class="cmdr-name">${escapeHtml(cmd.name)}</div>
+              <div style="font-size:10px;">${manaCostPips(cmd.manaCost)}</div>
+              <div class="cmdr-tax">Tax: ${cmd.tax}</div>`;
+            if (pid === myId) {
+              html += `
+                <div class="flex-row">
+                  <button class="mini-btn" onclick="commanderTax(${slot},-2)">-2</button>
+                  <button class="mini-btn" onclick="commanderTax(${slot},2)">+2</button>
+                  <button class="mini-btn" onclick="castCommander(${slot})">Cast</button>
+                </div>
+                <button class="mini-btn" onclick="clearCommander(${slot})" style="margin-top:4px;width:100%;">Clear Slot</button>`;
+            }
+            html += `</div>`;
+          } else if (pid === myId) {
+            html += `<div class="cmdr-slot">
+              <input type="text" placeholder="Commander name" id="cmdr-input-${slot}" list="cardSuggestions" style="width:100%;" oninput="handleAutocompleteInput(event)">
+              <button class="mini-btn" onclick="setCommander(${slot})" style="margin-top:4px;width:100%;">Set Commander</button>
+            </div>`;
+          } else {
+            html += `<div class="cmdr-slot"><div style="color:#8a7a55;font-size:11px;">(empty)</div></div>`;
+          }
+        }
+        box.innerHTML = html;
+        dock.appendChild(box);
+      });
+    }
+
+    function renderBoardTabs() {
+      const bar = document.getElementById("board-tabs");
+      bar.innerHTML = "";
+      Object.entries(players).forEach(([pid, p]) => {
+        const tab = document.createElement("button");
+        tab.className = "board-tab" + (pid === activeBoardOwner ? " active" : "");
+        tab.style.borderBottomColor = p.color;
+        tab.innerText = p.name + (pid === myId ? " (you)" : "");
+        tab.onclick = () => { activeBoardOwner = pid; renderBoardTabs(); renderVisibleBoard(); };
+        bar.appendChild(tab);
+      });
+    }
+
+    function renderTurnState(t) {
+      const info = document.getElementById("turn-info");
+      const startBtn = document.getElementById("start-game-btn");
+      const nextBtn = document.getElementById("next-phase-btn");
+      if (!t.started) {
+        info.innerText = "No game in progress";
+        startBtn.style.display = "inline-block";
+        nextBtn.style.display = "none";
+        return;
+      }
+      startBtn.style.display = "none";
+      const activeId = t.order[t.activeIndex];
+      const activeName = (players[activeId] && players[activeId].name) || "?";
+      info.innerText = `Turn ${t.turnNumber} — ${activeName}'s turn — ${t.phase}`;
+      nextBtn.style.display = activeId === myId ? "inline-block" : "none";
+    }
+
+    function renderCombatState(c) {
+      const btn = document.getElementById("combat-action-btn");
+      const activeId = currentTurn.order[currentTurn.activeIndex];
+      if (c.step === "declareAttackers" && activeId === myId) {
+        btn.style.display = "inline-block";
+        btn.innerText = "Declare Attackers";
+        btn.onclick = openAttackersModal;
+      } else if (c.step === "declareBlockers" && (c.defendersPending || []).includes(myId)) {
+        btn.style.display = "inline-block";
+        btn.innerText = "⚔ Declare Blockers!";
+        btn.onclick = openBlockersModal;
+      } else {
+        btn.style.display = "none";
+      }
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.innerText = s == null ? "" : s;
+      return d.innerHTML;
+    }
+    function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+    // ---------------- stats / name / dice ----------------
+
+    function updateName() { socket.emit("setName", document.getElementById("playerName").value || "Player"); }
+    function changeStat(key, val) { socket.emit("statChange", { key, val }); }
+
+    function rollDice() {
+      const type = document.getElementById("diceType").value;
+      let result = Math.floor(Math.random() * parseInt(type)) + 1;
+      if (type === "2") result = result === 1 ? "Heads" : "Tails";
+      const myName = (players[myId] && players[myId].name) || "Someone";
+      socket.emit("log", `${myName} rolled a ${type === "2" ? "" : "D" + type + ": "}${result}`);
+    }
+
+    function untapAll() { socket.emit("untapAll"); }
+    function setZoom(val) { playmat.style.transform = `scale(${val / 100})`; }
+    function addMana(c) { socket.emit("addMana", c); }
+    function landDropBonus(delta) { socket.emit("landDropBonus", delta); }
+
+    // ---------------- turn / opening hand ----------------
+
+    function startGame() { socket.emit("startGame"); }
+    function nextPhaseFn() { socket.emit("nextPhase"); }
+    function drawOpeningHand() { if (confirm("Draw a fresh opening hand of 7? This returns any current hand to your library first.")) socket.emit("drawOpeningHand"); }
+    function mulligan() { if (confirm("Mulligan? This returns your hand and draws a fresh 7.")) socket.emit("mulligan"); }
+    function keepHand() { socket.emit("keepHand"); }
+
+    // ---------------- autocomplete ----------------
+
+    let acTimer = null;
+    function handleAutocompleteInput(e) {
+      clearTimeout(acTimer);
+      const q = e.target.value;
+      if (q.length < 2) return;
+      acTimer = setTimeout(async () => {
+        try {
+          const res = await fetch("/api/autocomplete?q=" + encodeURIComponent(q));
+          const data = await res.json();
+          const list = document.getElementById("cardSuggestions");
+          list.innerHTML = "";
+          (data.data || []).forEach((name) => {
+            const opt = document.createElement("option");
+            opt.value = name;
+            list.appendChild(opt);
+          });
+        } catch (e) {}
+      }, 250);
+    }
+
+    // ---------------- spawn / library / zones ----------------
+
+    function requestSpawn(faceDown) {
+      const name = document.getElementById("cardSearch").value;
+      if (!name) return;
+      fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success) {
+            socket.emit("spawnCard", { name: data.name, img: data.img, type: data.type, manaCost: data.manaCost, power: data.power, toughness: data.toughness, faceDown });
+            document.getElementById("cardSearch").value = "";
+          } else {
+            alert("Card lookup failed! Check name spelling.");
+          }
+        });
+    }
+
+    function drawCard(n) { socket.emit("drawCard", n); }
+    function shuffleLibrary() { socket.emit("shuffleLibrary"); }
+    function millCard(n) { socket.emit("millCard", n); }
+    function drawSpecific(idx) { socket.emit("drawSpecific", idx); closeZoneModal(); }
+    function zoneToBattlefield(zone, idx) { socket.emit("zoneToBattlefield", { zone, index: idx }); closeZoneModal(); }
+    function zoneToHand(zone, idx) { socket.emit("zoneToHand", { zone, index: idx }); closeZoneModal(); }
+
+    function openZoneModal(ownerId, zoneName) {
+      const p = players[ownerId];
+      if (!p) return;
+      const isMine = ownerId === myId;
+      let list;
+      if (zoneName === "library") {
+        if (!isMine) { alert("Libraries are private — you can only see the card count."); return; }
+        list = p.library || [];
+      } else {
+        list = p[zoneName] || [];
+      }
+      document.getElementById("zone-modal-title").innerText = `${p.name}'s ${capitalize(zoneName)} (${list.length})`;
+      const body = document.getElementById("zone-modal-body");
+      body.innerHTML = "";
+      if (list.length === 0) {
+        body.innerHTML = "<div style='color:#8a7a55;padding:10px;'>Empty.</div>";
+      } else {
+        list.forEach((entry, idx) => {
+          const row = document.createElement("div");
+          row.className = "zone-card-row";
+          let actions = "";
+          if (zoneName === "library" && isMine) {
+            actions = `<button class="mini-btn" onclick="drawSpecific(${idx})">Draw This</button>`;
+          } else if ((zoneName === "graveyard" || zoneName === "exile") && isMine) {
+            actions = `
+              <button class="mini-btn" onclick="zoneToBattlefield('${zoneName}',${idx})">To Battlefield</button>
+              <button class="mini-btn" onclick="zoneToHand('${zoneName}',${idx})">To Hand</button>`;
+          }
+          row.innerHTML = `<img src="${entry.img}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
+          body.appendChild(row);
+        });
+      }
+      document.getElementById("zone-modal").style.display = "flex";
+    }
+    function closeZoneModal() { document.getElementById("zone-modal").style.display = "none"; }
+
+    // ---------------- commander zone ----------------
+
+    function setCommander(slot) {
+      const input = document.getElementById("cmdr-input-" + slot);
+      const name = input.value;
+      if (!name) return;
+      fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) socket.emit("setCommander", { slot, name: data.name, img: data.img, type: data.type, manaCost: data.manaCost, power: data.power, toughness: data.toughness });
+          else alert("Card lookup failed! Check spelling.");
+        });
+    }
+    function commanderTax(slot, delta) { socket.emit("commanderTax", { slot, delta }); }
+    function castCommander(slot) { socket.emit("castCommander", slot); }
+    function clearCommander(slot) { if (confirm("Clear this commander slot?")) socket.emit("clearCommander", slot); }
+
+    // ---------------- import / decks / help modals ----------------
+
+    function openImportModal() {
+      document.getElementById("import-status").innerText = "";
+      document.getElementById("import-modal").style.display = "flex";
+    }
+    function closeImportModal() { document.getElementById("import-modal").style.display = "none"; }
+    function submitImport() {
+      const text = document.getElementById("import-textarea").value;
+      document.getElementById("import-status").innerText = "Importing...";
+      socket.emit("importDeck", text);
+    }
+    function saveDeck() {
+      const text = document.getElementById("import-textarea").value;
+      const name = document.getElementById("deck-save-name").value.trim();
+      if (!name) { alert("Enter a deck name to save it."); return; }
+      if (!text.trim()) { alert("Paste a decklist first."); return; }
+      socket.emit("saveDeck", { name, text });
+    }
+    function openHelpModal() { document.getElementById("help-modal").style.display = "flex"; }
+    function closeHelpModal() { document.getElementById("help-modal").style.display = "none"; }
+
+    function triggerClear() {
+      if (confirm("Start a new game? This reshuffles everything back into libraries and resets life, mana, tax, and turn order.")) socket.emit("clearBoard");
+    }
+
+    // ---------------- log / chat ----------------
+
+    function appendLog(msg) {
+      const div = document.createElement("div");
+      const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      div.innerText = `[${t}] ${msg}`;
+      logBox.appendChild(div);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+    function appendChat(msg) {
+      const div = document.createElement("div");
+      const t = new Date(msg.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      div.innerHTML = `<span style="color:${msg.color};font-weight:600;">${escapeHtml(msg.name)}</span> <span style="color:#665;">[${t}]</span>: ${escapeHtml(msg.text)}`;
+      const box = document.getElementById("chat-box");
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+    function sendChat() {
+      const input = document.getElementById("chat-input");
+      const text = input.value.trim();
+      if (!text) return;
+      socket.emit("chatMessage", text);
+      input.value = "";
+    }
+    function showLogTab(which) {
+      document.getElementById("log-box").style.display = which === "log" ? "block" : "none";
+      document.getElementById("chat-box").style.display = which === "chat" ? "block" : "none";
+      document.getElementById("chat-input-row").style.display = which === "chat" ? "flex" : "none";
+      document.getElementById("tab-log-btn").style.opacity = which === "log" ? "1" : "0.6";
+      document.getElementById("tab-chat-btn").style.opacity = which === "chat" ? "1" : "0.6";
+    }
+
+    // ---------------- voice chat (WebRTC mesh) ----------------
+
+    let localStream = null;
+    let peerConnections = {};
+    const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+
+    async function joinVoice() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        alert("Could not access microphone: " + e.message);
+        return;
+      }
+      document.getElementById("voice-join-btn").style.display = "none";
+      document.getElementById("voice-leave-btn").style.display = "inline-block";
+      socket.emit("voiceJoin");
+    }
+    function leaveVoice() {
+      Object.values(peerConnections).forEach((pc) => pc.close());
+      peerConnections = {};
+      document.querySelectorAll("audio.voice-audio").forEach((a) => a.remove());
+      if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
+      document.getElementById("voice-join-btn").style.display = "inline-block";
+      document.getElementById("voice-leave-btn").style.display = "none";
+      socket.emit("voiceLeave");
+    }
+    function createPeerConnection(remoteId) {
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      if (localStream) localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+      pc.onicecandidate = (e) => {
+        if (e.candidate) socket.emit("voiceSignal", { toId: remoteId, data: { type: "ice", candidate: e.candidate } });
+      };
+      pc.ontrack = (e) => {
+        let audio = document.getElementById("voice-audio-" + remoteId);
+        if (!audio) {
+          audio = document.createElement("audio");
+          audio.id = "voice-audio-" + remoteId;
+          audio.className = "voice-audio";
+          audio.autoplay = true;
+          document.body.appendChild(audio);
+        }
+        audio.srcObject = e.streams[0];
+      };
+      peerConnections[remoteId] = pc;
+      return pc;
+    }
+    function renderVoiceRoster(roster) {
+      document.getElementById("voice-roster").innerText = roster.length
+        ? "In voice: " + roster.map((id) => (players[id] && players[id].name) || "?").join(", ")
+        : "No one in voice.";
+    }
+    socket.on("voiceRoster", renderVoiceRoster);
+    socket.on("voiceSignal", async ({ fromId, data }) => {
+      let pc = peerConnections[fromId];
+      if (!pc) pc = createPeerConnection(fromId);
+      if (data.type === "offer") {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("voiceSignal", { toId: fromId, data: { type: "answer", sdp: answer } });
+      } else if (data.type === "answer") {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      } else if (data.type === "ice") {
+        try { await pc.addIceCandidate(data.candidate); } catch (e) {}
+      }
+    });
+    socket.on("voiceShouldOffer", async ({ toId }) => {
+      const pc = createPeerConnection(toId);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit("voiceSignal", { toId, data: { type: "offer", sdp: offer } });
+    });
+
+    // ---------------- board / card rendering ----------------
+
+    function getZoomScale() {
+      const t = playmat.style.transform;
+      const m = t.match(/scale\(([\d.]+)\)/);
+      return m ? parseFloat(m[1]) : 1;
+    }
+
+    function makePile(label, count, icon, ownerId, zoneName, yOffset) {
+      const pile = document.createElement("div");
+      pile.style.cssText = `position:absolute; left:0px; top:${yOffset}px; width:80px; height:130px; cursor:pointer;`;
+      pile.onclick = () => openZoneModal(ownerId, zoneName);
+      pile.innerHTML = `
+        <div style="width:76px;height:100px;border-radius:6px;background:repeating-linear-gradient(45deg,#2a2a30,#2a2a30 6px,#1c1c20 6px,#1c1c20 12px);border:2px solid #5a4423;display:flex;align-items:center;justify-content:center;font-size:22px;">${icon}</div>
+        <div style="text-align:center;font-size:11px;color:#c9bc98;margin-top:2px;">${label} (${count})</div>`;
+      return pile;
+    }
+
+    function renderVisibleBoard() {
+      playmat.querySelectorAll(".card, .zone-band, .zone-pile-wrap").forEach((el) => el.remove());
+      cardEls = {};
+
+      ZONES.forEach((z) => {
+        const band = document.createElement("div");
+        band.className = "zone-band zone-" + z.key;
+        band.style.cssText = `left:${ZONE_X}px; top:${z.y}px; width:${ZONE_WIDTH}px; height:${z.height}px;`;
+        band.innerHTML = `<div class="zone-band-label">${z.label}</div>`;
+        playmat.appendChild(band);
+      });
+
+      const owner = activeBoardOwner;
+      const p = players[owner];
+      if (p) {
+        const pilesWrap = document.createElement("div");
+        pilesWrap.className = "zone-pile-wrap";
+        pilesWrap.style.cssText = `position:absolute; left:${PILE_X}px; top:40px;`;
+        const libCount = owner === myId ? (p.library ? p.library.length : 0) : (p.libraryCount || 0);
+        pilesWrap.appendChild(makePile("Library", libCount, "📚", owner, "library", 0));
+        pilesWrap.appendChild(makePile("Graveyard", (p.graveyard || []).length, "⚰️", owner, "graveyard", 150));
+        pilesWrap.appendChild(makePile("Exile", (p.exile || []).length, "🌀", owner, "exile", 300));
+        if (owner === myId) {
+          const controls = document.createElement("div");
+          controls.style.cssText = "position:absolute; left:0; top:455px; display:flex; gap:4px;";
+          controls.innerHTML = `
+            <button class="mini-btn" onclick="drawCard(1)">Draw</button>
+            <button class="mini-btn" onclick="shuffleLibrary()">Shuffle</button>
+            <button class="mini-btn" onclick="millCard(1)">Mill</button>`;
+          pilesWrap.appendChild(controls);
+        }
+        playmat.appendChild(pilesWrap);
+      }
+
+      const grouped = { creature: [], artifact: [], mana: [], hand: [] };
+      Object.values(allCards).forEach((card) => {
+        if (card.owner === owner && grouped[card.zoneType]) grouped[card.zoneType].push(card);
+      });
+      layoutGrid(zoneDef("creature"), grouped.creature);
+      layoutGrid(zoneDef("artifact"), grouped.artifact);
+      layoutGrid(zoneDef("mana"), grouped.mana);
+      layoutHand(zoneDef("hand"), grouped.hand);
+
+      Object.values(grouped).flat().forEach(renderCard);
+      applyAllTargetRings();
+    }
+
+    function requestPlayCard(id) {
+      const card = allCards[id];
+      let x = 0;
+      if (card && costHasX(card.manaCost)) {
+        const val = prompt("Choose a value for X:", "0");
+        if (val === null) return;
+        x = parseInt(val) || 0;
+      }
+      socket.emit("playCard", { id, x });
+    }
+
+    function renderCard(card) {
+      const div = document.createElement("div");
+      div.id = card.id;
+      div.className = "card";
+      div.style.borderColor = card.ownerColor || "#444";
+      div.style.left = card._layoutX + "px";
+      div.style.top = card._layoutY + "px";
+
+      div.oncontextmenu = (e) => {
+        e.preventDefault();
+        activeCardId = card.id;
+        updateContextMenuVisibility(card);
+        contextMenu.style.left = e.clientX + "px";
+        contextMenu.style.top = e.clientY + "px";
+        contextMenu.style.display = "block";
+      };
+      div.onmouseenter = () => showPreview(card.id);
+      div.onmouseleave = hidePreview;
+
+      if (card.owner === myId) {
+        div.style.cursor = "grab";
+        div.ondblclick = (e) => { e.stopPropagation(); socket.emit("tap", card.id); };
+        div.onmousedown = (e) => {
+          if (e.button !== 0) return;
+          const scale = getZoomScale();
+          const shiftX = e.clientX - div.getBoundingClientRect().left;
+          const shiftY = e.clientY - div.getBoundingClientRect().top;
+          let lastY = card._layoutY;
+          let moved = false;
+
+          function moveAt(clientX, clientY) {
+            moved = true;
+            div.classList.add("dragging");
+            const rect = playmat.getBoundingClientRect();
+            const x = (clientX - rect.left - shiftX) / scale;
+            const y = (clientY - rect.top - shiftY) / scale;
+            lastY = y;
+            div.style.left = x + "px";
+            div.style.top = y + "px";
+          }
+          function onMouseMove(event) { moveAt(event.clientX, event.clientY); }
+          document.addEventListener("mousemove", onMouseMove);
+          document.onmouseup = () => {
+            document.removeEventListener("mousemove", onMouseMove);
+            document.onmouseup = null;
+            div.classList.remove("dragging");
+            if (!moved) return;
+            const targetZone = zoneForY(lastY).key;
+            if (targetZone !== card.zoneType) {
+              if (card.zoneType === "hand" && targetZone !== "hand" && costHasX(card.manaCost)) {
+                const val = prompt("Choose a value for X:", "0");
+                if (val === null) { renderVisibleBoard(); return; }
+                socket.emit("changeZone", { id: card.id, zoneType: targetZone, x: parseInt(val) || 0 });
+              } else {
+                socket.emit("changeZone", { id: card.id, zoneType: targetZone });
+              }
+            } else {
+              renderVisibleBoard();
+            }
+          };
+        };
+      } else {
+        div.style.cursor = "default";
+      }
+      div.ondragstart = () => false;
+
+      div.classList.toggle("tapped", !!card.tapped);
+      const isMasked = card.faceDown && card.owner !== myId;
+      const isMineFaceDown = card.faceDown && card.owner === myId;
+      div.classList.toggle("face-down-mine", isMineFaceDown);
+
+      let inner = "";
+      if (isMasked) {
+        inner = `<div class="card-back">🂠</div><div class="card-label">Face-down card</div>`;
+      } else {
+        inner = `<img src="${card.img || ""}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>`;
+      }
+      if (card.counters) inner += `<div class="counter-badge">${card.counters > 0 ? "+" : ""}${card.counters}</div>`;
+      div.innerHTML = inner;
+      div._cardData = card;
+
+      playmat.appendChild(div);
+      cardEls[card.id] = div;
+      applyTargetRing(card.id);
+    }
+
+    function showPreview(id) {
+      const el = cardEls[id];
+      if (!el || !el._cardData) return;
+      const card = el._cardData;
+      const isMasked = card.faceDown && card.owner !== myId;
+      if (isMasked || !card.img) return;
+      document.getElementById("preview-img").src = card.img;
+      let extra = card.name || "";
+      if (card.power !== undefined && card.power !== null && card.toughness !== undefined && card.toughness !== null) {
+        extra += ` — ${card.power}/${card.toughness}`;
+      }
+      document.getElementById("preview-name").innerHTML = escapeHtml(extra) + (card.manaCost ? "<br>" + manaCostPips(card.manaCost) : "");
+      previewPanel.style.display = "block";
+    }
+    function hidePreview() { previewPanel.style.display = "none"; }
+
+    function applyTargetRing(id) {
+      const el = cardEls[id];
+      if (!el) return;
+      const list = targets[id] || [];
+      if (list.length === 0) { el.style.boxShadow = ""; return; }
+      const shadows = list.map((pid, i) => {
+        const color = (players[pid] && players[pid].color) || "#fff";
+        const offset = 3 + i * 3;
+        return `0 0 0 ${offset}px ${color}`;
+      });
+      el.style.boxShadow = shadows.join(", ");
+    }
+    function applyAllTargetRings() { Object.keys(cardEls).forEach(applyTargetRing); }
+
+    // ---------------- context menu ----------------
+
+    function updateContextMenuVisibility(card) {
+      const isMine = card.owner === myId;
+      contextMenu.querySelectorAll("button, hr").forEach((el) => {
+        const action = el.dataset ? el.dataset.action : null;
+        if (action === "target") { el.style.display = "block"; return; }
+        if (action === "play") { el.style.display = (isMine && card.zoneType === "hand") ? "block" : "none"; return; }
+        el.style.display = isMine ? "block" : "none";
+      });
+    }
+
+    contextMenu.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const action = btn.dataset.action;
+        if (activeCardId) {
+          if (action === "play") requestPlayCard(activeCardId);
+          if (action === "tap") socket.emit("tap", activeCardId);
+          if (action === "flip") socket.emit("flip", activeCardId);
+          if (action === "target") socket.emit("toggleTarget", activeCardId);
+          if (action === "counterUp") socket.emit("counter", { id: activeCardId, delta: 1 });
+          if (action === "counterDown") socket.emit("counter", { id: activeCardId, delta: -1 });
+          if (action === "toGraveyard") socket.emit("toGraveyard", activeCardId);
+          if (action === "toExile") socket.emit("toExile", activeCardId);
+          if (action === "toLibrary") socket.emit("toLibraryTop", activeCardId);
+          if (action === "remove") socket.emit("removeCard", activeCardId);
+        }
+        contextMenu.style.display = "none";
+        activeCardId = null;
+      });
+    });
+    document.addEventListener("click", (e) => {
+      if (!contextMenu.contains(e.target)) contextMenu.style.display = "none";
+    });
+
+    // ---------------- combat modals ----------------
+
+    function openAttackersModal() {
+      const body = document.getElementById("attackers-modal-body");
+      body.innerHTML = "";
+      const myCreatures = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "creature" && !c.tapped);
+      const otherPlayers = Object.entries(players).filter(([id]) => id !== myId);
+      if (myCreatures.length === 0) { body.innerHTML = "<div style='color:#8a7a55;'>No untapped creatures to attack with.</div>"; }
+      myCreatures.forEach((card) => {
+        const row = document.createElement("div");
+        row.className = "zone-card-row";
+        const options = otherPlayers.map(([id, p]) => `<option value="${id}">${escapeHtml(p.name)}</option>`).join("");
+        row.innerHTML = `
+          <img src="${card.img || ''}" class="zone-card-thumb">
+          <div class="zone-card-name">${escapeHtml(card.name || '')} (${card.power || 0}/${card.toughness || 0})</div>
+          <label style="font-size:11px;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="atk-check" data-id="${card.id}"> Attack</label>
+          <select class="atk-target" data-id="${card.id}"><option value="">-- target --</option>${options}</select>`;
+        body.appendChild(row);
+      });
+      document.getElementById("attackers-modal").style.display = "flex";
+    }
+    function closeAttackersModal() {
+      document.getElementById("attackers-modal").style.display = "none";
+      socket.emit("declareAttackers", {});
+    }
+    function confirmAttackers() {
+      const assignments = {};
+      document.querySelectorAll("#attackers-modal-body .atk-check:checked").forEach((cb) => {
+        const id = cb.dataset.id;
+        const sel = document.querySelector(`.atk-target[data-id="${id}"]`);
+        if (sel && sel.value) assignments[id] = sel.value;
+      });
+      socket.emit("declareAttackers", assignments);
+      document.getElementById("attackers-modal").style.display = "none";
+    }
+
+    function openBlockersModal() {
+      const body = document.getElementById("blockers-modal-body");
+      body.innerHTML = "";
+      const incoming = Object.entries(currentCombat.attackers || {}).filter(([cardId, defId]) => defId === myId);
+      const myCreatures = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "creature" && !c.tapped);
+      if (incoming.length === 0) { body.innerHTML = "<div style='color:#8a7a55;'>No attackers targeting you.</div>"; }
+      incoming.forEach(([attackerId]) => {
+        const atk = allCards[attackerId];
+        const atkOwner = atk ? players[atk.owner] : null;
+        const row = document.createElement("div");
+        row.className = "zone-card-row";
+        const options = myCreatures.map((c) => `<option value="${c.id}">${escapeHtml(c.name || '')} (${c.power || 0}/${c.toughness || 0})</option>`).join("");
+        const visibleName = atk && !atk.faceDown ? escapeHtml(atk.name || '') : "Face-down attacker";
+        row.innerHTML = `
+          <img src="${atk && !atk.faceDown ? atk.img : ''}" class="zone-card-thumb">
+          <div class="zone-card-name">${visibleName} (${atk ? atk.power || 0 : 0}/${atk ? atk.toughness || 0 : 0}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}</div>
+          <select class="blk-select" data-attacker="${attackerId}"><option value="">No block</option>${options}</select>`;
+        body.appendChild(row);
+      });
+      document.getElementById("blockers-modal").style.display = "flex";
+    }
+    function submitBlockers(noBlocks) {
+      const assignments = {};
+      if (!noBlocks) {
+        document.querySelectorAll("#blockers-modal-body .blk-select").forEach((sel) => {
+          assignments[sel.dataset.attacker] = sel.value || null;
+        });
+      } else {
+        Object.entries(currentCombat.attackers || {}).forEach(([cardId, defId]) => { if (defId === myId) assignments[cardId] = null; });
+      }
+      socket.emit("declareBlockers", assignments);
+      document.getElementById("blockers-modal").style.display = "none";
+    }
+  </script>
+</body>
+</html>
