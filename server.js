@@ -240,6 +240,18 @@ function basicLandColor(type) {
   return null;
 }
 
+// Cards that unconditionally enter tapped ("~ enters the battlefield tapped.") should actually
+// enter tapped instead of always untapped. Cards with a real choice attached (shocklands' "you
+// may pay life", checklands' "unless you control", etc.) are deliberately excluded — the player
+// has a decision to make there that this app can't resolve automatically, so those stay untapped
+// by default and can be tapped manually like today.
+function entersTapped(card) {
+  const text = (card.text || "").toLowerCase();
+  if (!text.includes("enters the battlefield tapped") && !text.includes("enters tapped")) return false;
+  if (text.includes("you may pay") || text.includes("unless you") || text.includes("if you don't") || text.includes("you may reveal")) return false;
+  return true;
+}
+
 function parsePT(v) {
   const n = parseInt(v, 10);
   return isNaN(n) ? 0 : n;
@@ -398,13 +410,17 @@ function spawnBattlefieldCard(lobby, data) {
   const { owner, faceDown, zoneType, isCommander } = data;
   const p = lobby.players[owner];
   const id = newId();
+  const resolvedZoneType = zoneType || classifyType(data.type);
   const card = {
     id, name: data.name, img: data.img, type: data.type || "", manaCost: data.manaCost || "",
     cmc: data.cmc || 0, colors: data.colors || [], colorIdentity: data.colorIdentity || [],
     power: data.power, toughness: data.toughness, loyalty: data.loyalty,
     text: data.text || "", keywords: data.keywords || [], producedMana: data.producedMana || null,
-    zoneType: zoneType || classifyType(data.type),
-    tapped: false, faceDown: !!faceDown, counters: 0,
+    zoneType: resolvedZoneType,
+    // Only applies when actually entering the battlefield — drawing into hand (zoneType "hand")
+    // goes through this same function but obviously shouldn't come in "tapped".
+    tapped: resolvedZoneType !== "hand" && entersTapped(data),
+    faceDown: !!faceDown, counters: 0,
     owner, ownerColor: p ? p.color : "#999",
     isCommander: !!isCommander
   };
@@ -458,6 +474,23 @@ function attemptPlay(p, card, targetZoneType, xValue) {
     return { ok: false, error: `Not enough mana to cast ${card.name || "this card"}.` };
   }
   p.mana = remaining;
+  return { ok: true };
+}
+
+// Instants (and anything with Flash) can be played anytime; everything else is sorcery-speed —
+// only on your own turn, during a main phase. Before the game is actually started there's no
+// turn structure yet, so pregame setup stays unrestricted.
+function checkTiming(lobby, socketId, card) {
+  const text = (card.type || "").toLowerCase();
+  const isInstantSpeed = text.includes("instant") || (Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash"));
+  if (isInstantSpeed) return { ok: true };
+  if (!lobby.turn.started) return { ok: true };
+  if (lobby.turn.order[lobby.turn.activeIndex] !== socketId) {
+    return { ok: false, error: `You can only play ${card.name || "that"} on your own turn.` };
+  }
+  if (lobby.turn.phase !== "Main 1" && lobby.turn.phase !== "Main 2") {
+    return { ok: false, error: `You can only play ${card.name || "that"} during a main phase.` };
+  }
   return { ok: true };
 }
 
@@ -826,6 +859,8 @@ io.on("connection", (socket) => {
     if (!["mana", "creature", "artifact"].includes(zoneType)) return;
 
     if (card.zoneType === "hand") {
+      const timing = checkTiming(lobby, socket.id, card);
+      if (!timing.ok) { socket.emit("actionError", timing.error); return; }
       const result = attemptPlay(p, card, zoneType, x);
       if (!result.ok) { socket.emit("actionError", result.error); return; }
       card.zoneType = zoneType;
@@ -849,6 +884,8 @@ io.on("connection", (socket) => {
     const p = lobby.players[socket.id];
     if (!card || !p || card.owner !== socket.id) return;
     const targetZoneType = classifyType(card.type);
+    const timing = checkTiming(lobby, socket.id, card);
+    if (!timing.ok) { socket.emit("actionError", timing.error); return; }
     const result = attemptPlay(p, card, targetZoneType, xValue);
     if (!result.ok) { socket.emit("actionError", result.error); return; }
     card.zoneType = targetZoneType;
@@ -862,10 +899,14 @@ io.on("connection", (socket) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
     if (!card || card.owner !== socket.id) return;
-    const wasTapped = card.tapped;
-    card.tapped = !card.tapped;
+    // One-way now: this only ever taps. Real Magic has no "double-click to untap at will" —
+    // untapping only happens automatically each Untap step (or via Untap All for effects that
+    // untap things). Letting a player freely toggle back and forth on the same land was a way to
+    // mint unlimited mana just by clicking it repeatedly.
+    if (card.tapped) return;
+    card.tapped = true;
     broadcastCard(lobby, card);
-    if (!wasTapped && card.tapped && card.zoneType === "mana") {
+    if (card.zoneType === "mana") {
       // Basic land types auto-add their color; nonbasic lands that are archived with exactly
       // one fixed producible color (shocklands, painlands, snow duals, etc.) do too. Lands with
       // multiple/any-color options (Command Tower, gates, tri-lands) stay manual since the choice is ambiguous.
@@ -1201,7 +1242,12 @@ io.on("connection", (socket) => {
 
   socket.on("startGame", () => {
     const lobby = currentLobby(); if (!lobby) return;
-    lobby.turn.order = Object.keys(lobby.players);
+    // Pregame dice roll decides turn order — everyone rolls a d20, highest goes first, ties
+    // broken randomly, and the log shows every roll so it's not just a silent shuffle.
+    const rolls = Object.keys(lobby.players).map((sid) => ({ sid, roll: randInt(20) + 1, tiebreak: Math.random() }));
+    rolls.sort((a, b) => b.roll - a.roll || b.tiebreak - a.tiebreak);
+    rolls.forEach((r) => pushLog(lobby, `${lobby.players[r.sid].name} rolled a ${r.roll} for turn order`));
+    lobby.turn.order = rolls.map((r) => r.sid);
     lobby.turn.activeIndex = 0;
     lobby.turn.phase = "Main 1";
     lobby.turn.turnNumber = 1;
@@ -1214,7 +1260,7 @@ io.on("connection", (socket) => {
     broadcastTurn(lobby);
     broadcastCombat(lobby);
     broadcastPlayers(lobby);
-    pushLog(lobby, `Game started! Turn order: ${lobby.turn.order.map((id) => (lobby.players[id] ? lobby.players[id].name : "?")).join(" → ")}`);
+    pushLog(lobby, `${lobby.players[lobby.turn.order[0]].name} goes first! Turn order: ${lobby.turn.order.map((id) => (lobby.players[id] ? lobby.players[id].name : "?")).join(" → ")}`);
   });
 
   socket.on("nextPhase", () => {

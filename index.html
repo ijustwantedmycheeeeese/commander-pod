@@ -199,6 +199,7 @@
         <button onclick="untapAll()" class="secondary">Untap All</button>
         <button onclick="triggerClear()" class="danger">New Game</button>
         <button onclick="openHelpModal()" class="secondary">?</button>
+        <button onclick="openBugReportModal()" class="secondary" title="Copy diagnostic info to report a bug">🐛</button>
         <button onclick="showMainMenu()" class="secondary">Leave Table</button>
         <button onclick="logout()" class="secondary">Log Out</button>
       </div>
@@ -251,7 +252,7 @@
           <div id="deck-list"></div>
           <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
         </div>
-        <div id="log-chat-wrap" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div id="log-chat-wrap" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:150px;">
           <div class="flex-row" style="padding:6px 12px;border-bottom:1px solid #2e2618;">
             <button class="mini-btn" id="tab-log-btn" onclick="showLogTab('log')">Game Log</button>
             <button class="mini-btn" id="tab-chat-btn" onclick="showLogTab('chat')">Chat</button>
@@ -289,7 +290,7 @@
     <div id="context-menu">
       <button data-action="play">Play to Battlefield</button>
       <button data-action="toHand">Return to Hand</button>
-      <button data-action="tap">Tap / Untap</button>
+      <button data-action="tap">Tap</button>
       <button data-action="flip">Flip Face Up/Down</button>
       <button data-action="target">Target / Untarget</button>
       <hr>
@@ -370,22 +371,45 @@
           <li>The <strong>Deck Editor</strong> (Main Menu or top bar) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too.</li>
           <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
           <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly. Dragging a permanent back into the Hand row does nothing on purpose — there's no general rule that lets you just pick a permanent back up. To represent a bounce effect, right-click the permanent and choose <strong>Return to Hand</strong> instead.</li>
-          <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more).</li>
+          <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more). Once the game has started, lands and anything else that isn't an Instant (or doesn't have Flash) can only be played on your own turn, during a main phase — Instants and Flash cards can go anytime.</li>
           <li>Playing anything else checks your <strong>mana pool</strong> against the card's real cost — you need the mana or it won't go through. This includes <strong>casting your Commander</strong> from its zone: it costs its real mana cost plus the current commander tax shown there, and it's disabled while a copy of it is already on the battlefield.</li>
-          <li>Tap a <strong>basic land</strong>, or any nonbasic land archived with exactly one fixed color (shocklands, painlands, snow duals, etc.), to auto-add its color to your pool. Lands with a color choice (Command Tower, gates, tri-lands) and other mana sources (rocks, dorks) need the manual +/− buttons in the Mana Pool panel — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules.</li>
-          <li><strong>Double-click</strong> your own card to tap/untap it. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
+          <li>Tap a <strong>basic land</strong>, or any nonbasic land archived with exactly one fixed color (shocklands, painlands, snow duals, etc.), to auto-add its color to your pool. Lands with a color choice (Command Tower, gates, tri-lands) and other mana sources (rocks, dorks) need the manual +/− buttons in the Mana Pool panel — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules. A land with "enters the battlefield tapped" in its unconditional text (not shocklands/checklands, which involve a real choice) now actually enters tapped.</li>
+          <li><strong>Double-click</strong> your own card to tap it (using it, e.g. for mana) — this only ever taps, since there's no real rule that lets you freely untap something at will; untapping only happens automatically each Untap step, or via <strong>Untap All</strong> for effects that untap things. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
-          <li><strong>Start Game</strong> begins turn order — only the active player sees Next Phase, stepping through Untap (auto-untaps + resets land drops) → Upkeep → Draw (auto-draws, skipped turn 1 for the starting player) → Main 1 → Combat → Main 2 → End Step.</li>
+          <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase, stepping through Untap (auto-untaps + resets land drops) → Upkeep → Draw (auto-draws, skipped turn 1 for the starting player) → Main 1 → Combat → Main 2 → End Step.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board.</li>
           <li><strong>Chat</strong> and <strong>Voice Chat</strong> (experimental, peer-to-peer) are in the sidebar.</li>
+          <li>Hit something broken? The 🐛 button in the top bar builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
         </ul>
         <div class="modal-close-row"><button onclick="closeHelpModal()">Got it</button></div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="bug-report-modal">
+      <div class="modal-box modal-box-wide">
+        <h2>Bug Report</h2>
+        <p style="font-size:12px;color:#a89a70;">Copy this and send it over — it's just a snapshot of recent game log and client-side error activity, generated locally, nothing is sent anywhere automatically.</p>
+        <textarea id="bug-report-text" rows="16" style="width:100%;font-family:ui-monospace,monospace;font-size:11px;" readonly></textarea>
+        <div id="bug-report-status" style="font-size:12px;color:#a89a70;margin-top:6px;"></div>
+        <div class="modal-close-row">
+          <button class="secondary" onclick="closeBugReportModal()">Close</button>
+          <button onclick="copyBugReport()">Copy to Clipboard</button>
+        </div>
       </div>
     </div>
   </div>
 
   <script>
+    // ---------------- error capture (for the bug report tab) ----------------
+    const clientErrorLog = [];
+    function recordClientError(msg) {
+      clientErrorLog.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+      if (clientErrorLog.length > 50) clientErrorLog.shift();
+    }
+    window.addEventListener("error", (e) => recordClientError(`${e.message} (${e.filename}:${e.lineno})`));
+    window.addEventListener("unhandledrejection", (e) => recordClientError(`Unhandled promise rejection: ${e.reason}`));
+
     const socket = io({ autoConnect: false });
     const MANA_COLORS = { W: "#f8f6d8", U: "#0e68ab", B: "#2a2a2e", R: "#d3202a", G: "#00733e", C: "#c9c9c9" };
     const MANA_TEXT = { W: "#000", U: "#fff", B: "#fff", R: "#fff", G: "#fff", C: "#000" };
@@ -446,6 +470,8 @@
     function showMainMenu() {
       leaveVoice();
       socket.emit("leaveLobby");
+      currentLobbyId = null;
+      currentLobbyName = null;
       document.getElementById("app-root").style.display = "none";
       document.getElementById("main-menu").style.display = "flex";
     }
@@ -561,6 +587,8 @@
     const previewPanel = document.getElementById("preview-panel");
 
     let myId = null;
+    let currentLobbyId = null;
+    let currentLobbyName = null;
     let players = {};
     let targets = {};
     let allCards = {};
@@ -587,6 +615,8 @@
       document.getElementById("app-root").style.display = "flex";
 
       myId = data.myId;
+      currentLobbyId = data.lobbyId;
+      currentLobbyName = data.lobbyName;
       activeBoardOwner = myId;
       players = data.players;
       targets = data.targets || {};
@@ -1097,6 +1127,42 @@
 
     function openHelpModal() { document.getElementById("help-modal").style.display = "flex"; }
     function closeHelpModal() { document.getElementById("help-modal").style.display = "none"; }
+
+    function generateBugReport() {
+      const lines = [];
+      lines.push(`Commander Pod bug report — ${new Date().toString()}`);
+      lines.push(`User: ${(players[myId] && players[myId].name) || "(not in a table)"} | myId: ${myId || "-"}`);
+      lines.push(`Table: ${currentLobbyName || "(none)"} | lobbyId: ${currentLobbyId || "-"}`);
+      lines.push(`Turn: started=${currentTurn.started} phase=${currentTurn.phase} turn#=${currentTurn.turnNumber}`);
+      lines.push(`Combat step: ${currentCombat.step}`);
+      lines.push(`Browser: ${navigator.userAgent}`);
+      lines.push("");
+      lines.push("--- Recent client errors ---");
+      lines.push(clientErrorLog.length ? clientErrorLog.join("\n") : "(none captured)");
+      lines.push("");
+      lines.push("--- Recent game log ---");
+      const logLines = Array.from(logBox.children).slice(-40).map((el) => el.innerText);
+      lines.push(logLines.length ? logLines.join("\n") : "(empty)");
+      return lines.join("\n");
+    }
+    function openBugReportModal() {
+      document.getElementById("bug-report-text").value = generateBugReport();
+      document.getElementById("bug-report-status").innerText = "";
+      document.getElementById("bug-report-modal").style.display = "flex";
+    }
+    function closeBugReportModal() { document.getElementById("bug-report-modal").style.display = "none"; }
+    function copyBugReport() {
+      const text = document.getElementById("bug-report-text").value;
+      const status = document.getElementById("bug-report-status");
+      navigator.clipboard.writeText(text).then(
+        () => { status.innerText = "Copied to clipboard!"; },
+        () => {
+          const ta = document.getElementById("bug-report-text");
+          ta.select();
+          status.innerText = "Couldn't use the clipboard automatically — text is selected, press Ctrl+C.";
+        }
+      );
+    }
 
     function triggerClear() {
       if (confirm("Start a new game? This reshuffles everything back into libraries and resets life, mana, tax, and turn order.")) socket.emit("clearBoard");
