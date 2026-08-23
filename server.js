@@ -734,6 +734,14 @@ io.on("connection", (socket) => {
     return socket.data.lobbyId ? lobbies[socket.data.lobbyId] : null;
   }
 
+  // authOk always goes out first (client uses it to populate the Main Menu — deck list, etc.).
+  // The reattach's lobbyJoined, if any, MUST be emitted after — the client's authOk handler
+  // unconditionally shows the Main Menu, so emitting it after lobbyJoined would silently clobber
+  // the reattach: the server would correctly have the player back in their seat, but the client
+  // would be stuck showing the Main Menu, and since the server thinks they're already in that
+  // lobby, both rejoining and creating a new table would silently no-op — a total softlock.
+  socket.emit("authOk", { username, decks: Object.keys(decks[username] || {}) });
+
   // A reconnecting browser (network blip, tab refresh, server restart) within the grace window
   // resumes its seat silently instead of landing back on the Main Menu with its board wiped.
   const seat = findDisconnectedSeat(username);
@@ -745,10 +753,9 @@ io.on("connection", (socket) => {
     broadcastPlayers(seat.lobby);
     broadcastLobbyList();
     pushLog(seat.lobby, `${username} reconnected`);
+  } else {
+    socket.emit("lobbyList", lobbySummaries());
   }
-
-  socket.emit("authOk", { username, decks: Object.keys(decks[username] || {}) });
-  socket.emit("lobbyList", lobbySummaries());
 
   // ---- lobby lifecycle ----
 
@@ -778,8 +785,20 @@ io.on("connection", (socket) => {
     pushLog(lobby, `${username} joined the table`);
   }
 
+  // Defense in depth: if this socket is somehow still marked as seated somewhere (a desync bug,
+  // a stale reattach, anything) leave it first instead of silently refusing to create/join a new
+  // table — a main-menu action should never be able to permanently strand a player with no way
+  // out and no way to clean up the table they're stuck in.
+  function leaveCurrentLobbyIfAny() {
+    const lobby = currentLobby();
+    if (!lobby) return;
+    socket.leave(lobby.id);
+    socket.data.lobbyId = null;
+    removePlayerFromLobby(lobby, socket.id, "left");
+  }
+
   socket.on("createLobby", (name) => {
-    if (currentLobby()) return;
+    leaveCurrentLobbyIfAny();
     const id = newLobbyId();
     const lobbyName = (name || "").toString().trim().slice(0, 40) || `${username}'s table`;
     const lobby = createLobbyState(id, lobbyName, username);
@@ -788,19 +807,14 @@ io.on("connection", (socket) => {
   });
 
   socket.on("joinLobby", (id) => {
-    if (currentLobby()) return;
+    if (socket.data.lobbyId === id) return; // already there — no-op, not a stale desync
+    leaveCurrentLobbyIfAny();
     const lobby = lobbies[id];
     if (!lobby) { socket.emit("actionError", "That table no longer exists."); socket.emit("lobbyList", lobbySummaries()); return; }
     joinLobbyInternal(lobby);
   });
 
-  socket.on("leaveLobby", () => {
-    const lobby = currentLobby();
-    if (!lobby) return;
-    socket.leave(lobby.id);
-    socket.data.lobbyId = null;
-    removePlayerFromLobby(lobby, socket.id, "left");
-  });
+  socket.on("leaveLobby", leaveCurrentLobbyIfAny);
 
   socket.on("listLobbies", () => socket.emit("lobbyList", lobbySummaries()));
 
