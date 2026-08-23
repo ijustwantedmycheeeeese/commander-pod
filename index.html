@@ -388,20 +388,47 @@
 
     // ---------------- board zone definitions (top to bottom) ----------------
 
+    // Zones only declare a minimum height here — the actual y/height used for rendering and
+    // hit-testing is recomputed every render in computeZoneLayout() based on how many cards are
+    // actually in each zone, so a zone that overflows its minimum grows instead of the cards
+    // visually spilling into the zone below.
     const ZONES = [
-      { key: "creature", label: "Creatures", y: 20, height: 320 },
-      { key: "artifact", label: "Artifacts & Enchantments", y: 360, height: 320 },
-      { key: "mana", label: "Lands / Mana", y: 700, height: 320 },
-      { key: "hand", label: "Hand", y: 1040, height: 190 }
+      { key: "creature", label: "Creatures", minHeight: 320 },
+      { key: "artifact", label: "Artifacts & Enchantments", minHeight: 320 },
+      { key: "mana", label: "Lands / Mana", minHeight: 320 },
+      { key: "hand", label: "Hand", minHeight: 190 }
     ];
     const ZONE_X = 420;
     const ZONE_WIDTH = 2500;
     const PILE_X = 20;
+    const ZONE_GAP = 20;
+    const CARD_W = 108, CARD_H = 150, CARD_GAP = 14;
+    const PER_ROW = Math.max(1, Math.floor(ZONE_WIDTH / (CARD_W + CARD_GAP)));
 
-    function zoneDef(key) { return ZONES.find((z) => z.key === key); }
+    // Recomputed every render; zoneForY (drag-and-drop hit testing) reads this rather than the
+    // static ZONES minimums, so drop targets track the current (possibly grown) layout.
+    let currentZoneLayout = ZONES.map((z) => ({ ...z, y: 0, height: z.minHeight }));
+
+    function computeZoneLayout(grouped) {
+      let y = 20;
+      return ZONES.map((z) => {
+        const count = (grouped[z.key] || []).length;
+        let height;
+        if (z.key === "hand") {
+          height = z.minHeight; // hand always lays out in one row (spacing shrinks instead of wrapping)
+        } else {
+          const rows = count === 0 ? 0 : Math.ceil(count / PER_ROW);
+          height = Math.max(z.minHeight, 24 + rows * (CARD_H + 10) + 14);
+        }
+        const withLayout = { ...z, y, height };
+        y += height + ZONE_GAP;
+        return withLayout;
+      });
+    }
+
     function zoneForY(y) {
-      let best = ZONES[0], bestDist = Infinity;
-      for (const z of ZONES) {
+      let best = currentZoneLayout[0], bestDist = Infinity;
+      for (const z of currentZoneLayout) {
         const center = z.y + z.height / 2;
         const d = Math.abs(y - center);
         if (d < bestDist) { bestDist = d; best = z; }
@@ -414,22 +441,19 @@
     }
     function layoutGrid(zone, cardsInZone) {
       cardsInZone.sort((a, b) => idOrder(a.id) - idOrder(b.id));
-      const cardW = 108, cardH = 150, gap = 14;
-      const perRow = Math.max(1, Math.floor(ZONE_WIDTH / (cardW + gap)));
       cardsInZone.forEach((card, i) => {
-        const row = Math.floor(i / perRow);
-        const col = i % perRow;
-        card._layoutX = ZONE_X + col * (cardW + gap);
-        card._layoutY = zone.y + 24 + row * (cardH + 10);
+        const row = Math.floor(i / PER_ROW);
+        const col = i % PER_ROW;
+        card._layoutX = ZONE_X + col * (CARD_W + CARD_GAP);
+        card._layoutY = zone.y + 24 + row * (CARD_H + 10);
       });
     }
     function layoutHand(zone, cardsInZone) {
       cardsInZone.sort((a, b) => idOrder(a.id) - idOrder(b.id));
       const n = cardsInZone.length;
       if (n === 0) return;
-      const cardW = 108, idealGap = 14;
-      const idealSpacing = cardW + idealGap;
-      const spacing = n <= 1 ? 0 : Math.min(idealSpacing, (ZONE_WIDTH - cardW) / (n - 1));
+      const idealSpacing = CARD_W + CARD_GAP;
+      const spacing = n <= 1 ? 0 : Math.min(idealSpacing, (ZONE_WIDTH - CARD_W) / (n - 1));
       cardsInZone.forEach((card, i) => {
         card._layoutX = ZONE_X + i * spacing;
         card._layoutY = zone.y + Math.max(20, (zone.height - 150) / 2);
@@ -978,15 +1002,22 @@
       playmat.querySelectorAll(".card, .zone-band, .zone-pile-wrap").forEach((el) => el.remove());
       cardEls = {};
 
-      ZONES.forEach((z) => {
+      const owner = activeBoardOwner;
+      const grouped = { creature: [], artifact: [], mana: [], hand: [] };
+      Object.values(allCards).forEach((card) => {
+        if (card.owner === owner && grouped[card.zoneType]) grouped[card.zoneType].push(card);
+      });
+
+      currentZoneLayout = computeZoneLayout(grouped);
+      currentZoneLayout.forEach((z) => {
         const band = document.createElement("div");
         band.className = "zone-band zone-" + z.key;
         band.style.cssText = `left:${ZONE_X}px; top:${z.y}px; width:${ZONE_WIDTH}px; height:${z.height}px;`;
         band.innerHTML = `<div class="zone-band-label">${z.label}</div>`;
         playmat.appendChild(band);
       });
-
-      const owner = activeBoardOwner;
+      const lastZone = currentZoneLayout[currentZoneLayout.length - 1];
+      playmat.style.height = Math.max(1260, lastZone.y + lastZone.height + 20) + "px";
       const p = players[owner];
       if (p) {
         const pilesWrap = document.createElement("div");
@@ -1008,14 +1039,12 @@
         playmat.appendChild(pilesWrap);
       }
 
-      const grouped = { creature: [], artifact: [], mana: [], hand: [] };
-      Object.values(allCards).forEach((card) => {
-        if (card.owner === owner && grouped[card.zoneType]) grouped[card.zoneType].push(card);
-      });
-      layoutGrid(zoneDef("creature"), grouped.creature);
-      layoutGrid(zoneDef("artifact"), grouped.artifact);
-      layoutGrid(zoneDef("mana"), grouped.mana);
-      layoutHand(zoneDef("hand"), grouped.hand);
+      const zoneByKey = {};
+      currentZoneLayout.forEach((z) => { zoneByKey[z.key] = z; });
+      layoutGrid(zoneByKey.creature, grouped.creature);
+      layoutGrid(zoneByKey.artifact, grouped.artifact);
+      layoutGrid(zoneByKey.mana, grouped.mana);
+      layoutHand(zoneByKey.hand, grouped.hand);
 
       Object.values(grouped).flat().forEach(renderCard);
       applyAllTargetRings();
