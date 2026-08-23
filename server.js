@@ -123,6 +123,14 @@ function restoreLobbies() {
   for (const id in raw) {
     const l = raw[id];
     l.voiceParticipants = new Set(); // live WebRTC state can't survive a restart regardless
+    // A lobby persisted by an older server version won't have fields added to the schema since
+    // (e.g. spectators, added well after persistence itself). Loading it as-is left code that
+    // assumes these fields exist -- leaveCurrentLobbyIfAny's `lobby.spectators[socket.id]` chief
+    // among them -- crashing on `undefined[...]` for any table that predates the field, which
+    // silently broke createLobby/joinLobby/chat/disconnect for anyone still seated in one.
+    if (!l.spectators) l.spectators = {};
+    if (!l.turn) l.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
+    if (l.turn.pendingDiscard === undefined) l.turn.pendingDiscard = null;
     // Nobody is actually connected right after a restart — mark every seated player as
     // disconnected so the normal reconnect-grace mechanism below picks up the cleanup/resume.
     for (const sid in l.players) l.players[sid].disconnectedAt = Date.now();
