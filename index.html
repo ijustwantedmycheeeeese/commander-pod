@@ -192,10 +192,11 @@
     <div id="top-bar">
       <div class="flex-row">
         <strong class="mtg-title">Commander Pod</strong>
+        <span id="spectator-badge" style="display:none;font-size:12px;color:#d4af37;border:1px solid #5a4423;border-radius:4px;padding:3px 8px;">👁 Spectating</span>
         <input type="text" id="cardSearch" placeholder="Search card to spawn..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)">
         <datalist id="cardSuggestions"></datalist>
-        <button onclick="requestSpawn(false)">Spawn Face Up</button>
-        <button onclick="requestSpawn(true)" class="secondary">Spawn Face Down</button>
+        <button id="spawn-face-up-btn" onclick="requestSpawn(false)">Spawn Face Up</button>
+        <button id="spawn-face-down-btn" onclick="requestSpawn(true)" class="secondary">Spawn Face Down</button>
         <button onclick="openDeckEditor()" class="secondary">Deck Editor</button>
       </div>
       <div class="flex-row">
@@ -205,8 +206,8 @@
         </div>
         <select id="diceType"><option value="20">D20</option><option value="6">D6</option><option value="2">Coin Flip</option></select>
         <button onclick="rollDice()" style="background:linear-gradient(180deg,#5b3a8a,#3a2560);">Roll</button>
-        <button onclick="untapAll()" class="secondary">Untap All</button>
-        <button onclick="triggerClear()" class="danger">New Game</button>
+        <button id="untap-all-btn" onclick="untapAll()" class="secondary">Untap All</button>
+        <button id="new-game-btn" onclick="triggerClear()" class="danger">New Game</button>
         <button onclick="openHelpModal()" class="secondary">?</button>
         <button onclick="openBugReportModal()" class="secondary" title="Copy diagnostic info to report a bug">🐛</button>
         <button onclick="showMainMenu()" class="secondary">Leave Table</button>
@@ -216,7 +217,7 @@
 
     <div id="main-container">
       <div id="sidebar">
-        <div class="panel">
+        <div class="panel" id="my-status-panel">
           <h3>My Status</h3>
           <div class="stat-widget">
             <div class="stat-row"><span>Life</span><div><button class="stat-btn" onclick="changeStat('life',-1)">-</button> <strong id="lbl-life">40</strong> <button class="stat-btn" onclick="changeStat('life',1)">+</button></div></div>
@@ -225,7 +226,7 @@
           </div>
           <input type="text" id="playerName" placeholder="Set Nickname..." onchange="updateName()" style="width:100%;margin-top:8px;">
         </div>
-        <div class="panel">
+        <div class="panel" id="mana-pool-panel">
           <h3>Mana Pool</h3>
           <div id="mana-pool-total" style="font-size:12px;margin-bottom:6px;">Total: <strong>0</strong></div>
           <div id="mana-pool-display" class="mana-pool-grid"></div>
@@ -235,7 +236,7 @@
             <button class="mini-btn" onclick="landDropBonus(-1)">-1</button>
           </div>
         </div>
-        <div class="panel">
+        <div class="panel" id="opening-hand-panel">
           <h3>Opening Hand</h3>
           <div id="opening-hand-status" style="font-size:12px;color:#a89a70;margin-bottom:6px;">Not drawn yet.</div>
           <div class="flex-row">
@@ -255,6 +256,7 @@
         <div class="panel">
           <h3>Players</h3>
           <div id="player-list"></div>
+          <div id="spectator-roster" style="font-size:11px;color:#8a7a55;margin-top:6px;"></div>
         </div>
         <div class="panel">
           <h3>My Decks</h3>
@@ -377,6 +379,7 @@
         <h2>How to Play</h2>
         <ul>
           <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named, optionally password-protected — 🔒 in the list means it needs one) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>Leave Table</strong> in the top bar returns to the menu and frees your seat.</li>
+          <li><strong>Spectate</strong> instead of Join to watch a table without taking a seat — you see the board and life totals like any non-owner (hands and face-down cards stay hidden), can use chat and voice, but can't touch cards or start/advance the game. Works on a game already in progress, not just a fresh table.</li>
           <li>The <strong>Deck Editor</strong> (Main Menu or top bar) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too.</li>
           <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
           <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly. Dragging a permanent back into the Hand row does nothing on purpose — there's no general rule that lets you just pick a permanent back up. To represent a bounce effect, right-click the permanent and choose <strong>Return to Hand</strong> instead.</li>
@@ -506,11 +509,21 @@
       socket.emit("joinLobby", { id, password });
     }
 
+    function spectateLobby(id, locked) {
+      let password = "";
+      if (locked) {
+        password = prompt("This table is password-protected. Enter the password:");
+        if (password === null) return;
+      }
+      socket.emit("spectateLobby", { id, password });
+    }
+
     function showMainMenu() {
       leaveVoice();
       socket.emit("leaveLobby");
       currentLobbyId = null;
       currentLobbyName = null;
+      amSpectator = false;
       document.getElementById("app-root").style.display = "none";
       document.getElementById("main-menu").style.display = "flex";
     }
@@ -524,8 +537,9 @@
       el.innerHTML = list.map((l) => `
         <div class="lobby-row">
           <span class="lobby-name">${l.locked ? "🔒 " : ""}${escapeHtml(l.name)}</span>
-          <span class="lobby-count">${l.playerCount} player${l.playerCount === 1 ? "" : "s"}${l.started ? " · in progress" : ""}</span>
+          <span class="lobby-count">${l.playerCount} player${l.playerCount === 1 ? "" : "s"}${l.spectatorCount ? ` · 👁 ${l.spectatorCount}` : ""}${l.started ? " · in progress" : ""}</span>
           <button class="mini-btn" onclick="joinLobby('${l.id}', ${!!l.locked})">Join</button>
+          <button class="mini-btn secondary" onclick="spectateLobby('${l.id}', ${!!l.locked})">Spectate</button>
         </div>`).join("");
     }
 
@@ -636,6 +650,21 @@
     let activeBoardOwner = null;
     let currentTurn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
     let selectedDiscardIds = new Set();
+    let amSpectator = false;
+
+    // Spectators never appear in `players` (myId matches nothing there), which already makes
+    // most per-card/per-seat UI naturally hide itself -- this just covers the handful of
+    // top-bar/panel controls that aren't tied to a specific card or player id.
+    function applySpectatorUI() {
+      document.getElementById("spectator-badge").style.display = amSpectator ? "inline-block" : "none";
+      ["spawn-face-up-btn", "spawn-face-down-btn", "untap-all-btn", "new-game-btn", "opening-hand-panel", "my-status-panel", "mana-pool-panel"].forEach((id) => {
+        document.getElementById(id).style.display = amSpectator ? "none" : "";
+      });
+    }
+    function renderSpectatorRoster(names) {
+      const el = document.getElementById("spectator-roster");
+      el.innerText = names && names.length ? `👁 Spectating: ${names.join(", ")}` : "";
+    }
     let currentCombat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
 
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
@@ -664,13 +693,16 @@
       myId = data.myId;
       currentLobbyId = data.lobbyId;
       currentLobbyName = data.lobbyName;
-      activeBoardOwner = myId;
+      amSpectator = !!data.spectator;
       players = data.players;
+      activeBoardOwner = players[myId] ? myId : Object.keys(players)[0] || null;
       targets = data.targets || {};
       allCards = data.cards;
       currentTurn = data.turn || currentTurn;
       currentCombat = data.combat || currentCombat;
 
+      applySpectatorUI();
+      renderSpectatorRoster(data.spectatorRoster || []);
       document.getElementById("playerName").value = (players[myId] && players[myId].name) || "";
       renderPlayerList();
       renderCommanderDock();
@@ -700,6 +732,7 @@
     });
 
     socket.on("targets", (data) => { targets = data; applyAllTargetRings(); });
+    socket.on("spectatorRoster", renderSpectatorRoster);
     socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); checkPendingDiscard(); });
     socket.on("combatState", (data) => { currentCombat = data; renderCombatState(currentCombat); });
     socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
@@ -904,7 +937,7 @@
       const nextBtn = document.getElementById("next-phase-btn");
       if (!t.started) {
         info.innerText = "No game in progress";
-        startBtn.style.display = "inline-block";
+        startBtn.style.display = (players[myId] && !amSpectator) ? "inline-block" : "none";
         nextBtn.style.display = "none";
         return;
       }
