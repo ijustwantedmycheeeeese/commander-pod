@@ -74,9 +74,10 @@
     .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
     .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
 
-    #preview-panel { position: fixed; top: 64px; right: 16px; width: 260px; z-index: 50; background: #171310; border: 1px solid #5a4423; border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); display: none; }
+    #preview-panel { position: fixed; top: 64px; right: 16px; width: 260px; max-height: 80vh; overflow-y: auto; z-index: 50; background: #171310; border: 1px solid #5a4423; border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); display: none; }
     #preview-panel img { width: 100%; border-radius: 6px; display: block; }
     #preview-panel .pv-name { font-size: 12px; text-align: center; margin-top: 6px; color: #ddd; }
+    #preview-panel .pv-text { font-size: 11px; text-align: left; margin-top: 8px; color: #c9bc98; white-space: pre-wrap; line-height: 1.4; border-top: 1px solid #3a2e18; padding-top: 6px; }
 
     #context-menu { position: fixed; z-index: 100; background: #1c1710; border: 1px solid #5a4423; border-radius: 6px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display: none; min-width: 190px; }
     #context-menu button { display: block; width: 100%; text-align: left; background: transparent; border: none; border-radius: 0; padding: 8px 12px; font-weight: 400; font-size: 12px; }
@@ -106,6 +107,12 @@
     #help-modal li strong { color: #d4af37; }
 
     .mana-pip { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; font-size: 10px; font-weight: 700; margin-right: 3px; border: 1px solid rgba(0,0,0,0.5); }
+    .mana-pool-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .mana-pool-cell { display: flex; flex-direction: column; align-items: center; gap: 5px; background: #1c170f; border: 1px solid #3a2e18; border-radius: 6px; padding: 6px 4px; }
+    .mana-pool-cell .mana-pip { width: 28px; height: 28px; font-size: 13px; margin-right: 0; }
+    .mana-pool-cell .pip-btn-row { display: flex; gap: 4px; }
+    .mana-pool-cell button.mini-btn { padding: 2px 9px; font-size: 13px; line-height: 1.2; }
+    .mana-pool-cell button.mini-btn.remove-mana { color: #f0a0a0; }
   </style>
   <script src="/socket.io/socket.io.js"></script>
 </head>
@@ -162,15 +169,8 @@
         </div>
         <div class="panel">
           <h3>Mana Pool</h3>
-          <div id="mana-pool-display"></div>
-          <div class="flex-row" style="margin-top:6px;flex-wrap:wrap;gap:4px;">
-            <button class="mini-btn" onclick="addMana('W')">+W</button>
-            <button class="mini-btn" onclick="addMana('U')">+U</button>
-            <button class="mini-btn" onclick="addMana('B')">+B</button>
-            <button class="mini-btn" onclick="addMana('R')">+R</button>
-            <button class="mini-btn" onclick="addMana('G')">+G</button>
-            <button class="mini-btn" onclick="addMana('C')">+C</button>
-          </div>
+          <div id="mana-pool-total" style="font-size:12px;margin-bottom:6px;">Total: <strong>0</strong></div>
+          <div id="mana-pool-display" class="mana-pool-grid"></div>
           <div style="font-size:11px;color:#a89a70;margin-top:8px;">Land drops: <span id="land-drop-info"></span></div>
           <div class="flex-row" style="margin-top:4px;">
             <button class="mini-btn" onclick="landDropBonus(1)">+1 extra drop</button>
@@ -308,7 +308,7 @@
           <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly.</li>
           <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more).</li>
           <li>Playing anything else checks your <strong>mana pool</strong> against the card's real cost — you need the mana or it won't go through.</li>
-          <li>Tap a <strong>basic land</strong> (Plains/Island/Swamp/Mountain/Forest) to auto-add its color to your pool. Other mana sources (rocks, dual lands, etc.) — add mana manually with the +W/+U/etc. buttons. Mana empties at the end of every step/phase, like the real rules.</li>
+          <li>Tap a <strong>basic land</strong>, or any nonbasic land archived with exactly one fixed color (shocklands, painlands, snow duals, etc.), to auto-add its color to your pool. Lands with a color choice (Command Tower, gates, tri-lands) and other mana sources (rocks, dorks) need the manual +/− buttons in the Mana Pool panel — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules.</li>
           <li><strong>Double-click</strong> your own card to tap/untap it. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
           <li><strong>Start Game</strong> begins turn order — only the active player sees Next Phase, stepping through Untap (auto-untaps + resets land drops) → Upkeep → Draw (auto-draws, skipped turn 1 for the starting player) → Main 1 → Combat → Main 2 → End Step.</li>
@@ -546,8 +546,15 @@
       if (!me || !el) return;
       const m = me.mana || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
       const total = Object.values(m).reduce((a, b) => a + b, 0);
-      el.innerHTML = `<div style="margin-bottom:4px;font-size:12px;">Total: <strong>${total}</strong></div>` +
-        ["W", "U", "B", "R", "G", "C"].map((c) => manaPip(c, m[c] || 0)).join("");
+      document.getElementById("mana-pool-total").innerHTML = `Total: <strong>${total}</strong>`;
+      el.innerHTML = ["W", "U", "B", "R", "G", "C"].map((c) => `
+        <div class="mana-pool-cell">
+          ${manaPip(c, m[c] || 0)}
+          <div class="pip-btn-row">
+            <button class="mini-btn remove-mana" onclick="removeMana('${c}')" title="Subtract a mistaken ${c}">−</button>
+            <button class="mini-btn" onclick="addMana('${c}')" title="Add ${c}">+</button>
+          </div>
+        </div>`).join("");
       const allowed = 1 + (me.landDropBonus || 0);
       document.getElementById("land-drop-info").innerText = `${me.landsPlayedThisTurn || 0} / ${allowed} used`;
     }
@@ -705,6 +712,7 @@
     function untapAll() { socket.emit("untapAll"); }
     function setZoom(val) { playmat.style.transform = `scale(${val / 100})`; }
     function addMana(c) { socket.emit("addMana", c); }
+    function removeMana(c) { socket.emit("removeMana", c); }
     function landDropBonus(delta) { socket.emit("landDropBonus", delta); }
 
     // ---------------- turn / opening hand ----------------
@@ -746,7 +754,7 @@
         .then((res) => res.json())
         .then((data) => {
           if (data.success) {
-            socket.emit("spawnCard", { name: data.name, img: data.img, type: data.type, manaCost: data.manaCost, power: data.power, toughness: data.toughness, faceDown });
+            socket.emit("spawnCard", { ...data, faceDown });
             document.getElementById("cardSearch").value = "";
           } else {
             alert("Card lookup failed! Check name spelling.");
@@ -806,7 +814,7 @@
       fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
         .then((r) => r.json())
         .then((data) => {
-          if (data.success) socket.emit("setCommander", { slot, name: data.name, img: data.img, type: data.type, manaCost: data.manaCost, power: data.power, toughness: data.toughness });
+          if (data.success) socket.emit("setCommander", { ...data, slot });
           else alert("Card lookup failed! Check spelling.");
         });
     }
@@ -1117,8 +1125,13 @@
       let extra = card.name || "";
       if (card.power !== undefined && card.power !== null && card.toughness !== undefined && card.toughness !== null) {
         extra += ` — ${card.power}/${card.toughness}`;
+      } else if (card.loyalty !== undefined && card.loyalty !== null) {
+        extra += ` — Loyalty ${card.loyalty}`;
       }
-      document.getElementById("preview-name").innerHTML = escapeHtml(extra) + (card.manaCost ? "<br>" + manaCostPips(card.manaCost) : "");
+      if (card.cmc) extra += ` (MV ${card.cmc})`;
+      let html = escapeHtml(extra) + (card.manaCost ? "<br>" + manaCostPips(card.manaCost) : "");
+      if (card.text) html += `<div class="pv-text">${escapeHtml(card.text)}</div>`;
+      document.getElementById("preview-name").innerHTML = html;
       previewPanel.style.display = "block";
     }
     function hidePreview() { previewPanel.style.display = "none"; }

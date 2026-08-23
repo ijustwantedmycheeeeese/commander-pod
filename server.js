@@ -21,10 +21,18 @@ function saveJSON(file, data) {
 }
 const USERS_FILE = DATA_DIR + "/users.json";
 const DECKS_FILE = DATA_DIR + "/decks.json";
+const CARD_ARCHIVE_FILE = DATA_DIR + "/card_archive.json";
 let users = loadJSON(USERS_FILE, {});
 let decks = loadJSON(DECKS_FILE, {});
+let cardArchive = loadJSON(CARD_ARCHIVE_FILE, {}); // lowercase card name -> full extracted card data
 function saveUsers() { saveJSON(USERS_FILE, users); }
 function saveDecks() { saveJSON(DECKS_FILE, decks); }
+function saveCardArchive() { saveJSON(CARD_ARCHIVE_FILE, cardArchive); }
+function archiveKey(name) { return (name || "").toLowerCase().trim(); }
+function archiveCard(fields) {
+  if (!fields || !fields.name) return;
+  cardArchive[archiveKey(fields.name)] = fields;
+}
 
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString("hex");
@@ -135,14 +143,36 @@ function extractCardFields(c) {
     img: c.image_uris ? c.image_uris.normal : (face.image_uris ? face.image_uris.normal : null),
     type: c.type_line || face.type_line || "",
     manaCost: c.mana_cost || face.mana_cost || "",
+    cmc: typeof c.cmc === "number" ? c.cmc : 0,
+    colors: c.colors || face.colors || [],
+    colorIdentity: c.color_identity || [],
     power: c.power !== undefined ? c.power : face.power,
-    toughness: c.toughness !== undefined ? c.toughness : face.toughness
+    toughness: c.toughness !== undefined ? c.toughness : face.toughness,
+    loyalty: c.loyalty !== undefined ? c.loyalty : face.loyalty,
+    text: c.oracle_text || face.oracle_text || "",
+    keywords: c.keywords || [],
+    producedMana: c.produced_mana || null
+  };
+}
+
+// Shape used for cards resting in library/graveyard/exile/commander-zone —
+// same attribute set as the archive, minus battlefield-only state (tapped, counters, etc).
+function toEntry(c) {
+  return {
+    name: c.name, img: c.img, type: c.type || "", manaCost: c.manaCost || "",
+    cmc: c.cmc || 0, colors: c.colors || [], colorIdentity: c.colorIdentity || [],
+    power: c.power, toughness: c.toughness, loyalty: c.loyalty,
+    text: c.text || "", keywords: c.keywords || [], producedMana: c.producedMana || null
   };
 }
 
 function maskCard(card, viewerId) {
   if (card.faceDown && card.owner !== viewerId) {
-    return { id: card.id, tapped: card.tapped, faceDown: true, zoneType: card.zoneType, owner: card.owner, ownerColor: card.ownerColor, name: null, img: null, type: null, manaCost: null, power: null, toughness: null, counters: 0, isCommander: card.isCommander };
+    return {
+      id: card.id, tapped: card.tapped, faceDown: true, zoneType: card.zoneType, owner: card.owner, ownerColor: card.ownerColor,
+      name: null, img: null, type: null, manaCost: null, power: null, toughness: null, counters: 0, isCommander: card.isCommander,
+      cmc: null, colors: null, colorIdentity: null, loyalty: null, text: null, keywords: null, producedMana: null
+    };
   }
   return card;
 }
@@ -195,12 +225,16 @@ function pushLog(msg) {
   io.emit("log", msg);
 }
 
-function spawnBattlefieldCard({ name, img, type, manaCost, power, toughness, owner, faceDown, zoneType, isCommander }) {
+function spawnBattlefieldCard(data) {
+  const { owner, faceDown, zoneType, isCommander } = data;
   const p = players[owner];
   const id = newId();
   const card = {
-    id, name, img, type: type || "", manaCost: manaCost || "", power, toughness,
-    zoneType: zoneType || classifyType(type),
+    id, name: data.name, img: data.img, type: data.type || "", manaCost: data.manaCost || "",
+    cmc: data.cmc || 0, colors: data.colors || [], colorIdentity: data.colorIdentity || [],
+    power: data.power, toughness: data.toughness, loyalty: data.loyalty,
+    text: data.text || "", keywords: data.keywords || [], producedMana: data.producedMana || null,
+    zoneType: zoneType || classifyType(data.type),
     tapped: false, faceDown: !!faceDown, counters: 0,
     owner, ownerColor: p ? p.color : "#999",
     isCommander: !!isCommander
@@ -228,8 +262,7 @@ function returnAllHandToLibrary(ownerId) {
   const toRemove = [];
   for (const id in cards) {
     if (cards[id].owner === ownerId && cards[id].zoneType === "hand") {
-      const c = cards[id];
-      p.library.push({ name: c.name, img: c.img, type: c.type || "", manaCost: c.manaCost || "", power: c.power, toughness: c.toughness });
+      p.library.push(toEntry(cards[id]));
       toRemove.push(id);
     }
   }
@@ -264,7 +297,7 @@ function sendToGraveyardInternal(card) {
   if (targets[card.id]) delete targets[card.id];
   io.emit("cardRemove", card.id);
   const owner = players[card.owner];
-  if (owner) owner.graveyard.push({ name: card.name, img: card.img, type: card.type || "", manaCost: card.manaCost || "", power: card.power, toughness: card.toughness });
+  if (owner) owner.graveyard.push(toEntry(card));
 }
 
 // ---------------- turn engine ----------------
@@ -373,8 +406,14 @@ async function resolveAndSetLibrary(socket, p, text) {
     if (wanted.length > 250) { socket.emit("importResult", { success: false, error: "That's too many cards (limit 250)." }); return; }
 
     const found = [];
-    for (let i = 0; i < wanted.length; i += 75) {
-      const batch = wanted.slice(i, i + 75);
+    const toFetch = [];
+    wanted.forEach((n) => {
+      const cached = cardArchive[archiveKey(n)];
+      if (cached) found.push(cached); else toFetch.push(n);
+    });
+
+    for (let i = 0; i < toFetch.length; i += 75) {
+      const batch = toFetch.slice(i, i + 75);
       const identifiers = batch.map((n) => ({ name: n }));
       const r = await fetch("https://api.scryfall.com/cards/collection", {
         method: "POST",
@@ -384,9 +423,10 @@ async function resolveAndSetLibrary(socket, p, text) {
       const json = await r.json();
       (json.data || []).forEach((c) => {
         const fields = extractCardFields(c);
-        if (fields.img) found.push(fields);
+        if (fields.img) { found.push(fields); archiveCard(fields); }
       });
     }
+    if (toFetch.length) saveCardArchive();
     shuffle(found);
     p.library = found;
     broadcastPlayers();
@@ -427,11 +467,15 @@ app.post("/api/login", (req, res) => {
 app.post("/api/spawn", async (req, res) => {
   try {
     const name = req.body.name || "";
+    const cached = cardArchive[archiveKey(name)];
+    if (cached) return res.json({ success: true, ...cached });
     const url = "https://api.scryfall.com/cards/named?fuzzy=" + encodeURIComponent(name);
     const r = await fetch(url, { headers: { "User-Agent": "CommanderVTT/8.0", "Accept": "application/json" } });
     const json = await r.json();
     const fields = extractCardFields(json);
     if (!fields.img) return res.json({ success: false });
+    archiveCard(fields);
+    saveCardArchive();
     res.json({ success: true, ...fields });
   } catch (e) {
     res.json({ success: false });
@@ -531,7 +575,7 @@ io.on("connection", (socket) => {
   // ---- battlefield cards ----
 
   socket.on("spawnCard", (data) => {
-    spawnBattlefieldCard({ name: data.name, img: data.img, type: data.type, manaCost: data.manaCost, power: data.power, toughness: data.toughness, owner: socket.id, faceDown: data.faceDown, zoneType: classifyType(data.type) });
+    spawnBattlefieldCard({ ...data, owner: socket.id, zoneType: classifyType(data.type) });
     const who = players[socket.id] ? players[socket.id].name : "Someone";
     pushLog(data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
   });
@@ -580,8 +624,14 @@ io.on("connection", (socket) => {
     card.tapped = !card.tapped;
     broadcastCard(card);
     if (!wasTapped && card.tapped && card.zoneType === "mana") {
-      const color = basicLandColor(card.type);
-      if (color) {
+      // Basic land types auto-add their color; nonbasic lands that are archived with exactly
+      // one fixed producible color (shocklands, painlands, snow duals, etc.) do too. Lands with
+      // multiple/any-color options (Command Tower, gates, tri-lands) stay manual since the choice is ambiguous.
+      let color = basicLandColor(card.type);
+      if (!color && Array.isArray(card.producedMana) && card.producedMana.length === 1) {
+        color = card.producedMana[0];
+      }
+      if (color && ["W", "U", "B", "R", "G", "C"].includes(color)) {
         const p = players[socket.id];
         p.mana[color] = (p.mana[color] || 0) + 1;
         broadcastPlayers();
@@ -648,7 +698,7 @@ io.on("connection", (socket) => {
     if (targets[cardId]) { delete targets[cardId]; broadcastTargets(); }
     io.emit("cardRemove", cardId);
     if (!players[owner]) return;
-    const entry = { name: card.name, img: card.img, type: card.type || "", manaCost: card.manaCost || "", power: card.power, toughness: card.toughness };
+    const entry = toEntry(card);
     if (zone === "graveyard") players[owner].graveyard.push(entry);
     else if (zone === "exile") players[owner].exile.push(entry);
     else if (zone === "library") {
@@ -794,12 +844,13 @@ io.on("connection", (socket) => {
 
   // ---- commander zone ----
 
-  socket.on("setCommander", ({ slot, name, img, type, manaCost, power, toughness }) => {
+  socket.on("setCommander", (data) => {
     const p = players[socket.id];
+    const slot = data.slot;
     if (!p || slot < 0 || slot > 1) return;
-    p.commanders[slot] = { name, img, type: type || "", manaCost: manaCost || "", power, toughness, tax: 0 };
+    p.commanders[slot] = { ...toEntry(data), tax: 0 };
     broadcastPlayers();
-    pushLog(`${p.name} set their commander: ${name}`);
+    pushLog(`${p.name} set their commander: ${data.name}`);
   });
 
   socket.on("clearCommander", (slot) => {
@@ -942,7 +993,7 @@ io.on("connection", (socket) => {
   socket.on("clearBoard", () => {
     for (const id in cards) {
       const c = cards[id];
-      if (players[c.owner]) players[c.owner].library.push({ name: c.name, img: c.img, type: c.type || "", manaCost: c.manaCost || "", power: c.power, toughness: c.toughness });
+      if (players[c.owner]) players[c.owner].library.push(toEntry(c));
     }
     cards = {};
     targets = {};
