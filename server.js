@@ -169,6 +169,21 @@ function toEntry(c) {
   };
 }
 
+function setCommanderFromData(p, slot, data) {
+  if (!p || slot < 0 || slot > 1 || !data) return;
+  p.commanders[slot] = { ...toEntry(data), tax: 0, battlefieldId: null };
+}
+
+// Used when loading a whole deck: unlike setCommanderFromData (a single explicit slot pick),
+// this is authoritative for both slots — a slot with no data in the incoming deck is cleared,
+// so a stale commander from a previously-loaded deck doesn't linger.
+function applyCommandersToPlayer(p, commanders) {
+  for (let slot = 0; slot < 2; slot++) {
+    const cmd = (commanders || [])[slot];
+    if (cmd) setCommanderFromData(p, slot, cmd); else p.commanders[slot] = null;
+  }
+}
+
 function maskCard(card, viewerId) {
   if (card.faceDown && card.owner !== viewerId) {
     return {
@@ -406,39 +421,51 @@ function parseDecklistLine(line) {
   return { qty, name: rest };
 }
 
+function parseDecklistNames(text, limit) {
+  const lines = (text || "").split("\n");
+  const wanted = [];
+  for (const line of lines) {
+    const parsed = parseDecklistLine(line);
+    if (parsed) for (let i = 0; i < parsed.qty; i++) wanted.push(parsed.name);
+  }
+  if (wanted.length > limit) wanted.length = limit;
+  return wanted;
+}
+
+// Resolves card names to full archived card data, using the local archive first and
+// batching only what's missing through Scryfall's collection endpoint.
+async function resolveCardNames(names) {
+  const found = [];
+  const toFetch = [];
+  names.forEach((n) => {
+    const cached = cardArchive[archiveKey(n)];
+    if (cached) found.push(cached); else toFetch.push(n);
+  });
+
+  for (let i = 0; i < toFetch.length; i += 75) {
+    const batch = toFetch.slice(i, i + 75);
+    const identifiers = batch.map((n) => ({ name: n }));
+    const r = await fetch("https://api.scryfall.com/cards/collection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": "CommanderVTT/8.0" },
+      body: JSON.stringify({ identifiers })
+    });
+    const json = await r.json();
+    (json.data || []).forEach((c) => {
+      const fields = extractCardFields(c);
+      if (fields.img) { found.push(fields); archiveCard(fields); }
+    });
+  }
+  if (toFetch.length) saveCardArchive();
+  return found;
+}
+
 async function resolveAndSetLibrary(socket, p, text) {
   try {
-    const lines = (text || "").split("\n");
-    const wanted = [];
-    for (const line of lines) {
-      const parsed = parseDecklistLine(line);
-      if (parsed) for (let i = 0; i < parsed.qty; i++) wanted.push(parsed.name);
-    }
+    const wanted = parseDecklistNames(text, 250);
     if (wanted.length === 0) { socket.emit("importResult", { success: false, error: "Nothing parsed from that list." }); return; }
-    if (wanted.length > 250) { socket.emit("importResult", { success: false, error: "That's too many cards (limit 250)." }); return; }
 
-    const found = [];
-    const toFetch = [];
-    wanted.forEach((n) => {
-      const cached = cardArchive[archiveKey(n)];
-      if (cached) found.push(cached); else toFetch.push(n);
-    });
-
-    for (let i = 0; i < toFetch.length; i += 75) {
-      const batch = toFetch.slice(i, i + 75);
-      const identifiers = batch.map((n) => ({ name: n }));
-      const r = await fetch("https://api.scryfall.com/cards/collection", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "User-Agent": "CommanderVTT/8.0" },
-        body: JSON.stringify({ identifiers })
-      });
-      const json = await r.json();
-      (json.data || []).forEach((c) => {
-        const fields = extractCardFields(c);
-        if (fields.img) { found.push(fields); archiveCard(fields); }
-      });
-    }
-    if (toFetch.length) saveCardArchive();
+    const found = await resolveCardNames(wanted);
     shuffle(found);
     p.library = found;
     broadcastPlayers();
@@ -849,12 +876,16 @@ io.on("connection", (socket) => {
 
   // ---- persistent decks ----
 
-  socket.on("saveDeck", ({ name, text }) => {
+  socket.on("saveDeck", ({ name, commanders, library }) => {
     if (!players[socket.id]) return;
     name = (name || "").toString().trim().slice(0, 40);
-    if (!name || !text) return;
+    if (!name) return;
+    const cmds = Array.isArray(commanders) ? commanders.slice(0, 2).map((c) => (c ? toEntry(c) : null)) : [];
+    while (cmds.length < 2) cmds.push(null);
+    const lib = Array.isArray(library) ? library.slice(0, 99).map((c) => toEntry(c)) : [];
+    if (!lib.length && !cmds.some(Boolean)) return; // nothing to save
     if (!decks[username]) decks[username] = {};
-    decks[username][name] = text.toString().slice(0, 20000);
+    decks[username][name] = { commanders: cmds, library: lib };
     saveDecks();
     socket.emit("deckSaved", name);
     socket.emit("deckList", Object.keys(decks[username]));
@@ -870,18 +901,57 @@ io.on("connection", (socket) => {
   socket.on("loadDeck", (name) => {
     const p = players[socket.id];
     if (!p) return;
-    const text = decks[username] && decks[username][name];
-    if (!text) { socket.emit("importResult", { success: false, error: "Deck not found." }); return; }
-    resolveAndSetLibrary(socket, p, text);
+    const deck = decks[username] && decks[username][name];
+    if (!deck) { socket.emit("importResult", { success: false, error: "Deck not found." }); return; }
+    if (typeof deck === "string") {
+      resolveAndSetLibrary(socket, p, deck); // legacy raw-text save, no separate commander
+      return;
+    }
+    p.library = (deck.library || []).map((c) => ({ ...c }));
+    shuffle(p.library);
+    applyCommandersToPlayer(p, deck.commanders);
+    broadcastPlayers();
+    const cmdCount = (deck.commanders || []).filter(Boolean).length;
+    socket.emit("importResult", { success: true, requested: p.library.length, found: p.library.length });
+    pushLog(`${p.name} loaded deck "${name}" (${p.library.length} cards${cmdCount ? ` + ${cmdCount} commander${cmdCount > 1 ? "s" : ""}` : ""})`);
+  });
+
+  // Resolves a pasted decklist to full card data for the deck editor, without touching the
+  // live game — the editor decides what to do with the result (add to its working library).
+  socket.on("resolveDeckPaste", async (text) => {
+    try {
+      const wanted = parseDecklistNames(text, 99);
+      if (wanted.length === 0) { socket.emit("deckPasteResult", { success: false, error: "Nothing parsed from that list." }); return; }
+      const found = await resolveCardNames(wanted);
+      socket.emit("deckPasteResult", { success: true, requested: wanted.length, found });
+    } catch (e) {
+      socket.emit("deckPasteResult", { success: false, error: "Resolve failed — check your connection and try again." });
+    }
+  });
+
+  // Loads a deck's raw saved data into the editor (for the "Edit" button on a saved deck).
+  socket.on("getDeckData", (name) => {
+    const deck = decks[username] && decks[username][name];
+    socket.emit("deckData", { name, data: deck || null });
+  });
+
+  // Applies an in-progress editor draft directly to the live game, without requiring a save first.
+  socket.on("loadDeckDraft", ({ commanders, library }) => {
+    const p = players[socket.id];
+    if (!p) return;
+    p.library = (Array.isArray(library) ? library : []).slice(0, 99).map((c) => toEntry(c));
+    shuffle(p.library);
+    applyCommandersToPlayer(p, commanders);
+    broadcastPlayers();
+    pushLog(`${p.name} loaded a deck draft into the game`);
   });
 
   // ---- commander zone ----
 
   socket.on("setCommander", (data) => {
     const p = players[socket.id];
-    const slot = data.slot;
-    if (!p || slot < 0 || slot > 1) return;
-    p.commanders[slot] = { ...toEntry(data), tax: 0, battlefieldId: null };
+    if (!p) return;
+    setCommanderFromData(p, data.slot, data);
     broadcastPlayers();
     pushLog(`${p.name} set their commander: ${data.name}`);
   });
