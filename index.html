@@ -135,15 +135,24 @@
     .discard-card-pick img { width: 100%; border-radius: 5px; }
     .discard-card-pick .discard-card-name { font-size: 11px; margin-top: 3px; }
     .discard-card-pick.picked { border-color: #c0392b; background: rgba(192, 57, 43, 0.18); }
+    #deck-editor-screen { position: fixed; inset: 0; background: radial-gradient(ellipse at top, #1c1611 0%, #0a0806 100%); display: none; flex-direction: column; z-index: 400; }
+    #de-top-bar { height: 54px; background: linear-gradient(180deg, #201810, #140f0a); border-bottom: 2px solid #5a4423; display: flex; align-items: center; padding: 0 20px; gap: 12px; justify-content: space-between; flex-shrink: 0; }
+    #de-body { flex: 1; display: flex; gap: 18px; padding: 20px; overflow: hidden; box-sizing: border-box; }
+    #de-main-col { flex: 2; min-width: 320px; display: flex; flex-direction: column; overflow-y: auto; }
+    #de-preview-col { flex: 1; min-width: 260px; max-width: 360px; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 16px; overflow-y: auto; flex-shrink: 0; }
+    #de-preview-body img { width: 100%; border-radius: 8px; margin-bottom: 10px; }
+    #de-preview-body .de-prev-type { font-size: 12px; color: #a89a70; margin: 4px 0; }
+    #de-preview-body .de-prev-text { font-size: 12px; white-space: pre-line; line-height: 1.5; margin-top: 8px; }
+    #de-preview-empty { color: #8a7a55; font-size: 12px; }
     .de-columns { display: flex; gap: 16px; flex-wrap: wrap; }
     .de-commanders { display: flex; gap: 10px; flex: 1; min-width: 260px; }
-    .de-cmdr-slot { flex: 1; background: #1c170f; border: 1px solid #3a2e18; border-radius: 6px; padding: 8px; min-height: 90px; }
+    .de-cmdr-slot { flex: 1; background: #1c170f; border: 1px solid #3a2e18; border-radius: 6px; padding: 8px; min-height: 90px; cursor: pointer; }
     .de-cmdr-slot img { width: 100%; border-radius: 5px; margin-bottom: 4px; }
     .de-cmdr-slot .de-cmdr-name { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
-    .de-library { flex: 1.3; min-width: 280px; }
+    .de-library { flex: 1.3; min-width: 280px; display: flex; flex-direction: column; margin-top: 16px; }
     .de-library-count { font-size: 12px; color: #a89a70; margin: 6px 0; }
-    .de-library-list { max-height: 260px; overflow-y: auto; border: 1px solid #2e2618; border-radius: 6px; padding: 4px 8px; background: #100c08; }
-    .de-library-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1c170f; font-size: 12px; }
+    .de-library-list { flex: 1; min-height: 200px; overflow-y: auto; border: 1px solid #2e2618; border-radius: 6px; padding: 4px 8px; background: #100c08; }
+    .de-library-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1c170f; font-size: 12px; cursor: pointer; }
     .de-library-row:last-child { border-bottom: none; }
     .de-library-row .de-lr-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #de-paste { width: 100%; margin-top: 8px; }
@@ -185,6 +194,42 @@
       <button onclick="openDeckEditor()">Deck Editor</button>
       <div class="mm-hint">Build or edit a deck — up to 99 cards, up to 2 commanders</div>
       <button class="secondary" onclick="logout()">Log Out</button>
+    </div>
+  </div>
+
+  <div id="deck-editor-screen">
+    <div id="de-top-bar">
+      <div class="flex-row">
+        <strong class="mtg-title">Deck Editor</strong>
+        <input type="text" id="de-name" placeholder="Deck name" style="width:260px;">
+      </div>
+      <div class="flex-row">
+        <button class="secondary" onclick="closeDeckEditor()">Close</button>
+        <button class="secondary" onclick="deSaveDeck()">Save Deck</button>
+        <button onclick="deLoadIntoGame()">Load Into Current Game</button>
+      </div>
+    </div>
+    <div id="de-body">
+      <div id="de-main-col">
+        <div class="de-commanders">
+          <div class="de-cmdr-slot" id="de-cmdr-slot-0"></div>
+          <div class="de-cmdr-slot" id="de-cmdr-slot-1"></div>
+        </div>
+        <div class="de-library">
+          <div class="flex-row">
+            <input type="text" id="de-card-search" placeholder="Add a card by name..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)" style="flex:1;" onkeydown="if(event.key==='Enter'){deAddCardFromSearch();}">
+            <button class="mini-btn" onclick="deAddCardFromSearch()">Add</button>
+          </div>
+          <div class="de-library-count">Library: <strong id="de-count">0</strong> / 99</div>
+          <div class="de-library-list" id="de-library-list"></div>
+          <textarea id="de-paste" rows="5" placeholder="Or paste a decklist to bulk-add: 1 Sol Ring&#10;1 Arcane Signet&#10;...  (commanders go in the slots above, not here)"></textarea>
+          <button class="mini-btn secondary" style="margin-top:6px;" onclick="deResolvePaste()">Add Pasted List</button>
+        </div>
+        <div id="de-status" style="font-size:12px;color:#a89a70;margin-top:10px;"></div>
+      </div>
+      <div id="de-preview-col">
+        <div id="de-preview-body"><div id="de-preview-empty">Hover or click a commander/card to preview it here.</div></div>
+      </div>
     </div>
   </div>
 
@@ -323,34 +368,6 @@
       </div>
     </div>
 
-    <div class="modal-overlay" id="deck-editor-modal">
-      <div class="modal-box modal-box-wide">
-        <h2>Deck Editor</h2>
-        <input type="text" id="de-name" placeholder="Deck name" style="width:100%;margin-bottom:10px;">
-        <div class="de-columns">
-          <div class="de-commanders">
-            <div class="de-cmdr-slot" id="de-cmdr-slot-0"></div>
-            <div class="de-cmdr-slot" id="de-cmdr-slot-1"></div>
-          </div>
-          <div class="de-library">
-            <div class="flex-row">
-              <input type="text" id="de-card-search" placeholder="Add a card by name..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)" style="flex:1;" onkeydown="if(event.key==='Enter'){deAddCardFromSearch();}">
-              <button class="mini-btn" onclick="deAddCardFromSearch()">Add</button>
-            </div>
-            <div class="de-library-count">Library: <strong id="de-count">0</strong> / 99</div>
-            <div class="de-library-list" id="de-library-list"></div>
-            <textarea id="de-paste" rows="5" placeholder="Or paste a decklist to bulk-add: 1 Sol Ring&#10;1 Arcane Signet&#10;...  (commanders go in the slots above, not here)"></textarea>
-            <button class="mini-btn secondary" style="margin-top:6px;" onclick="deResolvePaste()">Add Pasted List</button>
-          </div>
-        </div>
-        <div id="de-status" style="font-size:12px;color:#a89a70;margin-top:10px;"></div>
-        <div class="modal-close-row">
-          <button class="secondary" onclick="closeDeckEditor()">Close</button>
-          <button class="secondary" onclick="deSaveDeck()">Save Deck</button>
-          <button onclick="deLoadIntoGame()">Load Into Current Game</button>
-        </div>
-      </div>
-    </div>
 
     <div class="modal-overlay" id="attackers-modal">
       <div class="modal-box">
@@ -1155,6 +1172,11 @@
 
     let deckEditor = { name: "", commanders: [null, null], library: [] };
 
+    // Deck Editor is its own top-level screen (not nested under app-root) so it's reachable from
+    // both the Main Menu and mid-game without depending on app-root being visible -- it used to
+    // live inside app-root's modal stack, which meant it silently couldn't show at all from the
+    // Main Menu (its display:flex did nothing while its hidden ancestor stayed display:none).
+    let deckEditorReturnScreen = "main-menu";
     function openDeckEditor(prefillName, prefillData) {
       if (prefillName && !prefillData) { alert(`Couldn't load "${prefillName}" — it may have been deleted.`); return; }
       if (prefillData && typeof prefillData === "object") {
@@ -1175,11 +1197,37 @@
       }
       document.getElementById("de-name").value = deckEditor.name;
       document.getElementById("de-status").innerText = "";
+      dePreviewClear();
       deRenderCommanders();
       deRenderLibrary();
-      document.getElementById("deck-editor-modal").style.display = "flex";
+      deckEditorReturnScreen = document.getElementById("app-root").style.display === "flex" ? "app-root" : "main-menu";
+      document.getElementById("main-menu").style.display = "none";
+      document.getElementById("app-root").style.display = "none";
+      document.getElementById("deck-editor-screen").style.display = "flex";
     }
-    function closeDeckEditor() { document.getElementById("deck-editor-modal").style.display = "none"; }
+    function closeDeckEditor() {
+      document.getElementById("deck-editor-screen").style.display = "none";
+      document.getElementById(deckEditorReturnScreen).style.display = "flex";
+    }
+
+    // ---- deck editor card preview ----
+    function dePreviewClear() {
+      document.getElementById("de-preview-body").innerHTML = '<div id="de-preview-empty">Hover or click a commander/card to preview it here.</div>';
+    }
+    function dePreview(c) {
+      if (!c) return;
+      const pt = (c.power != null && c.toughness != null) ? `<div class="de-prev-type">${escapeHtml(c.power)}/${escapeHtml(c.toughness)}</div>` : (c.loyalty != null ? `<div class="de-prev-type">Loyalty: ${escapeHtml(c.loyalty)}</div>` : "");
+      document.getElementById("de-preview-body").innerHTML = `
+        ${c.img ? `<img src="${c.img}" alt="${escapeHtml(c.name || "")}">` : ""}
+        <div style="font-weight:600;">${escapeHtml(c.name || "Unknown")}</div>
+        <div class="de-prev-type">${manaCostPips(c.manaCost)}</div>
+        <div class="de-prev-type">${escapeHtml(c.type || "")}</div>
+        ${pt}
+        <div class="de-prev-text">${escapeHtml(c.text || "")}</div>`;
+    }
+    function dePreviewByIndex(kind, i) {
+      dePreview(kind === "cmd" ? deckEditor.commanders[i] : deckEditor.library[i]);
+    }
 
     function editDeck(name) { socket.emit("getDeckData", name); }
 
@@ -1188,12 +1236,14 @@
         const cmd = deckEditor.commanders[slot];
         const el = document.getElementById("de-cmdr-slot-" + slot);
         if (cmd) {
+          el.onmouseenter = () => dePreviewByIndex("cmd", slot);
           el.innerHTML = `
             <img src="${cmd.img || ""}">
             <div class="de-cmdr-name">${escapeHtml(cmd.name)}</div>
             <div style="font-size:10px;margin-bottom:6px;">${manaCostPips(cmd.manaCost)}</div>
             <button class="mini-btn" style="width:100%;" onclick="deClearCommanderSlot(${slot})">Clear</button>`;
         } else {
+          el.onmouseenter = null;
           el.innerHTML = `
             <div style="font-size:11px;color:#8a7a55;margin-bottom:6px;">Commander ${slot + 1}${slot === 1 ? " (partner/background)" : ""}</div>
             <input type="text" id="de-cmdr-input-${slot}" placeholder="Commander name" list="cardSuggestions" autocomplete="off" style="width:100%;" oninput="handleAutocompleteInput(event)">
@@ -1208,7 +1258,7 @@
       fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
         .then((r) => r.json())
         .then((data) => {
-          if (data.success) { deckEditor.commanders[slot] = data; deRenderCommanders(); }
+          if (data.success) { deckEditor.commanders[slot] = data; deRenderCommanders(); dePreview(data); }
           else alert("Card lookup failed! Check spelling.");
         });
     }
@@ -1222,10 +1272,10 @@
         return;
       }
       list.innerHTML = deckEditor.library.map((c, i) => `
-        <div class="de-library-row">
+        <div class="de-library-row" onmouseenter="dePreviewByIndex('lib', ${i})" onclick="dePreviewByIndex('lib', ${i})">
           <span class="de-lr-name">${escapeHtml(c.name)}</span>
           <span>${manaCostPips(c.manaCost)}</span>
-          <button class="mini-btn" onclick="deRemoveLibraryCard(${i})">×</button>
+          <button class="mini-btn" onclick="event.stopPropagation(); deRemoveLibraryCard(${i})">×</button>
         </div>`).join("");
     }
     function deRemoveLibraryCard(i) { deckEditor.library.splice(i, 1); deRenderLibrary(); }
@@ -1238,7 +1288,7 @@
       fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
         .then((r) => r.json())
         .then((data) => {
-          if (data.success) { deckEditor.library.push(data); deRenderLibrary(); input.value = ""; }
+          if (data.success) { deckEditor.library.push(data); deRenderLibrary(); dePreview(data); input.value = ""; }
           else alert("Card lookup failed! Check spelling.");
         });
     }
