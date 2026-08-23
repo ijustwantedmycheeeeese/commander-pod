@@ -168,11 +168,21 @@ function scheduleGraceRemoval(lobby, socketId) {
   }, RECONNECT_GRACE_MS);
 }
 
-function findDisconnectedSeat(username) {
+// Matches by username regardless of disconnectedAt -- spam-refreshing can easily land a new
+// connection before the server has even detected the old socket as disconnected (socket.io's
+// disconnect detection isn't instant), so requiring disconnectedAt here missed that race: the
+// reconnect would silently fail, dump the player on the Main Menu, and a manual re-Join would
+// then create a second seat for the same account instead of reclaiming the first one.
+function findExistingSeat(username) {
   for (const lobby of Object.values(lobbies)) {
-    for (const sid in lobby.players) {
-      if (lobby.players[sid].username === username && lobby.players[sid].disconnectedAt) return { lobby, oldSocketId: sid };
-    }
+    const sid = seatInLobby(lobby, username);
+    if (sid) return { lobby, oldSocketId: sid };
+  }
+  return null;
+}
+function seatInLobby(lobby, username) {
+  for (const sid in lobby.players) {
+    if (lobby.players[sid].username === username) return sid;
   }
   return null;
 }
@@ -786,10 +796,15 @@ io.on("connection", (socket) => {
   // lobby, both rejoining and creating a new table would silently no-op — a total softlock.
   socket.emit("authOk", { username, decks: Object.keys(decks[username] || {}) });
 
-  // A reconnecting browser (network blip, tab refresh, server restart) within the grace window
-  // resumes its seat silently instead of landing back on the Main Menu with its board wiped.
-  const seat = findDisconnectedSeat(username);
+  // A reconnecting browser (network blip, tab refresh, server restart) resumes its seat silently
+  // instead of landing back on the Main Menu with its board wiped. Matches by username regardless
+  // of whether the old socket has actually been detected as disconnected yet -- if it's still
+  // technically "connected" (a race from reconnecting faster than socket.io notices the old
+  // connection is gone), force-close it after reattaching so there's never two live sockets
+  // holding the same seat.
+  const seat = findExistingSeat(username);
   if (seat) {
+    const oldSocket = io.sockets.sockets.get(seat.oldSocketId);
     reattachPlayer(seat.lobby, seat.oldSocketId, socket.id);
     socket.data.lobbyId = seat.lobby.id;
     socket.join(seat.lobby.id);
@@ -797,6 +812,7 @@ io.on("connection", (socket) => {
     broadcastPlayers(seat.lobby);
     broadcastLobbyList();
     pushLog(seat.lobby, `${username} reconnected`);
+    if (oldSocket && oldSocket.connected) oldSocket.disconnect(true);
   } else {
     socket.emit("lobbyList", lobbySummaries());
   }
@@ -806,6 +822,22 @@ io.on("connection", (socket) => {
   function joinLobbyInternal(lobby) {
     socket.data.lobbyId = lobby.id;
     socket.join(lobby.id);
+
+    // Defense in depth against the same reconnect-race that the connection-time handler already
+    // covers: if this account already has a seat in this exact lobby (disconnected, or even still
+    // technically live from a duplicate connection), reclaim it instead of handing out a second,
+    // empty seat that leaves the real one with all the cards orphaned until its grace timer fires.
+    const existingId = seatInLobby(lobby, username);
+    if (existingId && existingId !== socket.id) {
+      const oldSocket = io.sockets.sockets.get(existingId);
+      reattachPlayer(lobby, existingId, socket.id);
+      socket.emit("lobbyJoined", buildLobbyJoinedPayload(lobby, socket.id));
+      broadcastPlayers(lobby);
+      broadcastLobbyList();
+      pushLog(lobby, `${username} reconnected`);
+      if (oldSocket && oldSocket.connected) oldSocket.disconnect(true);
+      return;
+    }
 
     lobby.players[socket.id] = {
       username,
