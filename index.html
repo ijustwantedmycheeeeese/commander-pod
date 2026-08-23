@@ -130,6 +130,11 @@
     .lobby-row .lobby-count { font-size: 11px; color: #a89a70; white-space: nowrap; }
 
     .modal-box-wide { max-width: 900px; }
+    #discard-modal-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-height: 420px; overflow-y: auto; margin: 12px 0; }
+    .discard-card-pick { width: 110px; cursor: pointer; border: 2px solid transparent; border-radius: 7px; padding: 4px; text-align: center; }
+    .discard-card-pick img { width: 100%; border-radius: 5px; }
+    .discard-card-pick .discard-card-name { font-size: 11px; margin-top: 3px; }
+    .discard-card-pick.picked { border-color: #c0392b; background: rgba(192, 57, 43, 0.18); }
     .de-columns { display: flex; gap: 16px; flex-wrap: wrap; }
     .de-commanders { display: flex; gap: 10px; flex: 1; min-width: 260px; }
     .de-cmdr-slot { flex: 1; background: #1c170f; border: 1px solid #3a2e18; border-radius: 6px; padding: 8px; min-height: 90px; }
@@ -381,6 +386,7 @@
           <li><strong>Double-click</strong> your own card to tap it (using it, e.g. for mana) — this only ever taps, since there's no real rule that lets you freely untap something at will; untapping only happens automatically each Untap step, or via <strong>Untap All</strong> for effects that untap things. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
           <li>A creature has <strong>summoning sickness</strong> (shown tilted) until it's been under your control since the start of your most recent turn — it can still block, just not attack, unless it has Haste.</li>
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
+          <li><strong>Hand size</strong> is capped at 7: ending your turn (past End Step) with more than that opens a required discard prompt — pick exactly enough cards to get back to 7 before the turn actually ends. A permanent whose text says "no maximum hand size" exempts you entirely.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase, stepping through Untap (auto-untaps + resets land drops) → Upkeep → Draw (auto-draws, skipped turn 1 for the starting player) → Main 1 → Combat → Main 2 → End Step.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board.</li>
@@ -408,6 +414,18 @@
       <div class="modal-box" style="max-width:340px;text-align:center;">
         <h2 id="mana-choice-title">Choose a color</h2>
         <div id="mana-choice-options" class="flex-row" style="justify-content:center;flex-wrap:wrap;margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="discard-modal">
+      <div class="modal-box modal-box-wide" style="text-align:center;">
+        <h2 id="discard-modal-title">Hand size limit</h2>
+        <p style="font-size:12px;color:#a89a70;">You're over the 7-card hand size limit. Pick cards to discard before ending your turn.</p>
+        <div id="discard-modal-grid"></div>
+        <div id="discard-modal-status" style="font-size:13px;margin-bottom:8px;">0 / 0 selected</div>
+        <div class="modal-close-row" style="justify-content:center;">
+          <button id="discard-modal-confirm" onclick="confirmDiscard()" disabled>Discard Selected</button>
+        </div>
       </div>
     </div>
   </div>
@@ -616,7 +634,8 @@
     let cardEls = {};
     let activeCardId = null;
     let activeBoardOwner = null;
-    let currentTurn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 };
+    let currentTurn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
+    let selectedDiscardIds = new Set();
     let currentCombat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
 
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
@@ -659,6 +678,7 @@
       renderVisibleBoard();
       renderTurnState(currentTurn);
       renderCombatState(currentCombat);
+      checkPendingDiscard();
       renderOpeningHandStatus();
       renderManaPool();
 
@@ -680,19 +700,21 @@
     });
 
     socket.on("targets", (data) => { targets = data; applyAllTargetRings(); });
-    socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); });
+    socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); checkPendingDiscard(); });
     socket.on("combatState", (data) => { currentCombat = data; renderCombatState(currentCombat); });
     socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
 
     socket.on("cardUpdate", (card) => {
       allCards[card.id] = card;
       renderVisibleBoard();
+      if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
     });
 
     socket.on("cardRemove", (id) => {
       delete allCards[id];
       delete targets[id];
       renderVisibleBoard();
+      if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
     });
 
     socket.on("cleared", () => { allCards = {}; renderVisibleBoard(); });
@@ -951,6 +973,43 @@
       document.getElementById("mana-choice-modal").style.display = "none";
     }
     function landDropBonus(delta) { socket.emit("landDropBonus", delta); }
+
+    // Hand size limit (7): server blocks ending the turn past End Step until this resolves.
+    function checkPendingDiscard() {
+      const pd = currentTurn.pendingDiscard;
+      const modal = document.getElementById("discard-modal");
+      if (pd && pd.playerId === myId) {
+        selectedDiscardIds = new Set([...selectedDiscardIds].filter((id) => allCards[id] && allCards[id].zoneType === "hand"));
+        modal.style.display = "flex";
+        renderDiscardModal();
+      } else {
+        modal.style.display = "none";
+        selectedDiscardIds = new Set();
+      }
+    }
+    function renderDiscardModal() {
+      const pd = currentTurn.pendingDiscard;
+      if (!pd) return;
+      document.getElementById("discard-modal-title").innerText = `Hand size limit — discard ${pd.count} card(s)`;
+      const hand = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "hand");
+      document.getElementById("discard-modal-grid").innerHTML = hand.map((c) => `
+        <div class="discard-card-pick ${selectedDiscardIds.has(c.id) ? "picked" : ""}" onclick="toggleDiscardPick('${c.id}')">
+          <img src="${c.img || ""}" alt="${escapeHtml(c.name || "")}">
+          <div class="discard-card-name">${escapeHtml(c.name || "Unknown")}</div>
+        </div>
+      `).join("");
+      document.getElementById("discard-modal-status").innerText = `${selectedDiscardIds.size} / ${pd.count} selected`;
+      document.getElementById("discard-modal-confirm").disabled = selectedDiscardIds.size !== pd.count;
+    }
+    function toggleDiscardPick(id) {
+      if (selectedDiscardIds.has(id)) selectedDiscardIds.delete(id);
+      else if (selectedDiscardIds.size < (currentTurn.pendingDiscard || {}).count) selectedDiscardIds.add(id);
+      renderDiscardModal();
+    }
+    function confirmDiscard() {
+      socket.emit("resolveDiscard", Array.from(selectedDiscardIds));
+      selectedDiscardIds = new Set();
+    }
 
     // ---------------- turn / opening hand ----------------
 
