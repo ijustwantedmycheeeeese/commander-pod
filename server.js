@@ -8,6 +8,13 @@ const io = require("socket.io")(http);
 app.use(express.static("public"));
 app.use(express.json({ limit: "1mb" }));
 
+// A single unhandled error anywhere (a bad client payload, a missed null check, etc.) used to
+// kill the whole process — and since every table's game state only lives in memory, a crash-and
+// -restart (Docker's restart:unless-stopped) silently wiped every active game for everyone.
+// Log and keep running instead.
+process.on("uncaughtException", (err) => console.error("Uncaught exception:", err));
+process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", err));
+
 // ---------------- persistent storage (users + decks) ----------------
 
 const DATA_DIR = "/app/data";
@@ -61,8 +68,6 @@ function newLobbyId() { return crypto.randomBytes(4).toString("hex"); }
 const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End Step"];
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
 
-let lobbies = {}; // id -> lobby state
-
 function createLobbyState(id, name, hostUsername) {
   return {
     id, name, hostUsername,
@@ -84,6 +89,131 @@ function lobbySummaries() {
 }
 function broadcastLobbyList() { io.emit("lobbyList", lobbySummaries()); }
 function lobbySocketIds(lobby) { return io.sockets.adapter.rooms.get(lobby.id) || new Set(); }
+
+// ---------------- lobby persistence + reconnect continuity ----------------
+// A network blip (or a full server restart) used to just drop a player's seat instantly — cards,
+// life total, hand, everything gone, dumped back at the Main Menu. Disconnects now get a grace
+// window before the seat is actually vacated, and a reconnecting client with the same account
+// within that window gets silently reattached to the same seat instead.
+
+const LOBBIES_FILE = DATA_DIR + "/lobbies.json";
+const RECONNECT_GRACE_MS = 3 * 60 * 1000;
+
+function serializeLobbies() {
+  const out = {};
+  for (const id in lobbies) {
+    out[id] = { ...lobbies[id], voiceParticipants: Array.from(lobbies[id].voiceParticipants) };
+  }
+  return out;
+}
+function saveLobbies() { saveJSON(LOBBIES_FILE, serializeLobbies()); }
+
+function restoreLobbies() {
+  const raw = loadJSON(LOBBIES_FILE, {});
+  const restored = {};
+  for (const id in raw) {
+    const l = raw[id];
+    l.voiceParticipants = new Set(); // live WebRTC state can't survive a restart regardless
+    // Nobody is actually connected right after a restart — mark every seated player as
+    // disconnected so the normal reconnect-grace mechanism below picks up the cleanup/resume.
+    for (const sid in l.players) l.players[sid].disconnectedAt = Date.now();
+    restored[id] = l;
+  }
+  return restored;
+}
+
+let lobbies = restoreLobbies(); // id -> lobby state
+
+setInterval(saveLobbies, 20000);
+process.on("SIGTERM", () => { saveLobbies(); process.exit(0); });
+
+function removePlayerFromLobby(lobby, socketId, verb) {
+  const p = lobby.players[socketId];
+  const uname = p ? p.username : null;
+  delete lobby.players[socketId];
+  lobby.voiceParticipants.delete(socketId);
+  const turn = lobby.turn;
+  const idx = turn.order.indexOf(socketId);
+  if (idx !== -1) {
+    turn.order.splice(idx, 1);
+    if (turn.order.length === 0) turn.started = false;
+    else if (idx < turn.activeIndex) turn.activeIndex--;
+    else if (turn.activeIndex >= turn.order.length) turn.activeIndex = 0;
+  }
+  if (Object.keys(lobby.players).length === 0) {
+    delete lobbies[lobby.id];
+  } else {
+    broadcastVoiceRoster(lobby);
+    broadcastTurn(lobby);
+    broadcastPlayers(lobby);
+    if (uname) pushLog(lobby, `${uname} ${verb} the table`);
+  }
+  broadcastLobbyList();
+}
+
+function scheduleGraceRemoval(lobby, socketId) {
+  setTimeout(() => {
+    if (lobbies[lobby.id] !== lobby) return; // lobby already gone (e.g. everyone left)
+    const p = lobby.players[socketId];
+    if (p && p.disconnectedAt) removePlayerFromLobby(lobby, socketId, "timed out and left");
+  }, RECONNECT_GRACE_MS);
+}
+
+function findDisconnectedSeat(username) {
+  for (const lobby of Object.values(lobbies)) {
+    for (const sid in lobby.players) {
+      if (lobby.players[sid].username === username && lobby.players[sid].disconnectedAt) return { lobby, oldSocketId: sid };
+    }
+  }
+  return null;
+}
+
+// Rekeys a disconnected player's seat from their old socket id to a newly-reconnected one,
+// updating every place that stored the old id as a reference (not just the players map).
+function reattachPlayer(lobby, oldId, newId) {
+  const p = lobby.players[oldId];
+  delete lobby.players[oldId];
+  p.disconnectedAt = null;
+  lobby.players[newId] = p;
+
+  for (const id in lobby.cards) {
+    if (lobby.cards[id].owner === oldId) lobby.cards[id].owner = newId;
+  }
+  for (const cardId in lobby.targets) {
+    lobby.targets[cardId] = lobby.targets[cardId].map((pid) => (pid === oldId ? newId : pid));
+  }
+  lobby.turn.order = lobby.turn.order.map((id) => (id === oldId ? newId : id));
+  for (const cardId in lobby.combat.attackers) {
+    if (lobby.combat.attackers[cardId] === oldId) lobby.combat.attackers[cardId] = newId;
+  }
+  lobby.combat.defendersPending = (lobby.combat.defendersPending || []).map((id) => (id === oldId ? newId : id));
+}
+
+function buildLobbyJoinedPayload(lobby, socketId) {
+  const maskedCards = {};
+  for (const id in lobby.cards) maskedCards[id] = maskCard(lobby.cards[id], socketId);
+  return {
+    lobbyId: lobby.id,
+    lobbyName: lobby.name,
+    cards: maskedCards,
+    gameState: lobby.gameState,
+    players: playersView(lobby, socketId),
+    targets: lobby.targets,
+    turn: lobby.turn,
+    combat: lobby.combat,
+    chat: lobby.chatLog,
+    voiceRoster: Array.from(lobby.voiceParticipants),
+    myId: socketId
+  };
+}
+
+// Restored (post-restart) seats and anyone who was already mid-grace-window when persisted
+// need their removal timers (re)scheduled now that the server is back up.
+for (const lobbyId in lobbies) {
+  for (const sid in lobbies[lobbyId].players) {
+    if (lobbies[lobbyId].players[sid].disconnectedAt) scheduleGraceRemoval(lobbies[lobbyId], sid);
+  }
+}
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -244,7 +374,8 @@ function playersView(lobby, viewerId) {
       graveyard: p.graveyard,
       exile: p.exile,
       libraryCount: p.library.length,
-      library: id === viewerId ? p.library : undefined
+      library: id === viewerId ? p.library : undefined,
+      disconnected: !!p.disconnectedAt
     };
   }
   return out;
@@ -570,6 +701,19 @@ io.on("connection", (socket) => {
     return socket.data.lobbyId ? lobbies[socket.data.lobbyId] : null;
   }
 
+  // A reconnecting browser (network blip, tab refresh, server restart) within the grace window
+  // resumes its seat silently instead of landing back on the Main Menu with its board wiped.
+  const seat = findDisconnectedSeat(username);
+  if (seat) {
+    reattachPlayer(seat.lobby, seat.oldSocketId, socket.id);
+    socket.data.lobbyId = seat.lobby.id;
+    socket.join(seat.lobby.id);
+    socket.emit("lobbyJoined", buildLobbyJoinedPayload(seat.lobby, socket.id));
+    broadcastPlayers(seat.lobby);
+    broadcastLobbyList();
+    pushLog(seat.lobby, `${username} reconnected`);
+  }
+
   socket.emit("authOk", { username, decks: Object.keys(decks[username] || {}) });
   socket.emit("lobbyList", lobbySummaries());
 
@@ -595,48 +739,10 @@ io.on("connection", (socket) => {
       broadcastTurn(lobby);
     }
 
-    const maskedCards = {};
-    for (const id in lobby.cards) maskedCards[id] = maskCard(lobby.cards[id], socket.id);
-    socket.emit("lobbyJoined", {
-      lobbyId: lobby.id,
-      lobbyName: lobby.name,
-      cards: maskedCards,
-      gameState: lobby.gameState,
-      players: playersView(lobby, socket.id),
-      targets: lobby.targets,
-      turn: lobby.turn,
-      combat: lobby.combat,
-      chat: lobby.chatLog,
-      voiceRoster: Array.from(lobby.voiceParticipants),
-      myId: socket.id
-    });
+    socket.emit("lobbyJoined", buildLobbyJoinedPayload(lobby, socket.id));
     broadcastPlayers(lobby);
     broadcastLobbyList();
     pushLog(lobby, `${username} joined the table`);
-  }
-
-  function leaveLobbyInternal(lobby, verb) {
-    delete lobby.players[socket.id];
-    lobby.voiceParticipants.delete(socket.id);
-    const idx = lobby.turn.order.indexOf(socket.id);
-    if (idx !== -1) {
-      lobby.turn.order.splice(idx, 1);
-      if (lobby.turn.order.length === 0) lobby.turn.started = false;
-      else if (idx < lobby.turn.activeIndex) lobby.turn.activeIndex--;
-      else if (lobby.turn.activeIndex >= lobby.turn.order.length) lobby.turn.activeIndex = 0;
-    }
-    socket.leave(lobby.id);
-    socket.data.lobbyId = null;
-
-    if (Object.keys(lobby.players).length === 0) {
-      delete lobbies[lobby.id];
-    } else {
-      broadcastVoiceRoster(lobby);
-      broadcastTurn(lobby);
-      broadcastPlayers(lobby);
-      pushLog(lobby, `${username} ${verb} the table`);
-    }
-    broadcastLobbyList();
   }
 
   socket.on("createLobby", (name) => {
@@ -658,7 +764,9 @@ io.on("connection", (socket) => {
   socket.on("leaveLobby", () => {
     const lobby = currentLobby();
     if (!lobby) return;
-    leaveLobbyInternal(lobby, "left");
+    socket.leave(lobby.id);
+    socket.data.lobbyId = null;
+    removePlayerFromLobby(lobby, socket.id, "left");
   });
 
   socket.on("listLobbies", () => socket.emit("lobbyList", lobbySummaries()));
@@ -1135,8 +1243,13 @@ io.on("connection", (socket) => {
     }
     lobby.combat.attackers = validAttackers;
     lobby.combat.blocks = {};
-    lobby.combat.defendersPending = Array.from(defendersSet);
-    lobby.combat.step = defendersSet.size > 0 ? "declareBlockers" : "damage";
+    // Skip declareBlockers for a defender with no untapped creature to block with — otherwise
+    // combat just sits waiting on a no-op "No Blocks" confirmation they may not realize to give.
+    const pendingWithBlockers = Array.from(defendersSet).filter((defId) =>
+      Object.values(lobby.cards).some((c) => c.owner === defId && c.zoneType === "creature" && !c.tapped)
+    );
+    lobby.combat.defendersPending = pendingWithBlockers;
+    lobby.combat.step = pendingWithBlockers.length > 0 ? "declareBlockers" : "damage";
     broadcastCombat(lobby);
     const activeName = lobby.players[socket.id] ? lobby.players[socket.id].name : "?";
     pushLog(lobby, `${activeName} declared ${Object.keys(validAttackers).length} attacker(s)`);
@@ -1244,7 +1357,12 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     const lobby = currentLobby();
-    if (lobby) leaveLobbyInternal(lobby, "disconnected from");
+    if (!lobby) return;
+    const p = lobby.players[socket.id];
+    if (!p) return;
+    p.disconnectedAt = Date.now();
+    broadcastPlayers(lobby); // lets others see a "disconnected" indicator while the seat is held open
+    scheduleGraceRemoval(lobby, socket.id);
   });
 });
 
