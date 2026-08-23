@@ -46,26 +46,44 @@ function verifyPassword(password, salt, hash) {
 
 let sessions = {}; // token -> username
 
-// ---------------- game state ----------------
+// ---------------- lobbies ----------------
+// Each lobby holds its own fully-isolated copy of what used to be single global game state
+// (cards/players/turn/combat/etc). Sockets join a Socket.IO room matching the lobby id, and every
+// game handler below resolves its lobby fresh via currentLobby(socket) — nothing is global anymore.
 
 const COLORS = ["#ef4444", "#3b82f6", "#22c55e", "#eab308", "#a855f7", "#ec4899", "#14b8a6", "#f97316"];
 let colorIndex = 0;
 function nextColor() { return COLORS[colorIndex++ % COLORS.length]; }
 function randInt(n) { return Math.floor(Math.random() * n); }
 function newId() { return "c_" + Date.now() + "_" + randInt(100000); }
-
-let cards = {};        // battlefield/hand cards, keyed by id
-let players = {};      // socket.id -> player state
-let targets = {};      // cardId -> [playerId, ...]
-let gameState = { log: [] };
-let chatLog = [];
-let voiceParticipants = new Set();
+function newLobbyId() { return crypto.randomBytes(4).toString("hex"); }
 
 const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End Step"];
-let turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 };
-let combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
-
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
+
+let lobbies = {}; // id -> lobby state
+
+function createLobbyState(id, name, hostUsername) {
+  return {
+    id, name, hostUsername,
+    createdAt: Date.now(),
+    cards: {},        // battlefield/hand cards, keyed by id
+    players: {},      // socket.id -> player state
+    targets: {},      // cardId -> [playerId, ...]
+    gameState: { log: [] },
+    chatLog: [],
+    voiceParticipants: new Set(),
+    turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 },
+    combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] }
+  };
+}
+function lobbySummaries() {
+  return Object.values(lobbies).map((l) => ({
+    id: l.id, name: l.name, playerCount: Object.keys(l.players).length, started: l.turn.started
+  }));
+}
+function broadcastLobbyList() { io.emit("lobbyList", lobbySummaries()); }
+function lobbySocketIds(lobby) { return io.sockets.adapter.rooms.get(lobby.id) || new Set(); }
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -195,21 +213,22 @@ function maskCard(card, viewerId) {
   return card;
 }
 
-function broadcastCard(card) {
-  for (const [sid, sock] of io.sockets.sockets) {
-    sock.emit("cardUpdate", maskCard(card, sid));
+function broadcastCard(lobby, card) {
+  for (const sid of lobbySocketIds(lobby)) {
+    const sock = io.sockets.sockets.get(sid);
+    if (sock) sock.emit("cardUpdate", maskCard(card, sid));
   }
 }
 
-function broadcastTargets() { io.emit("targets", targets); }
-function broadcastTurn() { io.emit("turnState", turn); }
-function broadcastCombat() { io.emit("combatState", combat); }
-function broadcastVoiceRoster() { io.emit("voiceRoster", Array.from(voiceParticipants)); }
+function broadcastTargets(lobby) { io.to(lobby.id).emit("targets", lobby.targets); }
+function broadcastTurn(lobby) { io.to(lobby.id).emit("turnState", lobby.turn); }
+function broadcastCombat(lobby) { io.to(lobby.id).emit("combatState", lobby.combat); }
+function broadcastVoiceRoster(lobby) { io.to(lobby.id).emit("voiceRoster", Array.from(lobby.voiceParticipants)); }
 
-function playersView(viewerId) {
+function playersView(lobby, viewerId) {
   const out = {};
-  for (const id in players) {
-    const p = players[id];
+  for (const id in lobby.players) {
+    const p = lobby.players[id];
     out[id] = {
       name: p.name,
       color: p.color,
@@ -231,21 +250,22 @@ function playersView(viewerId) {
   return out;
 }
 
-function broadcastPlayers() {
-  for (const [sid, sock] of io.sockets.sockets) {
-    sock.emit("players", playersView(sid));
+function broadcastPlayers(lobby) {
+  for (const sid of lobbySocketIds(lobby)) {
+    const sock = io.sockets.sockets.get(sid);
+    if (sock) sock.emit("players", playersView(lobby, sid));
   }
 }
 
-function pushLog(msg) {
-  gameState.log.push(msg);
-  if (gameState.log.length > 150) gameState.log.shift();
-  io.emit("log", msg);
+function pushLog(lobby, msg) {
+  lobby.gameState.log.push(msg);
+  if (lobby.gameState.log.length > 150) lobby.gameState.log.shift();
+  io.to(lobby.id).emit("log", msg);
 }
 
-function spawnBattlefieldCard(data) {
+function spawnBattlefieldCard(lobby, data) {
   const { owner, faceDown, zoneType, isCommander } = data;
-  const p = players[owner];
+  const p = lobby.players[owner];
   const id = newId();
   const card = {
     id, name: data.name, img: data.img, type: data.type || "", manaCost: data.manaCost || "",
@@ -257,39 +277,39 @@ function spawnBattlefieldCard(data) {
     owner, ownerColor: p ? p.color : "#999",
     isCommander: !!isCommander
   };
-  cards[id] = card;
-  broadcastCard(card);
+  lobby.cards[id] = card;
+  broadcastCard(lobby, card);
   return card;
 }
 
-function drawN(ownerId, n) {
-  const p = players[ownerId];
+function drawN(lobby, ownerId, n) {
+  const p = lobby.players[ownerId];
   if (!p) return 0;
   let drawn = 0;
   for (let i = 0; i < n && p.library.length > 0; i++) {
     const entry = p.library.shift();
-    spawnBattlefieldCard({ ...entry, owner: ownerId, faceDown: true, zoneType: "hand" });
+    spawnBattlefieldCard(lobby, { ...entry, owner: ownerId, faceDown: true, zoneType: "hand" });
     drawn++;
   }
   return drawn;
 }
 
-function returnAllHandToLibrary(ownerId) {
-  const p = players[ownerId];
+function returnAllHandToLibrary(lobby, ownerId) {
+  const p = lobby.players[ownerId];
   if (!p) return;
   const toRemove = [];
-  for (const id in cards) {
-    if (cards[id].owner === ownerId && cards[id].zoneType === "hand") {
-      p.library.push(toEntry(cards[id]));
+  for (const id in lobby.cards) {
+    if (lobby.cards[id].owner === ownerId && lobby.cards[id].zoneType === "hand") {
+      p.library.push(toEntry(lobby.cards[id]));
       toRemove.push(id);
     }
   }
   toRemove.forEach((id) => {
-    delete cards[id];
-    if (targets[id]) delete targets[id];
-    io.emit("cardRemove", id);
+    delete lobby.cards[id];
+    if (lobby.targets[id]) delete lobby.targets[id];
+    io.to(lobby.id).emit("cardRemove", id);
   });
-  if (toRemove.length) broadcastTargets();
+  if (toRemove.length) broadcastTargets(lobby);
 }
 
 function attemptPlay(p, card, targetZoneType, xValue) {
@@ -312,24 +332,25 @@ function attemptPlay(p, card, targetZoneType, xValue) {
 
 // A commander that leaves the battlefield (dies, gets bounced, etc.) becomes recastable
 // again — clear the slot's battlefield reference so castCommander stops rejecting it.
-function clearCommanderRef(card) {
-  const owner = players[card.owner];
+function clearCommanderRef(lobby, card) {
+  const owner = lobby.players[card.owner];
   if (!owner || !card.isCommander) return;
   owner.commanders.forEach((c) => { if (c && c.battlefieldId === card.id) c.battlefieldId = null; });
 }
 
-function sendToGraveyardInternal(card) {
-  delete cards[card.id];
-  if (targets[card.id]) delete targets[card.id];
-  io.emit("cardRemove", card.id);
-  clearCommanderRef(card);
-  const owner = players[card.owner];
+function sendToGraveyardInternal(lobby, card) {
+  delete lobby.cards[card.id];
+  if (lobby.targets[card.id]) delete lobby.targets[card.id];
+  io.to(lobby.id).emit("cardRemove", card.id);
+  clearCommanderRef(lobby, card);
+  const owner = lobby.players[card.owner];
   if (owner) owner.graveyard.push(toEntry(card));
 }
 
 // ---------------- turn engine ----------------
 
-function advancePhase() {
+function advancePhase(lobby) {
+  const turn = lobby.turn;
   if (!turn.started || turn.order.length === 0) return;
   const oldPhase = turn.phase;
   let idx = PHASES.indexOf(turn.phase);
@@ -341,70 +362,71 @@ function advancePhase() {
   }
   turn.phase = PHASES[idx];
   const activeId = turn.order[turn.activeIndex];
-  const activePlayer = players[activeId];
+  const activePlayer = lobby.players[activeId];
 
-  for (const pid in players) players[pid].mana = EMPTY_MANA(); // mana empties every step/phase
+  for (const pid in lobby.players) lobby.players[pid].mana = EMPTY_MANA(); // mana empties every step/phase
 
   if (oldPhase === "Combat" && turn.phase !== "Combat") {
-    combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+    lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
   }
   if (turn.phase === "Combat") {
-    combat = { step: "declareAttackers", attackers: {}, blocks: {}, defendersPending: [] };
+    lobby.combat = { step: "declareAttackers", attackers: {}, blocks: {}, defendersPending: [] };
   }
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
-    for (const id in cards) {
-      if (cards[id].owner === activeId && cards[id].tapped) {
-        cards[id].tapped = false;
-        broadcastCard(cards[id]);
+    for (const id in lobby.cards) {
+      if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped) {
+        lobby.cards[id].tapped = false;
+        broadcastCard(lobby, lobby.cards[id]);
       }
     }
   }
   if (activePlayer && turn.phase === "Draw") {
     const isVeryFirstTurn = turn.turnNumber === 1 && turn.activeIndex === 0;
     if (!isVeryFirstTurn) {
-      const drew = drawN(activeId, 1);
-      if (drew) pushLog(`${activePlayer.name} drew a card for the turn`);
+      const drew = drawN(lobby, activeId, 1);
+      if (drew) pushLog(lobby, `${activePlayer.name} drew a card for the turn`);
     } else {
-      pushLog(`${activePlayer.name} skips their draw (playing first)`);
+      pushLog(lobby, `${activePlayer.name} skips their draw (playing first)`);
     }
   }
-  broadcastTurn();
-  broadcastCombat();
-  broadcastPlayers();
-  if (activePlayer) pushLog(`${activePlayer.name} — ${turn.phase}${turn.phase === "Untap" ? ` (Turn ${turn.turnNumber})` : ""}`);
+  broadcastTurn(lobby);
+  broadcastCombat(lobby);
+  broadcastPlayers(lobby);
+  if (activePlayer) pushLog(lobby, `${activePlayer.name} — ${turn.phase}${turn.phase === "Untap" ? ` (Turn ${turn.turnNumber})` : ""}`);
 }
 
-function resolveCombatDamage() {
+function resolveCombatDamage(lobby) {
+  const combat = lobby.combat;
   const deaths = [];
   for (const [attackerId, defenderId] of Object.entries(combat.attackers)) {
-    const attacker = cards[attackerId];
+    const attacker = lobby.cards[attackerId];
     if (!attacker) continue;
     const atkPower = parsePT(attacker.power) + (attacker.counters || 0);
     const atkTough = parsePT(attacker.toughness) + (attacker.counters || 0);
     const blockerId = combat.blocks[attackerId];
-    if (blockerId && cards[blockerId]) {
-      const blocker = cards[blockerId];
+    if (blockerId && lobby.cards[blockerId]) {
+      const blocker = lobby.cards[blockerId];
       const defPower = parsePT(blocker.power) + (blocker.counters || 0);
       const defTough = parsePT(blocker.toughness) + (blocker.counters || 0);
-      pushLog(`${attacker.name || "A face-down creature"} (${atkPower}/${atkTough}) fights ${blocker.name || "a face-down creature"} (${defPower}/${defTough})`);
+      pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkPower}/${atkTough}) fights ${blocker.name || "a face-down creature"} (${defPower}/${defTough})`);
       if (atkPower >= defTough) deaths.push(blocker);
       if (defPower >= atkTough) deaths.push(attacker);
     } else {
-      const defender = players[defenderId];
+      const defender = lobby.players[defenderId];
       if (defender) {
         defender.life -= atkPower;
         if (attacker.isCommander) defender.cmdr = (defender.cmdr || 0) + atkPower;
-        pushLog(`${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
+        pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
       }
     }
   }
   const seen = new Set();
-  deaths.forEach((c) => { if (!seen.has(c.id) && cards[c.id]) { seen.add(c.id); sendToGraveyardInternal(c); } });
-  combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
-  broadcastCombat();
-  broadcastPlayers();
+  deaths.forEach((c) => { if (!seen.has(c.id) && lobby.cards[c.id]) { seen.add(c.id); sendToGraveyardInternal(lobby, c); } });
+  lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+  broadcastCombat(lobby);
+  broadcastPlayers(lobby);
 }
 
 // ---------------- decklist parsing + resolution ----------------
@@ -460,7 +482,7 @@ async function resolveCardNames(names) {
   return found;
 }
 
-async function resolveAndSetLibrary(socket, p, text) {
+async function resolveAndSetLibrary(lobby, socket, p, text) {
   try {
     const wanted = parseDecklistNames(text, 250);
     if (wanted.length === 0) { socket.emit("importResult", { success: false, error: "Nothing parsed from that list." }); return; }
@@ -468,9 +490,9 @@ async function resolveAndSetLibrary(socket, p, text) {
     const found = await resolveCardNames(wanted);
     shuffle(found);
     p.library = found;
-    broadcastPlayers();
+    broadcastPlayers(lobby);
     socket.emit("importResult", { success: true, requested: wanted.length, found: found.length });
-    pushLog(`${p.name} loaded a ${wanted.length}-card decklist (${found.length} found)`);
+    pushLog(lobby, `${p.name} loaded a ${wanted.length}-card decklist (${found.length} found)`);
   } catch (e) {
     socket.emit("importResult", { success: false, error: "Import failed — check your connection and try again." });
   }
@@ -544,84 +566,151 @@ io.on("connection", (socket) => {
     return;
   }
 
-  players[socket.id] = {
-    username,
-    name: username,
-    color: nextColor(),
-    life: 40, cmdr: 0, poison: 0,
-    library: [], graveyard: [], exile: [],
-    commanders: [null, null],
-    mulligans: 0, handKept: false,
-    mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0
-  };
-
-  if (turn.started) {
-    turn.order.push(socket.id);
-    broadcastTurn();
+  function currentLobby() {
+    return socket.data.lobbyId ? lobbies[socket.data.lobbyId] : null;
   }
 
-  const maskedCards = {};
-  for (const id in cards) maskedCards[id] = maskCard(cards[id], socket.id);
-  socket.emit("init", {
-    cards: maskedCards,
-    gameState,
-    players: playersView(socket.id),
-    targets,
-    turn,
-    combat,
-    chat: chatLog,
-    voiceRoster: Array.from(voiceParticipants),
-    myId: socket.id,
-    decks: Object.keys(decks[username] || {})
+  socket.emit("authOk", { username, decks: Object.keys(decks[username] || {}) });
+  socket.emit("lobbyList", lobbySummaries());
+
+  // ---- lobby lifecycle ----
+
+  function joinLobbyInternal(lobby) {
+    socket.data.lobbyId = lobby.id;
+    socket.join(lobby.id);
+
+    lobby.players[socket.id] = {
+      username,
+      name: username,
+      color: nextColor(),
+      life: 40, cmdr: 0, poison: 0,
+      library: [], graveyard: [], exile: [],
+      commanders: [null, null],
+      mulligans: 0, handKept: false,
+      mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0
+    };
+
+    if (lobby.turn.started) {
+      lobby.turn.order.push(socket.id);
+      broadcastTurn(lobby);
+    }
+
+    const maskedCards = {};
+    for (const id in lobby.cards) maskedCards[id] = maskCard(lobby.cards[id], socket.id);
+    socket.emit("lobbyJoined", {
+      lobbyId: lobby.id,
+      lobbyName: lobby.name,
+      cards: maskedCards,
+      gameState: lobby.gameState,
+      players: playersView(lobby, socket.id),
+      targets: lobby.targets,
+      turn: lobby.turn,
+      combat: lobby.combat,
+      chat: lobby.chatLog,
+      voiceRoster: Array.from(lobby.voiceParticipants),
+      myId: socket.id
+    });
+    broadcastPlayers(lobby);
+    broadcastLobbyList();
+    pushLog(lobby, `${username} joined the table`);
+  }
+
+  function leaveLobbyInternal(lobby, verb) {
+    delete lobby.players[socket.id];
+    lobby.voiceParticipants.delete(socket.id);
+    const idx = lobby.turn.order.indexOf(socket.id);
+    if (idx !== -1) {
+      lobby.turn.order.splice(idx, 1);
+      if (lobby.turn.order.length === 0) lobby.turn.started = false;
+      else if (idx < lobby.turn.activeIndex) lobby.turn.activeIndex--;
+      else if (lobby.turn.activeIndex >= lobby.turn.order.length) lobby.turn.activeIndex = 0;
+    }
+    socket.leave(lobby.id);
+    socket.data.lobbyId = null;
+
+    if (Object.keys(lobby.players).length === 0) {
+      delete lobbies[lobby.id];
+    } else {
+      broadcastVoiceRoster(lobby);
+      broadcastTurn(lobby);
+      broadcastPlayers(lobby);
+      pushLog(lobby, `${username} ${verb} the table`);
+    }
+    broadcastLobbyList();
+  }
+
+  socket.on("createLobby", (name) => {
+    if (currentLobby()) return;
+    const id = newLobbyId();
+    const lobbyName = (name || "").toString().trim().slice(0, 40) || `${username}'s table`;
+    const lobby = createLobbyState(id, lobbyName, username);
+    lobbies[id] = lobby;
+    joinLobbyInternal(lobby);
   });
-  broadcastPlayers();
+
+  socket.on("joinLobby", (id) => {
+    if (currentLobby()) return;
+    const lobby = lobbies[id];
+    if (!lobby) { socket.emit("actionError", "That table no longer exists."); socket.emit("lobbyList", lobbySummaries()); return; }
+    joinLobbyInternal(lobby);
+  });
+
+  socket.on("leaveLobby", () => {
+    const lobby = currentLobby();
+    if (!lobby) return;
+    leaveLobbyInternal(lobby, "left");
+  });
+
+  socket.on("listLobbies", () => socket.emit("lobbyList", lobbySummaries()));
 
   socket.on("setName", (name) => {
-    if (!players[socket.id]) return;
-    players[socket.id].name = (name || "Player").toString().slice(0, 24);
-    broadcastPlayers();
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    lobby.players[socket.id].name = (name || "Player").toString().slice(0, 24);
+    broadcastPlayers(lobby);
   });
 
   socket.on("statChange", ({ key, val }) => {
-    if (!players[socket.id] || !["life", "cmdr", "poison"].includes(key)) return;
-    players[socket.id][key] += val;
-    broadcastPlayers();
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id] || !["life", "cmdr", "poison"].includes(key)) return;
+    lobby.players[socket.id][key] += val;
+    broadcastPlayers(lobby);
   });
 
   // ---- mana / land drops ----
 
   socket.on("addMana", (color) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
     p.mana[color] = (p.mana[color] || 0) + 1;
-    broadcastPlayers();
+    broadcastPlayers(lobby);
   });
 
   socket.on("removeMana", (color) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
     p.mana[color] = Math.max(0, (p.mana[color] || 0) - 1);
-    broadcastPlayers();
+    broadcastPlayers(lobby);
   });
 
   socket.on("landDropBonus", (delta) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     p.landDropBonus = Math.max(0, (p.landDropBonus || 0) + delta);
-    broadcastPlayers();
+    broadcastPlayers(lobby);
   });
 
   // ---- battlefield cards ----
 
   socket.on("spawnCard", (data) => {
-    spawnBattlefieldCard({ ...data, owner: socket.id, zoneType: classifyType(data.type) });
-    const who = players[socket.id] ? players[socket.id].name : "Someone";
-    pushLog(data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    spawnBattlefieldCard(lobby, { ...data, owner: socket.id, zoneType: classifyType(data.type) });
+    const who = lobby.players[socket.id].name;
+    pushLog(lobby, data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
   });
 
   socket.on("changeZone", ({ id, zoneType, x }) => {
-    const card = cards[id];
-    const p = players[socket.id];
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
+    const p = lobby.players[socket.id];
     if (!card || !p || card.owner !== socket.id) return;
     // "hand" is intentionally not a valid drag target here — there's no general rule that lets you
     // pick a permanent back up, so returning something to hand is a deliberate action (see "toHand"
@@ -633,39 +722,41 @@ io.on("connection", (socket) => {
       if (!result.ok) { socket.emit("actionError", result.error); return; }
       card.zoneType = zoneType;
       card.faceDown = false;
-      broadcastCard(card);
-      broadcastPlayers();
-      pushLog(`${p.name} played ${card.name || "a card"}`);
+      broadcastCard(lobby, card);
+      broadcastPlayers(lobby);
+      pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
       return;
     }
     // reclassifying an existing battlefield permanent between creature/artifact/mana rows — purely
     // organizational, no cost.
     card.zoneType = zoneType;
-    broadcastCard(card);
+    broadcastCard(lobby, card);
   });
 
   socket.on("playCard", (data) => {
+    const lobby = currentLobby(); if (!lobby) return;
     const id = typeof data === "string" ? data : data.id;
     const xValue = (typeof data === "object" && data.x) || 0;
-    const card = cards[id];
-    const p = players[socket.id];
+    const card = lobby.cards[id];
+    const p = lobby.players[socket.id];
     if (!card || !p || card.owner !== socket.id) return;
     const targetZoneType = classifyType(card.type);
     const result = attemptPlay(p, card, targetZoneType, xValue);
     if (!result.ok) { socket.emit("actionError", result.error); return; }
     card.zoneType = targetZoneType;
     card.faceDown = false;
-    broadcastCard(card);
-    broadcastPlayers();
-    pushLog(`${p.name} played ${card.name || "a card"}`);
+    broadcastCard(lobby, card);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
   });
 
   socket.on("tap", (id) => {
-    const card = cards[id];
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
     if (!card || card.owner !== socket.id) return;
     const wasTapped = card.tapped;
     card.tapped = !card.tapped;
-    broadcastCard(card);
+    broadcastCard(lobby, card);
     if (!wasTapped && card.tapped && card.zoneType === "mana") {
       // Basic land types auto-add their color; nonbasic lands that are archived with exactly
       // one fixed producible color (shocklands, painlands, snow duals, etc.) do too. Lands with
@@ -675,155 +766,160 @@ io.on("connection", (socket) => {
         color = card.producedMana[0];
       }
       if (color && ["W", "U", "B", "R", "G", "C"].includes(color)) {
-        const p = players[socket.id];
+        const p = lobby.players[socket.id];
         p.mana[color] = (p.mana[color] || 0) + 1;
-        broadcastPlayers();
-        pushLog(`${p.name} tapped ${card.name} for {${color}}`);
+        broadcastPlayers(lobby);
+        pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
       }
     }
   });
 
   socket.on("flip", (id) => {
-    const card = cards[id];
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
     if (!card || card.owner !== socket.id) return;
     card.faceDown = !card.faceDown;
-    broadcastCard(card);
-    const who = players[socket.id] ? players[socket.id].name : "Someone";
-    pushLog(`${who} flipped a card`);
+    broadcastCard(lobby, card);
+    const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
+    pushLog(lobby, `${who} flipped a card`);
   });
 
   socket.on("counter", ({ id, delta }) => {
-    const card = cards[id];
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
     if (!card || card.owner !== socket.id) return;
     card.counters = (card.counters || 0) + delta;
-    broadcastCard(card);
+    broadcastCard(lobby, card);
   });
 
   socket.on("removeCard", (id) => {
-    const card = cards[id];
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
     if (!card || card.owner !== socket.id) return;
-    delete cards[id];
-    if (targets[id]) { delete targets[id]; broadcastTargets(); }
-    io.emit("cardRemove", id);
-    clearCommanderRef(card);
+    delete lobby.cards[id];
+    if (lobby.targets[id]) { delete lobby.targets[id]; broadcastTargets(lobby); }
+    io.to(lobby.id).emit("cardRemove", id);
+    clearCommanderRef(lobby, card);
   });
 
   // Deliberate "this permanent is being bounced/returned to hand" action — represents a bounce
   // effect or similar, since there's no general rule that lets a permanent just go back to hand.
   socket.on("toHand", (id) => {
-    const card = cards[id];
-    const p = players[socket.id];
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
+    const p = lobby.players[socket.id];
     if (!card || !p || card.owner !== socket.id || card.zoneType === "hand") return;
-    delete cards[id];
-    if (targets[id]) { delete targets[id]; broadcastTargets(); }
-    io.emit("cardRemove", id);
-    clearCommanderRef(card);
-    spawnBattlefieldCard({ ...toEntry(card), owner: socket.id, faceDown: true, zoneType: "hand" });
-    broadcastPlayers();
-    pushLog(`${p.name} returned ${card.name || "a face-down card"} to their hand`);
+    delete lobby.cards[id];
+    if (lobby.targets[id]) { delete lobby.targets[id]; broadcastTargets(lobby); }
+    io.to(lobby.id).emit("cardRemove", id);
+    clearCommanderRef(lobby, card);
+    spawnBattlefieldCard(lobby, { ...toEntry(card), owner: socket.id, faceDown: true, zoneType: "hand" });
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} returned ${card.name || "a face-down card"} to their hand`);
   });
 
   socket.on("untapAll", () => {
-    for (const id in cards) {
-      if (cards[id].owner === socket.id && cards[id].tapped) {
-        cards[id].tapped = false;
-        broadcastCard(cards[id]);
+    const lobby = currentLobby(); if (!lobby) return;
+    for (const id in lobby.cards) {
+      if (lobby.cards[id].owner === socket.id && lobby.cards[id].tapped) {
+        lobby.cards[id].tapped = false;
+        broadcastCard(lobby, lobby.cards[id]);
       }
     }
-    const who = players[socket.id] ? players[socket.id].name : "Someone";
-    pushLog(`${who} untapped all their permanents`);
+    const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
+    pushLog(lobby, `${who} untapped all their permanents`);
   });
 
   // ---- targeting (open to everyone) ----
 
   socket.on("toggleTarget", (cardId) => {
-    if (!cards[cardId]) return;
-    const existing = targets[cardId] || [];
+    const lobby = currentLobby(); if (!lobby || !lobby.cards[cardId]) return;
+    const existing = lobby.targets[cardId] || [];
     const already = existing.includes(socket.id);
     const updated = already ? existing.filter((id) => id !== socket.id) : [...existing, socket.id];
-    if (updated.length === 0) delete targets[cardId]; else targets[cardId] = updated;
-    broadcastTargets();
-    const who = players[socket.id] ? players[socket.id].name : "Someone";
-    pushLog(`${who} ${already ? "removed a target from" : "targeted"} a card`);
+    if (updated.length === 0) delete lobby.targets[cardId]; else lobby.targets[cardId] = updated;
+    broadcastTargets(lobby);
+    const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
+    pushLog(lobby, `${who} ${already ? "removed a target from" : "targeted"} a card`);
   });
 
   // ---- zone transitions: battlefield -> graveyard/exile/library (owner only) ----
 
-  function moveOut(cardId, zone, pos) {
-    const card = cards[cardId];
+  function moveOut(lobby, cardId, zone, pos) {
+    const card = lobby.cards[cardId];
     if (!card || card.owner !== socket.id) return;
     const owner = card.owner;
-    delete cards[cardId];
-    if (targets[cardId]) { delete targets[cardId]; broadcastTargets(); }
-    io.emit("cardRemove", cardId);
-    clearCommanderRef(card);
-    if (!players[owner]) return;
+    delete lobby.cards[cardId];
+    if (lobby.targets[cardId]) { delete lobby.targets[cardId]; broadcastTargets(lobby); }
+    io.to(lobby.id).emit("cardRemove", cardId);
+    clearCommanderRef(lobby, card);
+    if (!lobby.players[owner]) return;
     const entry = toEntry(card);
-    if (zone === "graveyard") players[owner].graveyard.push(entry);
-    else if (zone === "exile") players[owner].exile.push(entry);
+    if (zone === "graveyard") lobby.players[owner].graveyard.push(entry);
+    else if (zone === "exile") lobby.players[owner].exile.push(entry);
     else if (zone === "library") {
-      if (pos === "top") players[owner].library.unshift(entry);
-      else players[owner].library.push(entry);
+      if (pos === "top") lobby.players[owner].library.unshift(entry);
+      else lobby.players[owner].library.push(entry);
     }
-    broadcastPlayers();
-    const ownerName = players[owner].name;
-    pushLog(`${ownerName}'s ${card.name || "face-down card"} went to ${zone}`);
+    broadcastPlayers(lobby);
+    const ownerName = lobby.players[owner].name;
+    pushLog(lobby, `${ownerName}'s ${card.name || "face-down card"} went to ${zone}`);
   }
 
-  socket.on("toGraveyard", (id) => moveOut(id, "graveyard"));
-  socket.on("toExile", (id) => moveOut(id, "exile"));
-  socket.on("toLibraryTop", (id) => moveOut(id, "library", "top"));
-  socket.on("toLibraryBottom", (id) => moveOut(id, "library", "bottom"));
+  socket.on("toGraveyard", (id) => { const lobby = currentLobby(); if (lobby) moveOut(lobby, id, "graveyard"); });
+  socket.on("toExile", (id) => { const lobby = currentLobby(); if (lobby) moveOut(lobby, id, "exile"); });
+  socket.on("toLibraryTop", (id) => { const lobby = currentLobby(); if (lobby) moveOut(lobby, id, "library", "top"); });
+  socket.on("toLibraryBottom", (id) => { const lobby = currentLobby(); if (lobby) moveOut(lobby, id, "library", "bottom"); });
 
   // ---- zone transitions: graveyard/exile -> battlefield/hand (owner only) ----
 
   socket.on("zoneToBattlefield", ({ zone, index }) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !p[zone] || !p[zone][index]) return;
     const entry = p[zone].splice(index, 1)[0];
-    spawnBattlefieldCard({ ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
-    broadcastPlayers();
-    pushLog(`${p.name} returned ${entry.name} to the battlefield`);
+    spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} returned ${entry.name} to the battlefield`);
   });
 
   socket.on("zoneToHand", ({ zone, index }) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !p[zone] || !p[zone][index]) return;
     const entry = p[zone].splice(index, 1)[0];
-    spawnBattlefieldCard({ ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
-    broadcastPlayers();
-    pushLog(`${p.name} returned a card to their hand`);
+    spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} returned a card to their hand`);
   });
 
   // ---- library management (owner only) ----
 
   socket.on("shuffleLibrary", () => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     shuffle(p.library);
-    broadcastPlayers();
-    pushLog(`${p.name} shuffled their library`);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} shuffled their library`);
   });
 
   socket.on("drawCard", (count) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
-    const drawn = drawN(socket.id, Math.max(1, Math.min(10, count || 1)));
-    broadcastPlayers();
-    if (drawn) pushLog(`${p.name} drew ${drawn} card${drawn > 1 ? "s" : ""}`);
+    const drawn = drawN(lobby, socket.id, Math.max(1, Math.min(10, count || 1)));
+    broadcastPlayers(lobby);
+    if (drawn) pushLog(lobby, `${p.name} drew ${drawn} card${drawn > 1 ? "s" : ""}`);
   });
 
   socket.on("drawSpecific", (index) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !p.library[index]) return;
     const entry = p.library.splice(index, 1)[0];
-    spawnBattlefieldCard({ ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
-    broadcastPlayers();
-    pushLog(`${p.name} searched their library for a card`);
+    spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} searched their library for a card`);
   });
 
   socket.on("millCard", (count) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     const n = Math.max(1, Math.min(20, count || 1));
     let milled = 0;
@@ -831,53 +927,52 @@ io.on("connection", (socket) => {
       p.graveyard.push(p.library.shift());
       milled++;
     }
-    broadcastPlayers();
-    if (milled) pushLog(`${p.name} milled ${milled} card${milled > 1 ? "s" : ""}`);
+    broadcastPlayers(lobby);
+    if (milled) pushLog(lobby, `${p.name} milled ${milled} card${milled > 1 ? "s" : ""}`);
   });
 
   socket.on("importDeck", (text) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
-    resolveAndSetLibrary(socket, p, text);
+    resolveAndSetLibrary(lobby, socket, p, text);
   });
 
   // ---- opening hand / mulligan ----
 
   socket.on("drawOpeningHand", () => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
-    returnAllHandToLibrary(socket.id);
+    returnAllHandToLibrary(lobby, socket.id);
     shuffle(p.library);
-    drawN(socket.id, 7);
+    drawN(lobby, socket.id, 7);
     p.mulligans = 0;
     p.handKept = false;
-    broadcastPlayers();
-    pushLog(`${p.name} drew their opening hand`);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} drew their opening hand`);
   });
 
   socket.on("mulligan", () => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || p.mulligans >= 2) return;
-    returnAllHandToLibrary(socket.id);
+    returnAllHandToLibrary(lobby, socket.id);
     shuffle(p.library);
-    drawN(socket.id, 7);
+    drawN(lobby, socket.id, 7);
     p.mulligans += 1;
-    broadcastPlayers();
-    pushLog(`${p.name} took a mulligan (${p.mulligans}/2)`);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} took a mulligan (${p.mulligans}/2)`);
   });
 
   socket.on("keepHand", () => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     p.handKept = true;
-    broadcastPlayers();
-    pushLog(`${p.name} kept their hand and is ready`);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} kept their hand and is ready`);
   });
 
-  // ---- persistent decks ----
+  // ---- persistent decks (account-scoped, not lobby-scoped) ----
 
   socket.on("saveDeck", ({ name, commanders, library }) => {
-    if (!players[socket.id]) return;
     name = (name || "").toString().trim().slice(0, 40);
     if (!name) return;
     const cmds = Array.isArray(commanders) ? commanders.slice(0, 2).map((c) => (c ? toEntry(c) : null)) : [];
@@ -899,25 +994,26 @@ io.on("connection", (socket) => {
   });
 
   socket.on("loadDeck", (name) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     const deck = decks[username] && decks[username][name];
     if (!deck) { socket.emit("importResult", { success: false, error: "Deck not found." }); return; }
     if (typeof deck === "string") {
-      resolveAndSetLibrary(socket, p, deck); // legacy raw-text save, no separate commander
+      resolveAndSetLibrary(lobby, socket, p, deck); // legacy raw-text save, no separate commander
       return;
     }
     p.library = (deck.library || []).map((c) => ({ ...c }));
     shuffle(p.library);
     applyCommandersToPlayer(p, deck.commanders);
-    broadcastPlayers();
+    broadcastPlayers(lobby);
     const cmdCount = (deck.commanders || []).filter(Boolean).length;
     socket.emit("importResult", { success: true, requested: p.library.length, found: p.library.length });
-    pushLog(`${p.name} loaded deck "${name}" (${p.library.length} cards${cmdCount ? ` + ${cmdCount} commander${cmdCount > 1 ? "s" : ""}` : ""})`);
+    pushLog(lobby, `${p.name} loaded deck "${name}" (${p.library.length} cards${cmdCount ? ` + ${cmdCount} commander${cmdCount > 1 ? "s" : ""}` : ""})`);
   });
 
   // Resolves a pasted decklist to full card data for the deck editor, without touching the
   // live game — the editor decides what to do with the result (add to its working library).
+  // Not lobby-scoped — the editor works whether or not you're at a table.
   socket.on("resolveDeckPaste", async (text) => {
     try {
       const wanted = parseDecklistNames(text, 99);
@@ -937,44 +1033,44 @@ io.on("connection", (socket) => {
 
   // Applies an in-progress editor draft directly to the live game, without requiring a save first.
   socket.on("loadDeckDraft", ({ commanders, library }) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     p.library = (Array.isArray(library) ? library : []).slice(0, 99).map((c) => toEntry(c));
     shuffle(p.library);
     applyCommandersToPlayer(p, commanders);
-    broadcastPlayers();
-    pushLog(`${p.name} loaded a deck draft into the game`);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} loaded a deck draft into the game`);
   });
 
   // ---- commander zone ----
 
   socket.on("setCommander", (data) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     setCommanderFromData(p, data.slot, data);
-    broadcastPlayers();
-    pushLog(`${p.name} set their commander: ${data.name}`);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} set their commander: ${data.name}`);
   });
 
   socket.on("clearCommander", (slot) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || slot < 0 || slot > 1) return;
     p.commanders[slot] = null;
-    broadcastPlayers();
+    broadcastPlayers(lobby);
   });
 
   socket.on("commanderTax", ({ slot, delta }) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !p.commanders[slot]) return;
     p.commanders[slot].tax = Math.max(0, p.commanders[slot].tax + delta);
-    broadcastPlayers();
+    broadcastPlayers(lobby);
   });
 
   socket.on("castCommander", (slot) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !p.commanders[slot]) return;
     const cmd = p.commanders[slot];
-    if (cmd.battlefieldId && cards[cmd.battlefieldId]) {
+    if (cmd.battlefieldId && lobby.cards[cmd.battlefieldId]) {
       socket.emit("actionError", `${cmd.name} is already on the battlefield.`);
       return;
     }
@@ -986,135 +1082,143 @@ io.on("connection", (socket) => {
       return;
     }
     p.mana = remaining;
-    const card = spawnBattlefieldCard({ ...cmd, owner: socket.id, faceDown: false, zoneType: classifyType(cmd.type), isCommander: true });
+    const card = spawnBattlefieldCard(lobby, { ...cmd, owner: socket.id, faceDown: false, zoneType: classifyType(cmd.type), isCommander: true });
     cmd.battlefieldId = card.id;
     cmd.tax += 2;
-    broadcastPlayers();
-    pushLog(`${p.name} cast their commander: ${cmd.name} (tax now ${cmd.tax})`);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} cast their commander: ${cmd.name} (tax now ${cmd.tax})`);
   });
 
   // ---- turn structure ----
 
   socket.on("startGame", () => {
-    turn.order = Object.keys(players);
-    turn.activeIndex = 0;
-    turn.phase = "Main 1";
-    turn.turnNumber = 1;
-    turn.started = true;
-    combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
-    for (const pid in players) {
-      players[pid].mana = EMPTY_MANA();
-      players[pid].landsPlayedThisTurn = 0;
+    const lobby = currentLobby(); if (!lobby) return;
+    lobby.turn.order = Object.keys(lobby.players);
+    lobby.turn.activeIndex = 0;
+    lobby.turn.phase = "Main 1";
+    lobby.turn.turnNumber = 1;
+    lobby.turn.started = true;
+    lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+    for (const pid in lobby.players) {
+      lobby.players[pid].mana = EMPTY_MANA();
+      lobby.players[pid].landsPlayedThisTurn = 0;
     }
-    broadcastTurn();
-    broadcastCombat();
-    broadcastPlayers();
-    pushLog(`Game started! Turn order: ${turn.order.map((id) => (players[id] ? players[id].name : "?")).join(" → ")}`);
+    broadcastTurn(lobby);
+    broadcastCombat(lobby);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `Game started! Turn order: ${lobby.turn.order.map((id) => (lobby.players[id] ? lobby.players[id].name : "?")).join(" → ")}`);
   });
 
   socket.on("nextPhase", () => {
-    if (!turn.started) return;
-    if (turn.order[turn.activeIndex] !== socket.id) return;
-    advancePhase();
+    const lobby = currentLobby(); if (!lobby) return;
+    if (!lobby.turn.started) return;
+    if (lobby.turn.order[lobby.turn.activeIndex] !== socket.id) return;
+    advancePhase(lobby);
   });
 
   // ---- combat ----
 
   socket.on("declareAttackers", (assignments) => {
-    if (!turn.started || turn.order[turn.activeIndex] !== socket.id) return;
-    if (combat.step !== "declareAttackers") return;
+    const lobby = currentLobby(); if (!lobby) return;
+    if (!lobby.turn.started || lobby.turn.order[lobby.turn.activeIndex] !== socket.id) return;
+    if (lobby.combat.step !== "declareAttackers") return;
     const validAttackers = {};
     const defendersSet = new Set();
     for (const [cardId, defenderId] of Object.entries(assignments || {})) {
-      const card = cards[cardId];
+      const card = lobby.cards[cardId];
       if (!card || card.owner !== socket.id || card.zoneType !== "creature" || card.tapped) continue;
-      if (!players[defenderId] || defenderId === socket.id) continue;
+      if (!lobby.players[defenderId] || defenderId === socket.id) continue;
       validAttackers[cardId] = defenderId;
       defendersSet.add(defenderId);
       card.tapped = true;
-      broadcastCard(card);
+      broadcastCard(lobby, card);
     }
-    combat.attackers = validAttackers;
-    combat.blocks = {};
-    combat.defendersPending = Array.from(defendersSet);
-    combat.step = defendersSet.size > 0 ? "declareBlockers" : "damage";
-    broadcastCombat();
-    const activeName = players[socket.id] ? players[socket.id].name : "?";
-    pushLog(`${activeName} declared ${Object.keys(validAttackers).length} attacker(s)`);
-    if (combat.step === "damage") resolveCombatDamage();
+    lobby.combat.attackers = validAttackers;
+    lobby.combat.blocks = {};
+    lobby.combat.defendersPending = Array.from(defendersSet);
+    lobby.combat.step = defendersSet.size > 0 ? "declareBlockers" : "damage";
+    broadcastCombat(lobby);
+    const activeName = lobby.players[socket.id] ? lobby.players[socket.id].name : "?";
+    pushLog(lobby, `${activeName} declared ${Object.keys(validAttackers).length} attacker(s)`);
+    if (lobby.combat.step === "damage") resolveCombatDamage(lobby);
   });
 
   socket.on("declareBlockers", (assignments) => {
-    if (combat.step !== "declareBlockers") return;
-    if (!combat.defendersPending.includes(socket.id)) return;
-    const usedBlockers = new Set(Object.values(combat.blocks).filter(Boolean));
+    const lobby = currentLobby(); if (!lobby) return;
+    if (lobby.combat.step !== "declareBlockers") return;
+    if (!lobby.combat.defendersPending.includes(socket.id)) return;
+    const usedBlockers = new Set(Object.values(lobby.combat.blocks).filter(Boolean));
     for (const [attackerId, blockerId] of Object.entries(assignments || {})) {
-      if (combat.attackers[attackerId] !== socket.id) continue;
+      if (lobby.combat.attackers[attackerId] !== socket.id) continue;
       if (blockerId) {
         if (usedBlockers.has(blockerId)) continue;
-        const blockerCard = cards[blockerId];
+        const blockerCard = lobby.cards[blockerId];
         if (!blockerCard || blockerCard.owner !== socket.id || blockerCard.zoneType !== "creature" || blockerCard.tapped) continue;
-        combat.blocks[attackerId] = blockerId;
+        lobby.combat.blocks[attackerId] = blockerId;
         usedBlockers.add(blockerId);
       } else {
-        combat.blocks[attackerId] = null;
+        lobby.combat.blocks[attackerId] = null;
       }
     }
-    combat.defendersPending = combat.defendersPending.filter((id) => id !== socket.id);
-    broadcastCombat();
-    const p = players[socket.id];
-    pushLog(`${p ? p.name : "?"} declared blockers`);
-    if (combat.defendersPending.length === 0) {
-      combat.step = "damage";
-      broadcastCombat();
-      resolveCombatDamage();
+    lobby.combat.defendersPending = lobby.combat.defendersPending.filter((id) => id !== socket.id);
+    broadcastCombat(lobby);
+    const p = lobby.players[socket.id];
+    pushLog(lobby, `${p ? p.name : "?"} declared blockers`);
+    if (lobby.combat.defendersPending.length === 0) {
+      lobby.combat.step = "damage";
+      broadcastCombat(lobby);
+      resolveCombatDamage(lobby);
     }
   });
 
   // ---- chat ----
 
   socket.on("chatMessage", (text) => {
-    const p = players[socket.id];
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !text) return;
     const msg = { name: p.name, color: p.color, text: String(text).slice(0, 500), ts: Date.now() };
-    chatLog.push(msg);
-    if (chatLog.length > 200) chatLog.shift();
-    io.emit("chatMessage", msg);
+    lobby.chatLog.push(msg);
+    if (lobby.chatLog.length > 200) lobby.chatLog.shift();
+    io.to(lobby.id).emit("chatMessage", msg);
   });
 
-  // ---- voice signaling (WebRTC mesh; server only relays) ----
+  // ---- voice signaling (WebRTC mesh; server only relays, scoped to the lobby) ----
 
   socket.on("voiceJoin", () => {
-    voiceParticipants.forEach((existingId) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    lobby.voiceParticipants.forEach((existingId) => {
       socket.emit("voiceShouldOffer", { toId: existingId });
     });
-    voiceParticipants.add(socket.id);
-    broadcastVoiceRoster();
+    lobby.voiceParticipants.add(socket.id);
+    broadcastVoiceRoster(lobby);
   });
 
   socket.on("voiceLeave", () => {
-    voiceParticipants.delete(socket.id);
-    broadcastVoiceRoster();
+    const lobby = currentLobby(); if (!lobby) return;
+    lobby.voiceParticipants.delete(socket.id);
+    broadcastVoiceRoster(lobby);
   });
 
   socket.on("voiceSignal", ({ toId, data }) => {
+    const lobby = currentLobby(); if (!lobby) return;
     const target = io.sockets.sockets.get(toId);
-    if (target) target.emit("voiceSignal", { fromId: socket.id, data });
+    if (target && target.data.lobbyId === lobby.id) target.emit("voiceSignal", { fromId: socket.id, data });
   });
 
   // ---- misc ----
 
-  socket.on("log", (msg) => pushLog(msg));
+  socket.on("log", (msg) => { const lobby = currentLobby(); if (lobby) pushLog(lobby, msg); });
 
   socket.on("clearBoard", () => {
-    for (const id in cards) {
-      const c = cards[id];
-      if (players[c.owner]) players[c.owner].library.push(toEntry(c));
+    const lobby = currentLobby(); if (!lobby) return;
+    for (const id in lobby.cards) {
+      const c = lobby.cards[id];
+      if (lobby.players[c.owner]) lobby.players[c.owner].library.push(toEntry(c));
     }
-    cards = {};
-    targets = {};
-    for (const pid in players) {
-      const p = players[pid];
+    lobby.cards = {};
+    lobby.targets = {};
+    for (const pid in lobby.players) {
+      const p = lobby.players[pid];
       p.graveyard.forEach((e) => p.library.push(e));
       p.exile.forEach((e) => p.library.push(e));
       p.graveyard = [];
@@ -1128,29 +1232,19 @@ io.on("connection", (socket) => {
       p.landsPlayedThisTurn = 0;
       p.landDropBonus = 0;
     }
-    gameState.log = [];
-    turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 };
-    combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
-    io.emit("cleared");
-    broadcastPlayers();
-    broadcastTargets();
-    broadcastTurn();
-    broadcastCombat();
+    lobby.gameState.log = [];
+    lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 };
+    lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+    io.to(lobby.id).emit("cleared");
+    broadcastPlayers(lobby);
+    broadcastTargets(lobby);
+    broadcastTurn(lobby);
+    broadcastCombat(lobby);
   });
 
   socket.on("disconnect", () => {
-    delete players[socket.id];
-    voiceParticipants.delete(socket.id);
-    broadcastVoiceRoster();
-    const idx = turn.order.indexOf(socket.id);
-    if (idx !== -1) {
-      turn.order.splice(idx, 1);
-      if (turn.order.length === 0) turn.started = false;
-      else if (idx < turn.activeIndex) turn.activeIndex--;
-      else if (turn.activeIndex >= turn.order.length) turn.activeIndex = 0;
-      broadcastTurn();
-    }
-    broadcastPlayers();
+    const lobby = currentLobby();
+    if (lobby) leaveLobbyInternal(lobby, "disconnected from");
   });
 });
 
