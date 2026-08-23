@@ -15,6 +15,15 @@ Portainer will clone the repo and build the image from the included `Dockerfile`
 
 Game/account data (users, saved decks, and an archive of every card looked up — cost, mana value, power/toughness, oracle text, keywords, etc.) persists in the `mtg_data` named volume across restarts and redeploys, independent of the code itself.
 
+## Voice chat across networks (TURN relay)
+
+Voice chat is peer-to-peer WebRTC. With just public STUN (the default), two players can only connect directly, which fails whenever a router's NAT gets in the way — this is why voice chat doesn't work for anyone outside your own network. The stack includes a self-hosted `coturn` relay to fix that, but it needs two things set before it'll actually work:
+
+1. **Environment variables** on the stack (Portainer will prompt for these since they're required, no defaults): `TURN_EXTERNAL_IP` (your server's public IP or a hostname that resolves to it) and `TURN_PASSWORD` (anything — it's just for the relay, not a user account). `TURN_USERNAME` defaults to `commanderpod` if you don't set it.
+2. **Port forwarding on your router**, forwarded to whatever machine runs the stack: **UDP/TCP 3478** (the TURN server itself) and **UDP 49160–49200** (the relay's dynamically-allocated media ports). This is a real caveat if you're using a Cloudflare Tunnel to expose the app itself: a plain Cloudflare Tunnel proxies HTTP(S), not arbitrary UDP, so TURN traffic needs to reach your network directly through your router — it can't ride along through the tunnel the way the web app does.
+
+If those aren't set, voice chat still works fine for players on the same network, and silently falls back to same-network-only otherwise (no error, it just won't connect).
+
 ## Local development
 
 ```
