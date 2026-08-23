@@ -83,6 +83,7 @@ function createLobbyState(id, name, hostUsername, password) {
     targets: {},      // cardId -> [playerId, ...]
     gameState: { log: [] },
     chatLog: [],
+    spectators: {}, // socket.id -> { username, name } -- watch-only, never touches lobby.players
     voiceParticipants: new Set(),
     turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null },
     combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] }
@@ -90,9 +91,11 @@ function createLobbyState(id, name, hostUsername, password) {
 }
 function lobbySummaries() {
   return Object.values(lobbies).map((l) => ({
-    id: l.id, name: l.name, playerCount: Object.keys(l.players).length, started: l.turn.started, locked: !!l.passwordHash
+    id: l.id, name: l.name, playerCount: Object.keys(l.players).length, spectatorCount: Object.keys(l.spectators || {}).length,
+    started: l.turn.started, locked: !!l.passwordHash
   }));
 }
+function broadcastSpectators(lobby) { io.to(lobby.id).emit("spectatorRoster", Object.values(lobby.spectators).map((s) => s.name)); }
 function broadcastLobbyList() { io.emit("lobbyList", lobbySummaries()); }
 function lobbySocketIds(lobby) { return io.sockets.adapter.rooms.get(lobby.id) || new Set(); }
 
@@ -146,7 +149,7 @@ function removePlayerFromLobby(lobby, socketId, verb) {
     else if (idx < turn.activeIndex) turn.activeIndex--;
     else if (turn.activeIndex >= turn.order.length) turn.activeIndex = 0;
   }
-  if (Object.keys(lobby.players).length === 0) {
+  if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators || {}).length === 0) {
     delete lobbies[lobby.id];
   } else {
     broadcastVoiceRoster(lobby);
@@ -210,6 +213,8 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
+    spectatorRoster: Object.values(lobby.spectators).map((s) => s.name),
+    spectator: !!lobby.spectators[socketId],
     myId: socketId
   };
 }
@@ -824,15 +829,38 @@ io.on("connection", (socket) => {
     pushLog(lobby, `${username} joined the table`);
   }
 
-  // Defense in depth: if this socket is somehow still marked as seated somewhere (a desync bug,
-  // a stale reattach, anything) leave it first instead of silently refusing to create/join a new
-  // table — a main-menu action should never be able to permanently strand a player with no way
-  // out and no way to clean up the table they're stuck in.
+  // Watch-only join: never touches lobby.players, so every action handler's existing
+  // `if (!p) return` guard already blocks a spectator from acting for free.
+  function joinSpectatorInternal(lobby) {
+    socket.data.lobbyId = lobby.id;
+    socket.join(lobby.id);
+    lobby.spectators[socket.id] = { username, name: username };
+    socket.emit("lobbyJoined", buildLobbyJoinedPayload(lobby, socket.id));
+    broadcastSpectators(lobby);
+    broadcastLobbyList();
+    pushLog(lobby, `${username} started spectating`);
+  }
+
+  // Defense in depth: if this socket is somehow still marked as seated (or spectating) somewhere
+  // (a desync bug, a stale reattach, anything) leave it first instead of silently refusing to
+  // create/join a new table — a main-menu action should never be able to permanently strand a
+  // player with no way out and no way to clean up the table they're stuck in.
   function leaveCurrentLobbyIfAny() {
     const lobby = currentLobby();
     if (!lobby) return;
     socket.leave(lobby.id);
     socket.data.lobbyId = null;
+    if (lobby.spectators[socket.id]) {
+      delete lobby.spectators[socket.id];
+      if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators).length === 0) {
+        delete lobbies[lobby.id];
+      } else {
+        broadcastSpectators(lobby);
+        pushLog(lobby, `${username} stopped spectating`);
+      }
+      broadcastLobbyList();
+      return;
+    }
     removePlayerFromLobby(lobby, socket.id, "left");
   }
 
@@ -859,6 +887,20 @@ io.on("connection", (socket) => {
     }
     leaveCurrentLobbyIfAny();
     joinLobbyInternal(lobby);
+  });
+
+  socket.on("spectateLobby", (data) => {
+    const id = typeof data === "string" ? data : (data && data.id);
+    const password = (typeof data === "object" && data && data.password) || "";
+    if (socket.data.lobbyId === id) return;
+    const lobby = lobbies[id];
+    if (!lobby) { socket.emit("actionError", "That table no longer exists."); socket.emit("lobbyList", lobbySummaries()); return; }
+    if (lobby.passwordHash && !verifyPassword(password.toString(), lobby.passwordSalt, lobby.passwordHash)) {
+      socket.emit("actionError", "Wrong password for that table.");
+      return;
+    }
+    leaveCurrentLobbyIfAny();
+    joinSpectatorInternal(lobby);
   });
 
   socket.on("leaveLobby", leaveCurrentLobbyIfAny);
@@ -1318,7 +1360,7 @@ io.on("connection", (socket) => {
   // ---- turn structure ----
 
   socket.on("startGame", () => {
-    const lobby = currentLobby(); if (!lobby) return;
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
     // Pregame dice roll decides turn order — everyone rolls a d20, highest goes first, ties
     // broken randomly, and the log shows every roll so it's not just a silent shuffle.
     const rolls = Object.keys(lobby.players).map((sid) => ({ sid, roll: randInt(20) + 1, tiebreak: Math.random() }));
@@ -1440,9 +1482,13 @@ io.on("connection", (socket) => {
   // ---- chat ----
 
   socket.on("chatMessage", (text) => {
-    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
-    if (!p || !text) return;
-    const msg = { name: p.name, color: p.color, text: String(text).slice(0, 500), ts: Date.now() };
+    const lobby = currentLobby(); if (!lobby || !text) return;
+    const p = lobby.players[socket.id];
+    const spectating = lobby.spectators[socket.id];
+    if (!p && !spectating) return;
+    const msg = p
+      ? { name: p.name, color: p.color, text: String(text).slice(0, 500), ts: Date.now() }
+      : { name: `${username} (spectator)`, color: "#8a7a55", text: String(text).slice(0, 500), ts: Date.now() };
     lobby.chatLog.push(msg);
     if (lobby.chatLog.length > 200) lobby.chatLog.shift();
     io.to(lobby.id).emit("chatMessage", msg);
@@ -1476,7 +1522,7 @@ io.on("connection", (socket) => {
   socket.on("log", (msg) => { const lobby = currentLobby(); if (lobby) pushLog(lobby, msg); });
 
   socket.on("clearBoard", () => {
-    const lobby = currentLobby(); if (!lobby) return;
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
     for (const id in lobby.cards) {
       const c = lobby.cards[id];
       if (lobby.players[c.owner]) lobby.players[c.owner].library.push(toEntry(c));
@@ -1511,6 +1557,18 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     const lobby = currentLobby();
     if (!lobby) return;
+    if (lobby.spectators[socket.id]) {
+      // Spectators hold no game state worth preserving -- just drop the watch slot immediately
+      // instead of running the reconnect-grace machinery built for seated players.
+      delete lobby.spectators[socket.id];
+      if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators).length === 0) {
+        delete lobbies[lobby.id];
+      } else {
+        broadcastSpectators(lobby);
+      }
+      broadcastLobbyList();
+      return;
+    }
     const p = lobby.players[socket.id];
     if (!p) return;
     p.disconnectedAt = Date.now();
