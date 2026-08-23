@@ -19,7 +19,10 @@ Game/account data (users, saved decks) persists in the `mtg_data` named volume a
 
 ```
 npm install
+mkdir public && cp index.html public/index.html
 node server.js
 ```
+
+The `mkdir`/`cp` step matches what the `Dockerfile` does at build time — `server.js` serves static files from `./public`, so without it `index.html` won't be found and the app will 404 at `/`.
 
 Serves on port 8087.
