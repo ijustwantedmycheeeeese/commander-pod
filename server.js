@@ -1008,6 +1008,13 @@ io.on("connection", (socket) => {
       if (!result.ok) { socket.emit("actionError", result.error); return; }
       card.zoneType = zoneType;
       card.faceDown = false;
+      // A card sitting in hand was stamped with whatever turn it was drawn on (or 0, pregame) --
+      // that's stale the moment it actually enters the battlefield, which is what summoning
+      // sickness needs to key off. Same story for entersTapped: spawnBattlefieldCard already
+      // applies it for cards created straight onto the battlefield, but a card played from hand
+      // never goes through that function again, so it was silently skipped.
+      card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+      if (entersTapped(card)) card.tapped = true;
       broadcastCard(lobby, card);
       broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
@@ -1033,6 +1040,8 @@ io.on("connection", (socket) => {
     if (!result.ok) { socket.emit("actionError", result.error); return; }
     card.zoneType = targetZoneType;
     card.faceDown = false;
+    card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+    if (entersTapped(card)) card.tapped = true;
     broadcastCard(lobby, card);
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
@@ -1041,7 +1050,7 @@ io.on("connection", (socket) => {
   socket.on("tap", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
-    if (!card || card.owner !== socket.id) return;
+    if (!card || card.owner !== socket.id || card.zoneType === "hand") return;
     // One-way now: this only ever taps. Real Magic has no "double-click to untap at will" —
     // untapping only happens automatically each Untap step (or via Untap All for effects that
     // untap things). Letting a player freely toggle back and forth on the same land was a way to
@@ -1085,7 +1094,9 @@ io.on("connection", (socket) => {
   socket.on("flip", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
-    if (!card || card.owner !== socket.id) return;
+    // Hand cards are already always faceDown for non-owners via maskCard; flipping one to
+    // faceDown:false would leak its identity to every other player at the table.
+    if (!card || card.owner !== socket.id || card.zoneType === "hand") return;
     card.faceDown = !card.faceDown;
     broadcastCard(lobby, card);
     const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
@@ -1095,7 +1106,7 @@ io.on("connection", (socket) => {
   socket.on("counter", ({ id, delta }) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
-    if (!card || card.owner !== socket.id) return;
+    if (!card || card.owner !== socket.id || card.zoneType === "hand") return;
     card.counters = (card.counters || 0) + delta;
     broadcastCard(lobby, card);
   });

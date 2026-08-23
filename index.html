@@ -1685,6 +1685,9 @@
         if (action === "target") { el.style.display = "block"; return; }
         if (action === "play") { el.style.display = (isMine && card.zoneType === "hand") ? "block" : "none"; return; }
         if (action === "toHand") { el.style.display = (isMine && card.zoneType !== "hand") ? "block" : "none"; return; }
+        // Tap/flip/counters only make sense for a card that's actually on the battlefield --
+        // a card still in hand isn't a permanent yet, so these shouldn't apply to it.
+        if (["tap", "flip", "counterUp", "counterDown"].includes(action)) { el.style.display = (isMine && card.zoneType !== "hand") ? "block" : "none"; return; }
         el.style.display = isMine ? "block" : "none";
       });
     }
