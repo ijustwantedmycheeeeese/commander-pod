@@ -70,6 +70,7 @@
     .card img { width: 100%; height: 120px; object-fit: cover; pointer-events: none; display: block; }
     .card .card-label { font-size: 10px; padding: 2px 4px; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .card.tapped { transform: rotate(90deg); }
+    .card.summoning-sick:not(.tapped) { transform: rotate(8deg); }
     .card.dragging { transition: none; z-index: 60; }
     .card.face-down-mine { box-shadow: 0 0 0 2px #f59e0b inset; }
     .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
@@ -166,6 +167,9 @@
       <div class="mm-section">
         <div class="flex-row">
           <input type="text" id="lobby-name-input" placeholder="Table name (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
+        </div>
+        <div class="flex-row" style="margin-top:6px;">
+          <input type="password" id="lobby-password-input" placeholder="Password (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
           <button class="mini-btn" onclick="createLobby()">Create Table</button>
         </div>
       </div>
@@ -367,14 +371,15 @@
       <div class="modal-box">
         <h2>How to Play</h2>
         <ul>
-          <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>Leave Table</strong> in the top bar returns to the menu and frees your seat.</li>
+          <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named, optionally password-protected — 🔒 in the list means it needs one) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>Leave Table</strong> in the top bar returns to the menu and frees your seat.</li>
           <li>The <strong>Deck Editor</strong> (Main Menu or top bar) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too.</li>
           <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
           <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly. Dragging a permanent back into the Hand row does nothing on purpose — there's no general rule that lets you just pick a permanent back up. To represent a bounce effect, right-click the permanent and choose <strong>Return to Hand</strong> instead.</li>
           <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more). Once the game has started, lands and anything else that isn't an Instant (or doesn't have Flash) can only be played on your own turn, during a main phase — Instants and Flash cards can go anytime.</li>
           <li>Playing anything else checks your <strong>mana pool</strong> against the card's real cost — you need the mana or it won't go through. This includes <strong>casting your Commander</strong> from its zone: it costs its real mana cost plus the current commander tax shown there, and it's disabled while a copy of it is already on the battlefield.</li>
-          <li>Tap a <strong>basic land</strong>, or any nonbasic land archived with exactly one fixed color (shocklands, painlands, snow duals, etc.), to auto-add its color to your pool. Lands with a color choice (Command Tower, gates, tri-lands) and other mana sources (rocks, dorks) need the manual +/− buttons in the Mana Pool panel — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules. A land with "enters the battlefield tapped" in its unconditional text (not shocklands/checklands, which involve a real choice) now actually enters tapped.</li>
+          <li>Tap a <strong>basic land</strong>, or any land/rock/dork archived with exactly one fixed color, to auto-add its color to your pool. A source that can produce more than one color (Command Tower, most signets/talismans, City of Brass) prompts you to pick instead of guessing or staying fully manual. The manual +/− buttons in the Mana Pool panel are still there for anything else — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules. A land with "enters the battlefield tapped" in its unconditional text (not shocklands/checklands, which involve a real choice) now actually enters tapped.</li>
           <li><strong>Double-click</strong> your own card to tap it (using it, e.g. for mana) — this only ever taps, since there's no real rule that lets you freely untap something at will; untapping only happens automatically each Untap step, or via <strong>Untap All</strong> for effects that untap things. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
+          <li>A creature has <strong>summoning sickness</strong> (shown tilted) until it's been under your control since the start of your most recent turn — it can still block, just not attack, unless it has Haste.</li>
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase, stepping through Untap (auto-untaps + resets land drops) → Upkeep → Draw (auto-draws, skipped turn 1 for the starting player) → Main 1 → Combat → Main 2 → End Step.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
@@ -396,6 +401,13 @@
           <button class="secondary" onclick="closeBugReportModal()">Close</button>
           <button onclick="copyBugReport()">Copy to Clipboard</button>
         </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="mana-choice-modal">
+      <div class="modal-box" style="max-width:340px;text-align:center;">
+        <h2 id="mana-choice-title">Choose a color</h2>
+        <div id="mana-choice-options" class="flex-row" style="justify-content:center;flex-wrap:wrap;margin-top:10px;"></div>
       </div>
     </div>
   </div>
@@ -463,9 +475,18 @@
 
     function createLobby() {
       const name = document.getElementById("lobby-name-input").value.trim();
-      socket.emit("createLobby", name);
+      const password = document.getElementById("lobby-password-input").value;
+      socket.emit("createLobby", { name, password });
+      document.getElementById("lobby-password-input").value = "";
     }
-    function joinLobby(id) { socket.emit("joinLobby", id); }
+    function joinLobby(id, locked) {
+      let password = "";
+      if (locked) {
+        password = prompt("This table is password-protected. Enter the password:");
+        if (password === null) return;
+      }
+      socket.emit("joinLobby", { id, password });
+    }
 
     function showMainMenu() {
       leaveVoice();
@@ -484,9 +505,9 @@
       }
       el.innerHTML = list.map((l) => `
         <div class="lobby-row">
-          <span class="lobby-name">${escapeHtml(l.name)}</span>
+          <span class="lobby-name">${l.locked ? "🔒 " : ""}${escapeHtml(l.name)}</span>
           <span class="lobby-count">${l.playerCount} player${l.playerCount === 1 ? "" : "s"}${l.started ? " · in progress" : ""}</span>
-          <button class="mini-btn" onclick="joinLobby('${l.id}')">Join</button>
+          <button class="mini-btn" onclick="joinLobby('${l.id}', ${!!l.locked})">Join</button>
         </div>`).join("");
     }
 
@@ -905,6 +926,23 @@
     function setZoom(val) { playmat.style.transform = `scale(${val / 100})`; }
     function addMana(c) { socket.emit("addMana", c); }
     function removeMana(c) { socket.emit("removeMana", c); }
+
+    // A tapped source with more than one possible color (Command Tower, most signets/talismans,
+    // City of Brass, some mana dorks) prompts instead of silently guessing.
+    let pendingManaChoiceCardId = null;
+    socket.on("chooseMana", (data) => {
+      pendingManaChoiceCardId = data.cardId;
+      document.getElementById("mana-choice-title").innerText = `${data.cardName || "That"} — choose a color`;
+      document.getElementById("mana-choice-options").innerHTML = data.options.map((c) =>
+        `<button class="mini-btn" style="padding:10px 14px;" onclick="resolveManaChoice('${c}')">${manaPip(c, c)}</button>`
+      ).join("");
+      document.getElementById("mana-choice-modal").style.display = "flex";
+    });
+    function resolveManaChoice(color) {
+      if (pendingManaChoiceCardId) socket.emit("resolveManaChoice", { cardId: pendingManaChoiceCardId, color });
+      pendingManaChoiceCardId = null;
+      document.getElementById("mana-choice-modal").style.display = "none";
+    }
     function landDropBonus(delta) { socket.emit("landDropBonus", delta); }
 
     // ---------------- turn / opening hand ----------------
@@ -1204,7 +1242,11 @@
 
     let localStream = null;
     let peerConnections = {};
-    const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+    // STUN-only default; if the server has a TURN relay configured (see docker-compose.yml),
+    // this gets replaced before voice chat is ever used — that's what makes cross-network voice
+    // work instead of only connecting players on the same network.
+    let ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+    fetch("/api/iceServers").then((r) => r.json()).then((data) => { if (data.iceServers) ICE_SERVERS = data.iceServers; }).catch(() => {});
 
     async function joinVoice() {
       try {
@@ -1427,6 +1469,9 @@
       div.ondragstart = () => false;
 
       div.classList.toggle("tapped", !!card.tapped);
+      const hasHaste = Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "haste");
+      const isSick = card.zoneType === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber && !hasHaste;
+      div.classList.toggle("summoning-sick", isSick);
       const isMasked = card.faceDown && card.owner !== myId;
       const isMineFaceDown = card.faceDown && card.owner === myId;
       div.classList.toggle("face-down-mine", isMineFaceDown);

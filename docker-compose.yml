@@ -8,6 +8,33 @@ services:
       - mtg_data:/app/data
     ports:
       - "8087:8087"
+    environment:
+      - TURN_URL=turn:${TURN_EXTERNAL_IP:?set this to your server's public IP or hostname}:3478
+      - TURN_USERNAME=${TURN_USERNAME:-commanderpod}
+      - TURN_PASSWORD=${TURN_PASSWORD:?set a password for the TURN relay — used by voice chat only}
+    restart: unless-stopped
+
+  # Relays voice chat between players who aren't on the same network — without this, WebRTC can
+  # only connect two players directly, which fails whenever a home router's NAT gets in the way
+  # (this is why voice chat doesn't work for people outside your own network). Runs with host
+  # networking, which is coturn's standard Docker deployment — its relay ports are allocated
+  # dynamically from min-port..max-port, which doesn't play well with Docker's normal port mapping.
+  # See the README for the router port-forwarding this actually requires to work through a tunnel.
+  coturn:
+    image: coturn/coturn:latest
+    container_name: mtg_coturn
+    network_mode: host
+    command: >
+      -n
+      --listening-port=3478
+      --min-port=49160
+      --max-port=49200
+      --realm=commanderpod
+      --user=${TURN_USERNAME:-commanderpod}:${TURN_PASSWORD:?set a password for the TURN relay — used by voice chat only}
+      --external-ip=${TURN_EXTERNAL_IP:?set this to your server's public IP or hostname}
+      --no-cli
+      --no-tls
+      --no-dtls
     restart: unless-stopped
 
 volumes:

@@ -68,9 +68,15 @@ function newLobbyId() { return crypto.randomBytes(4).toString("hex"); }
 const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End Step"];
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
 
-function createLobbyState(id, name, hostUsername) {
+function createLobbyState(id, name, hostUsername, password) {
+  let passwordSalt = null, passwordHash = null;
+  if (password) {
+    passwordSalt = crypto.randomBytes(16).toString("hex");
+    passwordHash = hashPassword(password, passwordSalt);
+  }
   return {
     id, name, hostUsername,
+    passwordSalt, passwordHash,
     createdAt: Date.now(),
     cards: {},        // battlefield/hand cards, keyed by id
     players: {},      // socket.id -> player state
@@ -84,7 +90,7 @@ function createLobbyState(id, name, hostUsername) {
 }
 function lobbySummaries() {
   return Object.values(lobbies).map((l) => ({
-    id: l.id, name: l.name, playerCount: Object.keys(l.players).length, started: l.turn.started
+    id: l.id, name: l.name, playerCount: Object.keys(l.players).length, started: l.turn.started, locked: !!l.passwordHash
   }));
 }
 function broadcastLobbyList() { io.emit("lobbyList", lobbySummaries()); }
@@ -422,7 +428,11 @@ function spawnBattlefieldCard(lobby, data) {
     tapped: resolvedZoneType !== "hand" && entersTapped(data),
     faceDown: !!faceDown, counters: 0,
     owner, ownerColor: p ? p.color : "#999",
-    isCommander: !!isCommander
+    isCommander: !!isCommander,
+    // Summoning sickness: stamped with the turn number it entered the battlefield. A creature is
+    // sick (can't attack, can still block) if this still matches the CURRENT turn number when its
+    // controller tries to attack with it — irrelevant for non-creatures, but harmless to set.
+    controllerSince: lobby.turn.started ? lobby.turn.turnNumber : 0
   };
   lobby.cards[id] = card;
   broadcastCard(lobby, card);
@@ -719,6 +729,18 @@ app.get("/api/autocomplete", async (req, res) => {
   }
 });
 
+// WebRTC ICE server config for voice chat. Public STUN alone only lets two players connect
+// directly, which fails whenever a router's NAT gets in the way — a self-hosted TURN relay
+// (see docker-compose.yml's coturn service) is what makes cross-network voice chat actually work.
+// Falls back to STUN-only if TURN env vars aren't configured.
+app.get("/api/iceServers", (req, res) => {
+  const servers = [{ urls: "stun:stun.l.google.com:19302" }];
+  if (process.env.TURN_URL) {
+    servers.push({ urls: process.env.TURN_URL, username: process.env.TURN_USERNAME || undefined, credential: process.env.TURN_PASSWORD || undefined });
+  }
+  res.json({ iceServers: servers });
+});
+
 // ---------------- Socket.IO ----------------
 
 io.on("connection", (socket) => {
@@ -797,20 +819,28 @@ io.on("connection", (socket) => {
     removePlayerFromLobby(lobby, socket.id, "left");
   }
 
-  socket.on("createLobby", (name) => {
+  socket.on("createLobby", (data) => {
+    const name = typeof data === "string" ? data : (data && data.name);
+    const password = (typeof data === "object" && data && data.password) || "";
     leaveCurrentLobbyIfAny();
     const id = newLobbyId();
     const lobbyName = (name || "").toString().trim().slice(0, 40) || `${username}'s table`;
-    const lobby = createLobbyState(id, lobbyName, username);
+    const lobby = createLobbyState(id, lobbyName, username, password.toString().slice(0, 100));
     lobbies[id] = lobby;
     joinLobbyInternal(lobby);
   });
 
-  socket.on("joinLobby", (id) => {
+  socket.on("joinLobby", (data) => {
+    const id = typeof data === "string" ? data : (data && data.id);
+    const password = (typeof data === "object" && data && data.password) || "";
     if (socket.data.lobbyId === id) return; // already there — no-op, not a stale desync
-    leaveCurrentLobbyIfAny();
     const lobby = lobbies[id];
     if (!lobby) { socket.emit("actionError", "That table no longer exists."); socket.emit("lobbyList", lobbySummaries()); return; }
+    if (lobby.passwordHash && !verifyPassword(password.toString(), lobby.passwordSalt, lobby.passwordHash)) {
+      socket.emit("actionError", "Wrong password for that table.");
+      return;
+    }
+    leaveCurrentLobbyIfAny();
     joinLobbyInternal(lobby);
   });
 
@@ -920,21 +950,37 @@ io.on("connection", (socket) => {
     if (card.tapped) return;
     card.tapped = true;
     broadcastCard(lobby, card);
-    if (card.zoneType === "mana") {
-      // Basic land types auto-add their color; nonbasic lands that are archived with exactly
-      // one fixed producible color (shocklands, painlands, snow duals, etc.) do too. Lands with
-      // multiple/any-color options (Command Tower, gates, tri-lands) stay manual since the choice is ambiguous.
-      let color = basicLandColor(card.type);
-      if (!color && Array.isArray(card.producedMana) && card.producedMana.length === 1) {
-        color = card.producedMana[0];
-      }
-      if (color && ["W", "U", "B", "R", "G", "C"].includes(color)) {
-        const p = lobby.players[socket.id];
-        p.mana[color] = (p.mana[color] || 0) + 1;
-        broadcastPlayers(lobby);
-        pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
-      }
+    // Auto-add mana for any tapped source with an unambiguous color — lands, rocks, and dorks
+    // alike — not just basics. Basic land types are unambiguous by their type line; anything else
+    // (rocks, dorks, nonbasic lands) is unambiguous only when the archive says it produces exactly
+    // one color. A source that can produce more than one color (Command Tower, most signets/
+    // talismans, City of Brass, mana dorks with a choice) prompts the player to pick instead of
+    // silently guessing or staying fully manual.
+    let color = basicLandColor(card.type);
+    if (!color && Array.isArray(card.producedMana) && card.producedMana.length === 1) {
+      color = card.producedMana[0];
     }
+    if (color && ["W", "U", "B", "R", "G", "C"].includes(color)) {
+      const p = lobby.players[socket.id];
+      p.mana[color] = (p.mana[color] || 0) + 1;
+      broadcastPlayers(lobby);
+      pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
+    } else if (Array.isArray(card.producedMana) && card.producedMana.length > 1) {
+      const options = card.producedMana.filter((c) => ["W", "U", "B", "R", "G", "C"].includes(c));
+      if (options.length) socket.emit("chooseMana", { cardId: card.id, cardName: card.name, options });
+    }
+  });
+
+  // Player's answer to the "chooseMana" prompt above, for a tapped source with more than one
+  // possible color.
+  socket.on("resolveManaChoice", ({ cardId, color }) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    const card = lobby && lobby.cards[cardId];
+    if (!p || !card || card.owner !== socket.id || !card.tapped) return;
+    if (!Array.isArray(card.producedMana) || !card.producedMana.includes(color) || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
+    p.mana[color] = (p.mana[color] || 0) + 1;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
   });
 
   socket.on("flip", (id) => {
@@ -1295,6 +1341,8 @@ io.on("connection", (socket) => {
     for (const [cardId, defenderId] of Object.entries(assignments || {})) {
       const card = lobby.cards[cardId];
       if (!card || card.owner !== socket.id || card.zoneType !== "creature" || card.tapped) continue;
+      const hasHaste = Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "haste");
+      if (card.controllerSince === lobby.turn.turnNumber && !hasHaste) continue; // summoning sick
       if (!lobby.players[defenderId] || defenderId === socket.id) continue;
       validAttackers[cardId] = defenderId;
       defendersSet.add(defenderId);
