@@ -625,6 +625,13 @@
       document.getElementById("app-root").style.display = "none";
       document.getElementById("main-menu").style.display = "flex";
       renderDeckList(data.decks);
+      const authToken = localStorage.getItem("mtgToken");
+      if (authToken) {
+        fetch("/api/iceServers?token=" + encodeURIComponent(authToken))
+          .then((r) => r.json())
+          .then((d) => { if (d.iceServers) ICE_SERVERS = d.iceServers; })
+          .catch(() => {});
+      }
     });
 
     socket.on("lobbyList", renderLobbyList);
@@ -1246,7 +1253,8 @@
     // this gets replaced before voice chat is ever used — that's what makes cross-network voice
     // work instead of only connecting players on the same network.
     let ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
-    fetch("/api/iceServers").then((r) => r.json()).then((data) => { if (data.iceServers) ICE_SERVERS = data.iceServers; }).catch(() => {});
+    // Fetched only after logging in (see the authOk handler below) — the endpoint requires a
+    // valid session, so a TURN credential is never handed out before you've actually authenticated.
 
     async function joinVoice() {
       try {

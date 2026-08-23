@@ -734,6 +734,12 @@ app.get("/api/autocomplete", async (req, res) => {
 // (see docker-compose.yml's coturn service) is what makes cross-network voice chat actually work.
 // Falls back to STUN-only if TURN env vars aren't configured.
 app.get("/api/iceServers", (req, res) => {
+  // Gated behind a valid session — this hands out standing TURN credentials, and the app is
+  // reachable from the open internet (that's the whole reason TURN is needed), so an unauthenticated
+  // endpoint here would let anyone who finds the URL harvest a relay credential without ever
+  // logging in, not just members of this pod.
+  const token = req.query.token;
+  if (!token || !sessions[token]) return res.status(401).json({ error: "Not authenticated" });
   const servers = [{ urls: "stun:stun.l.google.com:19302" }];
   if (process.env.TURN_URL) {
     servers.push({ urls: process.env.TURN_URL, username: process.env.TURN_USERNAME || undefined, credential: process.env.TURN_PASSWORD || undefined });
