@@ -114,6 +114,26 @@
     .mana-pool-cell .pip-btn-row { display: flex; gap: 4px; }
     .mana-pool-cell button.mini-btn { padding: 2px 9px; font-size: 13px; line-height: 1.2; }
     .mana-pool-cell button.mini-btn.remove-mana { color: #f0a0a0; }
+
+    #main-menu { position: fixed; inset: 0; background: radial-gradient(ellipse at top, #1c1611 0%, #0a0806 100%); display: none; align-items: center; justify-content: center; z-index: 400; }
+    #main-menu-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 32px; width: 340px; box-shadow: 0 0 40px rgba(212,175,55,0.08); text-align: center; }
+    #main-menu-box h2 { margin-top: 0; }
+    #main-menu-box button { width: 100%; margin-top: 10px; padding: 12px; font-size: 14px; }
+    #main-menu-box .mm-hint { font-size: 11px; color: #8a7a55; margin-top: 4px; }
+
+    .modal-box-wide { max-width: 900px; }
+    .de-columns { display: flex; gap: 16px; flex-wrap: wrap; }
+    .de-commanders { display: flex; gap: 10px; flex: 1; min-width: 260px; }
+    .de-cmdr-slot { flex: 1; background: #1c170f; border: 1px solid #3a2e18; border-radius: 6px; padding: 8px; min-height: 90px; }
+    .de-cmdr-slot img { width: 100%; border-radius: 5px; margin-bottom: 4px; }
+    .de-cmdr-slot .de-cmdr-name { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+    .de-library { flex: 1.3; min-width: 280px; }
+    .de-library-count { font-size: 12px; color: #a89a70; margin: 6px 0; }
+    .de-library-list { max-height: 260px; overflow-y: auto; border: 1px solid #2e2618; border-radius: 6px; padding: 4px 8px; background: #100c08; }
+    .de-library-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1c170f; font-size: 12px; }
+    .de-library-row:last-child { border-bottom: none; }
+    .de-library-row .de-lr-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #de-paste { width: 100%; margin-top: 8px; }
   </style>
   <script src="/socket.io/socket.io.js"></script>
 </head>
@@ -133,6 +153,17 @@
     </div>
   </div>
 
+  <div id="main-menu">
+    <div id="main-menu-box">
+      <h2 class="mtg-title">Commander Pod</h2>
+      <button onclick="enterTable()">Enter Table</button>
+      <div class="mm-hint">Joins the shared game table</div>
+      <button class="secondary" onclick="openDeckEditor()">Deck Editor</button>
+      <div class="mm-hint">Build or edit a deck — up to 99 cards, up to 2 commanders</div>
+      <button class="secondary" onclick="logout()">Log Out</button>
+    </div>
+  </div>
+
   <div id="app-root">
     <div id="top-bar">
       <div class="flex-row">
@@ -141,7 +172,7 @@
         <datalist id="cardSuggestions"></datalist>
         <button onclick="requestSpawn(false)">Spawn Face Up</button>
         <button onclick="requestSpawn(true)" class="secondary">Spawn Face Down</button>
-        <button onclick="openImportModal()" class="secondary">Import Deck</button>
+        <button onclick="openDeckEditor()" class="secondary">Deck Editor</button>
       </div>
       <div class="flex-row">
         <div id="zoom-row" class="flex-row">
@@ -153,6 +184,7 @@
         <button onclick="untapAll()" class="secondary">Untap All</button>
         <button onclick="triggerClear()" class="danger">New Game</button>
         <button onclick="openHelpModal()" class="secondary">?</button>
+        <button onclick="showMainMenu()" class="secondary">Main Menu</button>
         <button onclick="logout()" class="secondary">Log Out</button>
       </div>
     </div>
@@ -202,6 +234,7 @@
         <div class="panel">
           <h3>My Decks</h3>
           <div id="deck-list"></div>
+          <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
         </div>
         <div id="log-chat-wrap" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
           <div class="flex-row" style="padding:6px 12px;border-bottom:1px solid #2e2618;">
@@ -263,19 +296,31 @@
       </div>
     </div>
 
-    <div class="modal-overlay" id="import-modal">
-      <div class="modal-box">
-        <h2>Import Decklist</h2>
-        <p style="font-size:12px;color:#a89a70;">Paste one card per line: <code>1 Sol Ring</code> or just <code>Sol Ring</code>. Set/collector codes like <code>(C21) 263</code> are ignored. Replaces your current library, shuffled.</p>
-        <textarea id="import-textarea" rows="12" style="width:100%;" placeholder="1 Sol Ring&#10;1 Command Tower&#10;1 Arcane Signet&#10;..."></textarea>
-        <div class="flex-row" style="margin-top:8px;">
-          <input type="text" id="deck-save-name" placeholder="Deck name (to save for later)" style="flex:1;">
-          <button class="secondary" onclick="saveDeck()">Save Deck</button>
+    <div class="modal-overlay" id="deck-editor-modal">
+      <div class="modal-box modal-box-wide">
+        <h2>Deck Editor</h2>
+        <input type="text" id="de-name" placeholder="Deck name" style="width:100%;margin-bottom:10px;">
+        <div class="de-columns">
+          <div class="de-commanders">
+            <div class="de-cmdr-slot" id="de-cmdr-slot-0"></div>
+            <div class="de-cmdr-slot" id="de-cmdr-slot-1"></div>
+          </div>
+          <div class="de-library">
+            <div class="flex-row">
+              <input type="text" id="de-card-search" placeholder="Add a card by name..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)" style="flex:1;" onkeydown="if(event.key==='Enter'){deAddCardFromSearch();}">
+              <button class="mini-btn" onclick="deAddCardFromSearch()">Add</button>
+            </div>
+            <div class="de-library-count">Library: <strong id="de-count">0</strong> / 99</div>
+            <div class="de-library-list" id="de-library-list"></div>
+            <textarea id="de-paste" rows="5" placeholder="Or paste a decklist to bulk-add: 1 Sol Ring&#10;1 Arcane Signet&#10;...  (commanders go in the slots above, not here)"></textarea>
+            <button class="mini-btn secondary" style="margin-top:6px;" onclick="deResolvePaste()">Add Pasted List</button>
+          </div>
         </div>
-        <div id="import-status" style="font-size:12px;color:#a89a70;margin-top:6px;"></div>
+        <div id="de-status" style="font-size:12px;color:#a89a70;margin-top:10px;"></div>
         <div class="modal-close-row">
-          <button class="secondary" onclick="closeImportModal()">Cancel</button>
-          <button onclick="submitImport()">Import Now</button>
+          <button class="secondary" onclick="closeDeckEditor()">Close</button>
+          <button class="secondary" onclick="deSaveDeck()">Save Deck</button>
+          <button onclick="deLoadIntoGame()">Load Into Current Game</button>
         </div>
       </div>
     </div>
@@ -306,6 +351,7 @@
       <div class="modal-box">
         <h2>How to Play</h2>
         <ul>
+          <li>The <strong>Deck Editor</strong> (Main Menu or top bar) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too.</li>
           <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
           <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly. Dragging a permanent back into the Hand row does nothing on purpose — there's no general rule that lets you just pick a permanent back up. To represent a bounce effect, right-click the permanent and choose <strong>Return to Hand</strong> instead.</li>
           <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more).</li>
@@ -371,6 +417,17 @@
     function logout() {
       localStorage.removeItem("mtgToken");
       location.reload();
+    }
+
+    // ---------------- main menu ----------------
+
+    function enterTable() {
+      document.getElementById("main-menu").style.display = "none";
+      document.getElementById("app-root").style.display = "flex";
+    }
+    function showMainMenu() {
+      document.getElementById("app-root").style.display = "none";
+      document.getElementById("main-menu").style.display = "flex";
     }
 
     socket.on("authError", (msg) => {
@@ -480,7 +537,8 @@
 
     socket.on("init", (data) => {
       document.getElementById("auth-screen").style.display = "none";
-      document.getElementById("app-root").style.display = "flex";
+      document.getElementById("app-root").style.display = "none";
+      document.getElementById("main-menu").style.display = "flex";
 
       myId = data.myId;
       activeBoardOwner = myId;
@@ -540,14 +598,32 @@
     socket.on("chatMessage", appendChat);
 
     socket.on("importResult", (res) => {
-      const status = document.getElementById("import-status");
+      const status = document.getElementById("deck-status");
       status.innerText = res.success
-        ? `Imported ${res.found}/${res.requested} cards into your library (shuffled).`
+        ? `Loaded ${res.found}/${res.requested} cards into your library (shuffled).`
         : "Error: " + res.error;
     });
 
-    socket.on("deckSaved", () => { document.getElementById("import-status").innerText = "Deck saved!"; });
+    socket.on("deckSaved", () => { document.getElementById("deck-status").innerText = "Deck saved!"; });
     socket.on("deckList", (names) => renderDeckList(names));
+
+    socket.on("deckPasteResult", (res) => {
+      const status = document.getElementById("de-status");
+      if (!res.success) { status.innerText = "Error: " + res.error; return; }
+      let added = 0, skipped = 0;
+      res.found.forEach((card) => {
+        if (deckEditor.library.length >= 99) { skipped++; return; }
+        deckEditor.library.push(card);
+        added++;
+      });
+      deRenderLibrary();
+      status.innerText = `Added ${added} card${added === 1 ? "" : "s"}` + (skipped ? ` — ${skipped} skipped (99 limit reached).` : ".") +
+        (res.found.length < res.requested ? ` (${res.requested - res.found.length} not found.)` : "");
+    });
+
+    socket.on("deckData", ({ name, data }) => {
+      openDeckEditor(name, data);
+    });
 
     // ---------------- players / decks / commander / turn UI ----------------
 
@@ -621,11 +697,14 @@
         label.innerText = name;
         const loadBtn = document.createElement("button");
         loadBtn.className = "mini-btn"; loadBtn.innerText = "Load";
-        loadBtn.onclick = () => { if (confirm(`Load "${name}"? This replaces your current library.`)) socket.emit("loadDeck", name); };
+        loadBtn.onclick = () => { if (confirm(`Load "${name}"? This replaces your current library (and commander slots, if the deck has any).`)) socket.emit("loadDeck", name); };
+        const editBtn = document.createElement("button");
+        editBtn.className = "mini-btn"; editBtn.innerText = "Edit";
+        editBtn.onclick = () => editDeck(name);
         const delBtn = document.createElement("button");
         delBtn.className = "mini-btn"; delBtn.style.background = "#7a1f1f"; delBtn.innerText = "Del";
         delBtn.onclick = () => { if (confirm(`Delete saved deck "${name}"?`)) socket.emit("deleteDeck", name); };
-        row.appendChild(label); row.appendChild(loadBtn); row.appendChild(delBtn);
+        row.appendChild(label); row.appendChild(loadBtn); row.appendChild(editBtn); row.appendChild(delBtn);
         el.appendChild(row);
       });
     }
@@ -849,25 +928,117 @@
     function castCommander(slot) { socket.emit("castCommander", slot); }
     function clearCommander(slot) { if (confirm("Clear this commander slot?")) socket.emit("clearCommander", slot); }
 
-    // ---------------- import / decks / help modals ----------------
+    // ---------------- deck editor ----------------
 
-    function openImportModal() {
-      document.getElementById("import-status").innerText = "";
-      document.getElementById("import-modal").style.display = "flex";
+    let deckEditor = { name: "", commanders: [null, null], library: [] };
+
+    function openDeckEditor(prefillName, prefillData) {
+      if (prefillName && !prefillData) { alert(`Couldn't load "${prefillName}" — it may have been deleted.`); return; }
+      if (prefillData && typeof prefillData === "object") {
+        // structured saved deck — load straight in
+        deckEditor = {
+          name: prefillName || "",
+          commanders: [prefillData.commanders && prefillData.commanders[0] || null, prefillData.commanders && prefillData.commanders[1] || null],
+          library: (prefillData.library || []).slice()
+        };
+        document.getElementById("de-paste").value = "";
+      } else if (typeof prefillData === "string") {
+        // legacy raw-text saved deck — drop it in the paste box so "Add Pasted List" converts it
+        deckEditor = { name: prefillName || "", commanders: [null, null], library: [] };
+        document.getElementById("de-paste").value = prefillData;
+      } else if (!prefillName) {
+        deckEditor = { name: "", commanders: [null, null], library: [] };
+        document.getElementById("de-paste").value = "";
+      }
+      document.getElementById("de-name").value = deckEditor.name;
+      document.getElementById("de-status").innerText = "";
+      deRenderCommanders();
+      deRenderLibrary();
+      document.getElementById("deck-editor-modal").style.display = "flex";
     }
-    function closeImportModal() { document.getElementById("import-modal").style.display = "none"; }
-    function submitImport() {
-      const text = document.getElementById("import-textarea").value;
-      document.getElementById("import-status").innerText = "Importing...";
-      socket.emit("importDeck", text);
+    function closeDeckEditor() { document.getElementById("deck-editor-modal").style.display = "none"; }
+
+    function editDeck(name) { socket.emit("getDeckData", name); }
+
+    function deRenderCommanders() {
+      for (let slot = 0; slot < 2; slot++) {
+        const cmd = deckEditor.commanders[slot];
+        const el = document.getElementById("de-cmdr-slot-" + slot);
+        if (cmd) {
+          el.innerHTML = `
+            <img src="${cmd.img || ""}">
+            <div class="de-cmdr-name">${escapeHtml(cmd.name)}</div>
+            <div style="font-size:10px;margin-bottom:6px;">${manaCostPips(cmd.manaCost)}</div>
+            <button class="mini-btn" style="width:100%;" onclick="deClearCommanderSlot(${slot})">Clear</button>`;
+        } else {
+          el.innerHTML = `
+            <div style="font-size:11px;color:#8a7a55;margin-bottom:6px;">Commander ${slot + 1}${slot === 1 ? " (partner/background)" : ""}</div>
+            <input type="text" id="de-cmdr-input-${slot}" placeholder="Commander name" list="cardSuggestions" autocomplete="off" style="width:100%;" oninput="handleAutocompleteInput(event)">
+            <button class="mini-btn" style="width:100%;margin-top:4px;" onclick="deSetCommanderSlot(${slot})">Set</button>`;
+        }
+      }
     }
-    function saveDeck() {
-      const text = document.getElementById("import-textarea").value;
-      const name = document.getElementById("deck-save-name").value.trim();
+    function deSetCommanderSlot(slot) {
+      const input = document.getElementById("de-cmdr-input-" + slot);
+      const name = input.value;
+      if (!name) return;
+      fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) { deckEditor.commanders[slot] = data; deRenderCommanders(); }
+          else alert("Card lookup failed! Check spelling.");
+        });
+    }
+    function deClearCommanderSlot(slot) { deckEditor.commanders[slot] = null; deRenderCommanders(); }
+
+    function deRenderLibrary() {
+      document.getElementById("de-count").innerText = deckEditor.library.length;
+      const list = document.getElementById("de-library-list");
+      if (deckEditor.library.length === 0) {
+        list.innerHTML = "<div style='color:#8a7a55;font-size:12px;padding:6px 0;'>No cards yet — add one above or paste a list below.</div>";
+        return;
+      }
+      list.innerHTML = deckEditor.library.map((c, i) => `
+        <div class="de-library-row">
+          <span class="de-lr-name">${escapeHtml(c.name)}</span>
+          <span>${manaCostPips(c.manaCost)}</span>
+          <button class="mini-btn" onclick="deRemoveLibraryCard(${i})">×</button>
+        </div>`).join("");
+    }
+    function deRemoveLibraryCard(i) { deckEditor.library.splice(i, 1); deRenderLibrary(); }
+
+    function deAddCardFromSearch() {
+      const input = document.getElementById("de-card-search");
+      const name = input.value;
+      if (!name) return;
+      if (deckEditor.library.length >= 99) { document.getElementById("de-status").innerText = "Library is full (99/99)."; return; }
+      fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) { deckEditor.library.push(data); deRenderLibrary(); input.value = ""; }
+          else alert("Card lookup failed! Check spelling.");
+        });
+    }
+    function deResolvePaste() {
+      const text = document.getElementById("de-paste").value;
+      if (!text.trim()) { document.getElementById("de-status").innerText = "Paste a decklist first."; return; }
+      document.getElementById("de-status").innerText = "Resolving...";
+      socket.emit("resolveDeckPaste", text);
+    }
+    function deSaveDeck() {
+      const name = document.getElementById("de-name").value.trim();
       if (!name) { alert("Enter a deck name to save it."); return; }
-      if (!text.trim()) { alert("Paste a decklist first."); return; }
-      socket.emit("saveDeck", { name, text });
+      if (!deckEditor.library.length && !deckEditor.commanders.some(Boolean)) { alert("Add at least one card or commander first."); return; }
+      deckEditor.name = name;
+      socket.emit("saveDeck", { name, commanders: deckEditor.commanders, library: deckEditor.library });
     }
+    function deLoadIntoGame() {
+      if (!deckEditor.library.length && !deckEditor.commanders.some(Boolean)) { alert("Add at least one card or commander first."); return; }
+      if (!confirm("Load this deck into your current game? This replaces your current library and commander slots.")) return;
+      socket.emit("loadDeckDraft", { commanders: deckEditor.commanders, library: deckEditor.library });
+      closeDeckEditor();
+    }
+
     function openHelpModal() { document.getElementById("help-modal").style.display = "flex"; }
     function closeHelpModal() { document.getElementById("help-modal").style.display = "none"; }
 
