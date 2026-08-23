@@ -13,7 +13,7 @@ A self-hosted multiplayer Commander/EDH table: accounts, persistent decks, zone-
 
 Portainer will clone the repo and build the image from the included `Dockerfile` — no size limits, no encoding tricks, and pushing new commits + redeploying the stack is how you ship future updates.
 
-Game/account data (users, saved decks) persists in the `mtg_data` named volume across restarts and redeploys, independent of the code itself.
+Game/account data (users, saved decks, and an archive of every card looked up — cost, mana value, power/toughness, oracle text, keywords, etc.) persists in the `mtg_data` named volume across restarts and redeploys, independent of the code itself.
 
 ## Local development
 
