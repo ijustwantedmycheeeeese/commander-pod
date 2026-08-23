@@ -107,6 +107,7 @@ function lobbySocketIds(lobby) { return io.sockets.adapter.rooms.get(lobby.id) |
 
 const LOBBIES_FILE = DATA_DIR + "/lobbies.json";
 const RECONNECT_GRACE_MS = 3 * 60 * 1000;
+const LEAVE_GRACE_MS = 60 * 1000; // an explicit Leave Table click is a clear signal -- don't hold the seat as long as a genuine network blip
 
 function serializeLobbies() {
   const out = {};
@@ -168,12 +169,12 @@ function removePlayerFromLobby(lobby, socketId, verb) {
   broadcastLobbyList();
 }
 
-function scheduleGraceRemoval(lobby, socketId) {
+function scheduleGraceRemoval(lobby, socketId, ms) {
   setTimeout(() => {
     if (lobbies[lobby.id] !== lobby) return; // lobby already gone (e.g. everyone left)
     const p = lobby.players[socketId];
     if (p && p.disconnectedAt) removePlayerFromLobby(lobby, socketId, "timed out and left");
-  }, RECONNECT_GRACE_MS);
+  }, ms || RECONNECT_GRACE_MS);
 }
 
 // Matches by username regardless of disconnectedAt -- spam-refreshing can easily land a new
@@ -417,7 +418,9 @@ function playersView(lobby, viewerId) {
       exile: p.exile,
       libraryCount: p.library.length,
       library: id === viewerId ? p.library : undefined,
-      disconnected: !!p.disconnectedAt
+      disconnected: !!p.disconnectedAt,
+      disconnectedAt: p.disconnectedAt || null,
+      graceMs: p.disconnectedAt ? (p.graceMs || RECONNECT_GRACE_MS) : null
     };
   }
   return out;
@@ -831,6 +834,20 @@ io.on("connection", (socket) => {
     socket.data.lobbyId = lobby.id;
     socket.join(lobby.id);
 
+    // Leaving and immediately rejoining the same table happens on the SAME still-connected
+    // socket (no real disconnect ever occurred), so the held seat is sitting right here under
+    // this exact socket.id already -- just resume it instead of falling through to either the
+    // reclaim branch below (which only fires for a *different* id) or a fresh empty seat.
+    if (lobby.players[socket.id]) {
+      lobby.players[socket.id].disconnectedAt = null;
+      lobby.players[socket.id].graceMs = null;
+      socket.emit("lobbyJoined", buildLobbyJoinedPayload(lobby, socket.id));
+      broadcastPlayers(lobby);
+      broadcastLobbyList();
+      pushLog(lobby, `${username} rejoined`);
+      return;
+    }
+
     // Defense in depth against the same reconnect-race that the connection-time handler already
     // covers: if this account already has a seat in this exact lobby (disconnected, or even still
     // technically live from a duplicate connection), reclaim it instead of handing out a second,
@@ -901,7 +918,23 @@ io.on("connection", (socket) => {
       broadcastLobbyList();
       return;
     }
-    removePlayerFromLobby(lobby, socket.id, "left");
+    // Leaving works like a disconnect, not an instant wipe: the seat -- board, hand, library,
+    // graveyard, exile, commanders, turn-order position, everything -- stays held for a short
+    // grace window instead of being torn down immediately. The old immediate-removal behavior
+    // deleted the player record (commander/library/graveyard/exile) but never touched the
+    // matching lobby.cards entries, which stayed valid since Leave-then-rejoin without an actual
+    // page reload reuses the exact same socket.id -- so battlefield/hand cards would silently
+    // reappear on rejoin while everything else came back empty, and turn order got disturbed by
+    // the full removal in between. A shorter grace window than a genuine disconnect (60s vs 3min)
+    // since clicking Leave is a clear, deliberate signal, not an ambiguous network blip.
+    const p = lobby.players[socket.id];
+    if (!p) return;
+    p.disconnectedAt = Date.now();
+    p.graceMs = LEAVE_GRACE_MS;
+    broadcastPlayers(lobby);
+    broadcastLobbyList();
+    pushLog(lobby, `${username} left the table`);
+    scheduleGraceRemoval(lobby, socket.id, LEAVE_GRACE_MS);
   }
 
   socket.on("createLobby", (data) => {
@@ -1623,8 +1656,9 @@ io.on("connection", (socket) => {
     const p = lobby.players[socket.id];
     if (!p) return;
     p.disconnectedAt = Date.now();
+    p.graceMs = RECONNECT_GRACE_MS;
     broadcastPlayers(lobby); // lets others see a "disconnected" indicator while the seat is held open
-    scheduleGraceRemoval(lobby, socket.id);
+    scheduleGraceRemoval(lobby, socket.id, RECONNECT_GRACE_MS);
   });
 });
 
