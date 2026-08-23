@@ -395,7 +395,7 @@
       <div class="modal-box">
         <h2>How to Play</h2>
         <ul>
-          <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named, optionally password-protected — 🔒 in the list means it needs one) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>Leave Table</strong> in the top bar returns to the menu and frees your seat.</li>
+          <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named, optionally password-protected — 🔒 in the list means it needs one) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>Leave Table</strong> in the top bar returns to the menu — your seat (board, hand, library, commander, everything) is held for 60 seconds in case you rejoin the same table, shown as a countdown next to your name in the Players panel; after that it's freed up for good.</li>
           <li><strong>Spectate</strong> instead of Join to watch a table without taking a seat — you see the board and life totals like any non-owner (hands and face-down cards stay hidden), can use chat and voice, but can't touch cards or start/advance the game. Works on a game already in progress, not just a fresh table.</li>
           <li>The <strong>Deck Editor</strong> (Main Menu or top bar) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too.</li>
           <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
@@ -802,6 +802,17 @@
 
     // ---------------- players / decks / commander / turn UI ----------------
 
+    // Live "seat held for Ns" countdown next to a disconnected/left player -- ticked by a 1s
+    // interval below rather than pushed from the server, since it's purely a display concern.
+    function disconnectCountdownText(p) {
+      if (!p.disconnectedAt || !p.graceMs) return "";
+      const remaining = Math.max(0, Math.ceil((p.disconnectedAt + p.graceMs - Date.now()) / 1000));
+      return ` · seat held ${remaining}s`;
+    }
+    setInterval(() => {
+      if (Object.values(players).some((p) => p.disconnected)) renderPlayerList();
+    }, 1000);
+
     function renderPlayerList() {
       playerListEl.innerHTML = "";
       Object.entries(players).forEach(([id, p]) => {
@@ -810,7 +821,7 @@
         row.innerHTML = `
           <div class="player-dot" style="background:${p.color};color:${p.color};"></div>
           <div class="player-info">
-            <div class="player-name">${escapeHtml(p.name)}${id === myId ? '<span class="you-badge">YOU</span>' : ''}${p.disconnected ? '<span class="you-badge" style="background:#7a1f1f;">DISCONNECTED</span>' : ''}</div>
+            <div class="player-name">${escapeHtml(p.name)}${id === myId ? '<span class="you-badge">YOU</span>' : ''}${p.disconnected ? `<span class="you-badge" style="background:#7a1f1f;">DISCONNECTED${disconnectCountdownText(p)}</span>` : ''}</div>
             <div class="player-stats"><span>❤ ${p.life}</span><span>⚔ ${p.cmdr}</span><span>☠ ${p.poison}</span>${p.mulligans ? `<span>Mull ${p.mulligans}/2</span>` : ""}${p.handKept ? "<span>✅ Ready</span>" : ""}</div>
           </div>`;
         playerListEl.appendChild(row);
