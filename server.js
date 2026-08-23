@@ -162,7 +162,10 @@ function toEntry(c) {
     name: c.name, img: c.img, type: c.type || "", manaCost: c.manaCost || "",
     cmc: c.cmc || 0, colors: c.colors || [], colorIdentity: c.colorIdentity || [],
     power: c.power, toughness: c.toughness, loyalty: c.loyalty,
-    text: c.text || "", keywords: c.keywords || [], producedMana: c.producedMana || null
+    text: c.text || "", keywords: c.keywords || [], producedMana: c.producedMana || null,
+    // Preserve commander identity across zone changes — a commander dealing combat damage still
+    // counts as commander damage even when it wasn't cast from the command zone this time.
+    isCommander: !!c.isCommander
   };
 }
 
