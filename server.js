@@ -84,7 +84,7 @@ function createLobbyState(id, name, hostUsername, password) {
     gameState: { log: [] },
     chatLog: [],
     voiceParticipants: new Set(),
-    turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 },
+    turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null },
     combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] }
   };
 }
@@ -189,6 +189,7 @@ function reattachPlayer(lobby, oldId, newId) {
     lobby.targets[cardId] = lobby.targets[cardId].map((pid) => (pid === oldId ? newId : pid));
   }
   lobby.turn.order = lobby.turn.order.map((id) => (id === oldId ? newId : id));
+  if (lobby.turn.pendingDiscard && lobby.turn.pendingDiscard.playerId === oldId) lobby.turn.pendingDiscard.playerId = newId;
   for (const cardId in lobby.combat.attackers) {
     if (lobby.combat.attackers[cardId] === oldId) lobby.combat.attackers[cardId] = newId;
   }
@@ -502,6 +503,16 @@ function checkTiming(lobby, socketId, card) {
     return { ok: false, error: `You can only play ${card.name || "that"} during a main phase.` };
   }
   return { ok: true };
+}
+
+// "You have no maximum hand size" effects come from a permanent's oracle text — check every
+// battlefield card (not hand/library/etc, which aren't kept in lobby.cards) the player controls.
+function hasNoMaxHandSize(lobby, playerId) {
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === playerId && c.zoneType !== "hand" && (c.text || "").toLowerCase().includes("no maximum hand size")) return true;
+  }
+  return false;
 }
 
 // A commander that leaves the battlefield (dies, gets bounced, etc.) becomes recastable
@@ -1332,7 +1343,35 @@ io.on("connection", (socket) => {
   socket.on("nextPhase", () => {
     const lobby = currentLobby(); if (!lobby) return;
     if (!lobby.turn.started) return;
-    if (lobby.turn.order[lobby.turn.activeIndex] !== socket.id) return;
+    const activeId = lobby.turn.order[lobby.turn.activeIndex];
+    if (activeId !== socket.id) return;
+    if (lobby.turn.pendingDiscard) return; // can't advance past End Step until the discard is resolved
+    if (lobby.turn.phase === "End Step") {
+      const handCount = Object.values(lobby.cards).filter((c) => c.owner === activeId && c.zoneType === "hand").length;
+      if (handCount > 7 && !hasNoMaxHandSize(lobby, activeId)) {
+        lobby.turn.pendingDiscard = { playerId: activeId, count: handCount - 7 };
+        broadcastTurn(lobby);
+        pushLog(lobby, `${lobby.players[activeId].name} must discard down to 7 cards`);
+        return;
+      }
+    }
+    advancePhase(lobby);
+  });
+
+  socket.on("resolveDiscard", (cardIds) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const pd = lobby.turn.pendingDiscard;
+    if (!pd || pd.playerId !== socket.id) return;
+    const ids = Array.isArray(cardIds) ? [...new Set(cardIds)] : [];
+    if (ids.length !== pd.count) { socket.emit("actionError", `You must discard exactly ${pd.count} card(s).`); return; }
+    for (const id of ids) {
+      const card = lobby.cards[id];
+      if (!card || card.owner !== socket.id || card.zoneType !== "hand") { socket.emit("actionError", "Invalid discard selection."); return; }
+    }
+    const p = lobby.players[socket.id];
+    ids.forEach((id) => sendToGraveyardInternal(lobby, lobby.cards[id]));
+    pushLog(lobby, `${p.name} discarded ${ids.length} card(s) to hand size`);
+    lobby.turn.pendingDiscard = null;
     advancePhase(lobby);
   });
 
@@ -1460,7 +1499,7 @@ io.on("connection", (socket) => {
       p.landDropBonus = 0;
     }
     lobby.gameState.log = [];
-    lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1 };
+    lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
     io.to(lobby.id).emit("cleared");
     broadcastPlayers(lobby);
