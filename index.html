@@ -680,11 +680,22 @@
         row.innerHTML = `
           <div class="player-dot" style="background:${p.color};color:${p.color};"></div>
           <div class="player-info">
-            <div class="player-name">${escapeHtml(p.name)}${id === myId ? '<span class="you-badge">YOU</span>' : ''}</div>
+            <div class="player-name">${escapeHtml(p.name)}${id === myId ? '<span class="you-badge">YOU</span>' : ''}${p.disconnected ? '<span class="you-badge" style="background:#7a1f1f;">DISCONNECTED</span>' : ''}</div>
             <div class="player-stats"><span>❤ ${p.life}</span><span>⚔ ${p.cmdr}</span><span>☠ ${p.poison}</span>${p.mulligans ? `<span>Mull ${p.mulligans}/2</span>` : ""}${p.handKept ? "<span>✅ Ready</span>" : ""}</div>
           </div>`;
         playerListEl.appendChild(row);
       });
+      renderMyStatus();
+    }
+
+    // "My Status" widget (life/cmdr/poison) had its own <strong> labels that nothing ever
+    // updated after the initial HTML — only the Players panel below was wired to live updates.
+    function renderMyStatus() {
+      const me = players[myId];
+      if (!me) return;
+      document.getElementById("lbl-life").innerText = me.life;
+      document.getElementById("lbl-cmdr").innerText = me.cmdr;
+      document.getElementById("lbl-poison").innerText = me.poison;
     }
 
     function renderManaPool() {
