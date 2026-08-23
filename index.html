@@ -2,6 +2,7 @@
 <html>
 <head>
   <title>Commander Sandbox</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>👑</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
   <style>
@@ -239,6 +240,7 @@
 
     <div id="context-menu">
       <button data-action="play">Play to Battlefield</button>
+      <button data-action="toHand">Return to Hand</button>
       <button data-action="tap">Tap / Untap</button>
       <button data-action="flip">Flip Face Up/Down</button>
       <button data-action="target">Target / Untarget</button>
@@ -305,9 +307,9 @@
         <h2>How to Play</h2>
         <ul>
           <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
-          <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly.</li>
+          <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly. Dragging a permanent back into the Hand row does nothing on purpose — there's no general rule that lets you just pick a permanent back up. To represent a bounce effect, right-click the permanent and choose <strong>Return to Hand</strong> instead.</li>
           <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more).</li>
-          <li>Playing anything else checks your <strong>mana pool</strong> against the card's real cost — you need the mana or it won't go through.</li>
+          <li>Playing anything else checks your <strong>mana pool</strong> against the card's real cost — you need the mana or it won't go through. This includes <strong>casting your Commander</strong> from its zone: it costs its real mana cost plus the current commander tax shown there, and it's disabled while a copy of it is already on the battlefield.</li>
           <li>Tap a <strong>basic land</strong>, or any nonbasic land archived with exactly one fixed color (shocklands, painlands, snow duals, etc.), to auto-add its color to your pool. Lands with a color choice (Command Tower, gates, tri-lands) and other mana sources (rocks, dorks) need the manual +/− buttons in the Mana Pool panel — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules.</li>
           <li><strong>Double-click</strong> your own card to tap/untap it. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
@@ -614,17 +616,18 @@
         for (let slot = 0; slot < 2; slot++) {
           const cmd = p.commanders ? p.commanders[slot] : null;
           if (cmd) {
+            const onBattlefield = !!(cmd.battlefieldId && allCards[cmd.battlefieldId]);
             html += `<div class="cmdr-slot">
               <img src="${cmd.img}" class="cmdr-thumb">
               <div class="cmdr-name">${escapeHtml(cmd.name)}</div>
               <div style="font-size:10px;">${manaCostPips(cmd.manaCost)}</div>
-              <div class="cmdr-tax">Tax: ${cmd.tax}</div>`;
+              <div class="cmdr-tax">Tax: ${cmd.tax}${cmd.tax ? ` (+{${cmd.tax}} to cast)` : ""}</div>`;
             if (pid === myId) {
               html += `
                 <div class="flex-row">
                   <button class="mini-btn" onclick="commanderTax(${slot},-2)">-2</button>
                   <button class="mini-btn" onclick="commanderTax(${slot},2)">+2</button>
-                  <button class="mini-btn" onclick="castCommander(${slot})">Cast</button>
+                  <button class="mini-btn" onclick="castCommander(${slot})" ${onBattlefield ? "disabled" : ""}>${onBattlefield ? "On Battlefield" : "Cast"}</button>
                 </div>
                 <button class="mini-btn" onclick="clearCommander(${slot})" style="margin-top:4px;width:100%;">Clear Slot</button>`;
             }
@@ -1077,6 +1080,12 @@
             div.classList.remove("dragging");
             if (!moved) return;
             const targetZone = zoneForY(lastY).key;
+            if (targetZone === "hand" && card.zoneType !== "hand") {
+              // Returning a permanent to hand isn't a drag action — there's no general rule that lets
+              // you just pick it back up. Use "Return to Hand" from the right-click menu instead.
+              renderVisibleBoard();
+              return;
+            }
             if (targetZone !== card.zoneType) {
               if (card.zoneType === "hand" && targetZone !== "hand" && costHasX(card.manaCost)) {
                 const val = prompt("Choose a value for X:", "0");
@@ -1158,6 +1167,7 @@
         const action = el.dataset ? el.dataset.action : null;
         if (action === "target") { el.style.display = "block"; return; }
         if (action === "play") { el.style.display = (isMine && card.zoneType === "hand") ? "block" : "none"; return; }
+        if (action === "toHand") { el.style.display = (isMine && card.zoneType !== "hand") ? "block" : "none"; return; }
         el.style.display = isMine ? "block" : "none";
       });
     }
@@ -1167,6 +1177,7 @@
         const action = btn.dataset.action;
         if (activeCardId) {
           if (action === "play") requestPlayCard(activeCardId);
+          if (action === "toHand") socket.emit("toHand", activeCardId);
           if (action === "tap") socket.emit("tap", activeCardId);
           if (action === "flip") socket.emit("flip", activeCardId);
           if (action === "target") socket.emit("toggleTarget", activeCardId);

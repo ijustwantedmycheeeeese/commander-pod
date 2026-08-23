@@ -162,7 +162,10 @@ function toEntry(c) {
     name: c.name, img: c.img, type: c.type || "", manaCost: c.manaCost || "",
     cmc: c.cmc || 0, colors: c.colors || [], colorIdentity: c.colorIdentity || [],
     power: c.power, toughness: c.toughness, loyalty: c.loyalty,
-    text: c.text || "", keywords: c.keywords || [], producedMana: c.producedMana || null
+    text: c.text || "", keywords: c.keywords || [], producedMana: c.producedMana || null,
+    // Preserve commander identity across zone changes — a commander dealing combat damage still
+    // counts as commander damage even when it wasn't cast from the command zone this time.
+    isCommander: !!c.isCommander
   };
 }
 
@@ -292,10 +295,19 @@ function attemptPlay(p, card, targetZoneType, xValue) {
   return { ok: true };
 }
 
+// A commander that leaves the battlefield (dies, gets bounced, etc.) becomes recastable
+// again — clear the slot's battlefield reference so castCommander stops rejecting it.
+function clearCommanderRef(card) {
+  const owner = players[card.owner];
+  if (!owner || !card.isCommander) return;
+  owner.commanders.forEach((c) => { if (c && c.battlefieldId === card.id) c.battlefieldId = null; });
+}
+
 function sendToGraveyardInternal(card) {
   delete cards[card.id];
   if (targets[card.id]) delete targets[card.id];
   io.emit("cardRemove", card.id);
+  clearCommanderRef(card);
   const owner = players[card.owner];
   if (owner) owner.graveyard.push(toEntry(card));
 }
@@ -584,9 +596,12 @@ io.on("connection", (socket) => {
     const card = cards[id];
     const p = players[socket.id];
     if (!card || !p || card.owner !== socket.id) return;
-    if (!["mana", "creature", "artifact", "hand"].includes(zoneType)) return;
+    // "hand" is intentionally not a valid drag target here — there's no general rule that lets you
+    // pick a permanent back up, so returning something to hand is a deliberate action (see "toHand"
+    // below), not a side effect of dragging it into the hand row.
+    if (!["mana", "creature", "artifact"].includes(zoneType)) return;
 
-    if (card.zoneType === "hand" && zoneType !== "hand") {
+    if (card.zoneType === "hand") {
       const result = attemptPlay(p, card, zoneType, x);
       if (!result.ok) { socket.emit("actionError", result.error); return; }
       card.zoneType = zoneType;
@@ -596,8 +611,9 @@ io.on("connection", (socket) => {
       pushLog(`${p.name} played ${card.name || "a card"}`);
       return;
     }
+    // reclassifying an existing battlefield permanent between creature/artifact/mana rows — purely
+    // organizational, no cost.
     card.zoneType = zoneType;
-    card.faceDown = zoneType === "hand";
     broadcastCard(card);
   });
 
@@ -662,6 +678,22 @@ io.on("connection", (socket) => {
     delete cards[id];
     if (targets[id]) { delete targets[id]; broadcastTargets(); }
     io.emit("cardRemove", id);
+    clearCommanderRef(card);
+  });
+
+  // Deliberate "this permanent is being bounced/returned to hand" action — represents a bounce
+  // effect or similar, since there's no general rule that lets a permanent just go back to hand.
+  socket.on("toHand", (id) => {
+    const card = cards[id];
+    const p = players[socket.id];
+    if (!card || !p || card.owner !== socket.id || card.zoneType === "hand") return;
+    delete cards[id];
+    if (targets[id]) { delete targets[id]; broadcastTargets(); }
+    io.emit("cardRemove", id);
+    clearCommanderRef(card);
+    spawnBattlefieldCard({ ...toEntry(card), owner: socket.id, faceDown: true, zoneType: "hand" });
+    broadcastPlayers();
+    pushLog(`${p.name} returned ${card.name || "a face-down card"} to their hand`);
   });
 
   socket.on("untapAll", () => {
@@ -697,6 +729,7 @@ io.on("connection", (socket) => {
     delete cards[cardId];
     if (targets[cardId]) { delete targets[cardId]; broadcastTargets(); }
     io.emit("cardRemove", cardId);
+    clearCommanderRef(card);
     if (!players[owner]) return;
     const entry = toEntry(card);
     if (zone === "graveyard") players[owner].graveyard.push(entry);
@@ -848,7 +881,7 @@ io.on("connection", (socket) => {
     const p = players[socket.id];
     const slot = data.slot;
     if (!p || slot < 0 || slot > 1) return;
-    p.commanders[slot] = { ...toEntry(data), tax: 0 };
+    p.commanders[slot] = { ...toEntry(data), tax: 0, battlefieldId: null };
     broadcastPlayers();
     pushLog(`${p.name} set their commander: ${data.name}`);
   });
@@ -871,7 +904,20 @@ io.on("connection", (socket) => {
     const p = players[socket.id];
     if (!p || !p.commanders[slot]) return;
     const cmd = p.commanders[slot];
-    spawnBattlefieldCard({ ...cmd, owner: socket.id, faceDown: false, zoneType: classifyType(cmd.type), isCommander: true });
+    if (cmd.battlefieldId && cards[cmd.battlefieldId]) {
+      socket.emit("actionError", `${cmd.name} is already on the battlefield.`);
+      return;
+    }
+    const cost = parseManaCost(cmd.manaCost);
+    cost.generic += cmd.tax || 0; // commander tax: +{2} generic per previous cast from the command zone
+    const remaining = canAffordAndPay(p.mana, cost, 0);
+    if (!remaining) {
+      socket.emit("actionError", `Not enough mana to cast ${cmd.name}${cmd.tax ? ` (includes +${cmd.tax} commander tax)` : ""}.`);
+      return;
+    }
+    p.mana = remaining;
+    const card = spawnBattlefieldCard({ ...cmd, owner: socket.id, faceDown: false, zoneType: classifyType(cmd.type), isCommander: true });
+    cmd.battlefieldId = card.id;
     cmd.tax += 2;
     broadcastPlayers();
     pushLog(`${p.name} cast their commander: ${cmd.name} (tax now ${cmd.tax})`);
@@ -1005,7 +1051,7 @@ io.on("connection", (socket) => {
       p.exile = [];
       shuffle(p.library);
       p.life = 40; p.cmdr = 0; p.poison = 0;
-      p.commanders.forEach((c) => { if (c) c.tax = 0; });
+      p.commanders.forEach((c) => { if (c) { c.tax = 0; c.battlefieldId = null; } });
       p.mulligans = 0;
       p.handKept = false;
       p.mana = EMPTY_MANA();
