@@ -357,6 +357,7 @@
 
     <div id="context-menu">
       <button data-action="play">Play to Battlefield</button>
+      <button data-action="freeCast" title="Represents an effect like Cascade -- cast without paying its mana cost">Free Cast (no cost)</button>
       <button data-action="toHand">Return to Hand</button>
       <button data-action="tap">Tap</button>
       <button data-action="flip">Flip Face Up/Down</button>
@@ -428,6 +429,7 @@
           <li><strong>Manage Keywords</strong> (right-click a battlefield permanent) lets you grant it Flying, Haste, Indestructible, and other common keywords, representing an aura/equipment/anthem effect — shown as small icon badges on the card. Nothing is enforced automatically except Haste, which already plugs into the summoning-sickness check.</li>
           <li><strong>Attach To...</strong> (right-click, on equipment/auras or anything else) links a card to another permanent — shown as a small "⚭ Host Name" label. If the card's text has a real Equip cost, it's paid automatically from your mana pool; anything else (like an aura, whose cost was already paid casting it) attaches for free. If the host leaves the battlefield, an attached Aura goes to the graveyard with it; anything else just becomes unattached. <strong>Detach</strong> is always free, for manual correction.</li>
           <li><strong>Take Control</strong> (right-click any permanent that isn't already yours) represents an effect like Control Magic — the card moves to your board and you can play it as your own; it's marked "stolen from X" and treated as freshly under your control (summoning sick again, like real Magic). <strong>Return Control</strong> hands it back to its real owner whenever the effect should end — nothing tracks that duration automatically, same as everything else this app doesn't automate.</li>
+          <li><strong>Free Cast (no cost)</strong> (right-click a hand card) represents an effect like Cascade or Through the Breach — casts it without paying its mana cost or checking whose turn it is, straight onto the stack like any other cast. A manual tool for whatever already-resolved effect earned it; nothing verifies you actually earned it.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
@@ -1953,7 +1955,7 @@
       contextMenu.querySelectorAll("button, hr").forEach((el) => {
         const action = el.dataset ? el.dataset.action : null;
         if (action === "target") { el.style.display = "block"; return; }
-        if (action === "play") { el.style.display = (isMine && card.zoneType === "hand") ? "block" : "none"; return; }
+        if (action === "play" || action === "freeCast") { el.style.display = (isMine && card.zoneType === "hand") ? "block" : "none"; return; }
         if (action === "toHand") { el.style.display = (isMine && card.zoneType !== "hand") ? "block" : "none"; return; }
         // Tap/flip/counters only make sense for a card that's actually on the battlefield --
         // a card still in hand isn't a permanent yet, so these shouldn't apply to it.
@@ -1970,6 +1972,7 @@
         const action = btn.dataset.action;
         if (activeCardId) {
           if (action === "play") requestPlayCard(activeCardId);
+          if (action === "freeCast") socket.emit("freeCastCard", activeCardId);
           if (action === "toHand") socket.emit("toHand", activeCardId);
           if (action === "tap") socket.emit("tap", activeCardId);
           if (action === "flip") socket.emit("flip", activeCardId);
