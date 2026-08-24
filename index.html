@@ -75,6 +75,8 @@
     .card.face-down-mine { box-shadow: 0 0 0 2px #f59e0b inset; }
     .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
     .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+    .kw-badges { position: absolute; top: 2px; left: 2px; display: flex; flex-wrap: wrap; gap: 1px; max-width: 100px; }
+    .kw-badge { background: rgba(10,8,6,0.75); border-radius: 4px; font-size: 11px; padding: 0 2px; line-height: 15px; }
 
     #preview-panel { position: fixed; top: 64px; right: 16px; width: 260px; max-height: 80vh; overflow-y: auto; z-index: 50; background: #171310; border: 1px solid #5a4423; border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); display: none; }
     #preview-panel img { width: 100%; border-radius: 6px; display: block; }
@@ -360,6 +362,7 @@
       <hr>
       <button data-action="counterUp">+1 Counter</button>
       <button data-action="counterDown">-1 Counter</button>
+      <button data-action="keywords">Manage Keywords</button>
       <hr>
       <button data-action="toGraveyard">Send to Graveyard</button>
       <button data-action="toExile">Send to Exile</button>
@@ -416,6 +419,7 @@
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
           <li><strong>Hand size</strong> is capped at 7: ending your turn (past End Step) with more than that opens a required discard prompt — pick exactly enough cards to get back to 7 before the turn actually ends. A permanent whose text says "no maximum hand size" exempts you entirely.</li>
           <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing. Any player can hit <strong>Counter</strong> on a stack item to send it straight to the graveyard, representing a counterspell that resolved elsewhere.</li>
+          <li><strong>Manage Keywords</strong> (right-click a battlefield permanent) lets you grant it Flying, Haste, Indestructible, and other common keywords, representing an aura/equipment/anthem effect — shown as small icon badges on the card. Nothing is enforced automatically except Haste, which already plugs into the summoning-sickness check.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
@@ -494,6 +498,18 @@
         <div class="modal-close-row">
           <button class="secondary" onclick="closeTokenModal()">Close</button>
           <button onclick="createToken()">Create Token</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="keyword-modal">
+      <div class="modal-box" style="max-width:360px;">
+        <h2 id="keyword-modal-title">Manage Keywords</h2>
+        <p style="font-size:12px;color:#a89a70;">Represents an aura, equipment, or other effect granting this card an ability -- nothing here is enforced automatically (Haste is the one exception: it already plugs into the summoning-sickness check).</p>
+        <div id="keyword-modal-list" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 0;"></div>
+        <div class="modal-close-row">
+          <button class="secondary" onclick="closeKeywordModal()">Close</button>
+          <button onclick="saveKeywords()">Save</button>
         </div>
       </div>
     </div>
@@ -1210,6 +1226,42 @@
         });
     }
 
+    // ---------------- keyword tagging ----------------
+    // Matches server.js's KNOWN_KEYWORDS. Small icon per keyword for the on-card badge row --
+    // falls back to the first letter for anything without a curated icon.
+    const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection"];
+    const KEYWORD_ICONS = {
+      "Flying": "🦅", "Haste": "⚡", "Indestructible": "🛡", "Deathtouch": "☠",
+      "Lifelink": "❤", "Trample": "👣", "Vigilance": "👁", "Menace": "😈",
+      "Reach": "🏹", "First strike": "⚔", "Double strike": "⚔⚔", "Hexproof": "🚫", "Ward": "🔰",
+      "Defender": "🚧", "Flash": "✨", "Protection": "🔱"
+    };
+    let keywordModalCardId = null;
+    function openKeywordModal(cardId) {
+      keywordModalCardId = cardId;
+      const card = allCards[cardId];
+      if (!card) return;
+      const current = new Set(card.keywords || []);
+      document.getElementById("keyword-modal-title").innerText = `Manage Keywords — ${card.name || "Card"}`;
+      document.getElementById("keyword-modal-list").innerHTML = KNOWN_KEYWORDS.map((k) => `
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;width:47%;">
+          <input type="checkbox" class="kw-check" value="${escapeHtml(k)}" ${current.has(k) ? "checked" : ""}>
+          ${KEYWORD_ICONS[k] || ""} ${escapeHtml(k)}
+        </label>`).join("");
+      document.getElementById("keyword-modal").style.display = "flex";
+    }
+    function closeKeywordModal() { document.getElementById("keyword-modal").style.display = "none"; keywordModalCardId = null; }
+    function saveKeywords() {
+      if (!keywordModalCardId) return;
+      const keywords = Array.from(document.querySelectorAll(".kw-check:checked")).map((cb) => cb.value);
+      socket.emit("setKeywords", { id: keywordModalCardId, keywords });
+      closeKeywordModal();
+    }
+    function keywordBadgeRow(card) {
+      if (!card.keywords || !card.keywords.length) return "";
+      return `<div class="kw-badges">${card.keywords.map((k) => `<span class="kw-badge" title="${escapeHtml(k)}">${KEYWORD_ICONS[k] || k[0]}</span>`).join("")}</div>`;
+    }
+
     // ---------------- token creation ----------------
     // Tokens aren't real cards, so there's nothing to look up on Scryfall -- spawnCard already
     // accepts arbitrary card data with no lookup required, which is exactly what a token needs.
@@ -1786,6 +1838,7 @@
         inner = `<img src="${card.img || ""}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>`;
       }
       if (card.counters) inner += `<div class="counter-badge">${card.counters > 0 ? "+" : ""}${card.counters}</div>`;
+      if (!isMasked) inner += keywordBadgeRow(card);
       div.innerHTML = inner;
       div._cardData = card;
 
@@ -1809,6 +1862,7 @@
       }
       if (card.cmc) extra += ` (MV ${card.cmc})`;
       let html = escapeHtml(extra) + (card.manaCost ? "<br>" + manaCostPips(card.manaCost) : "");
+      if (card.keywords && card.keywords.length) html += `<div style="font-size:12px;margin-top:2px;">${card.keywords.map((k) => `${KEYWORD_ICONS[k] || ""} ${escapeHtml(k)}`).join(" · ")}</div>`;
       if (card.text) html += `<div class="pv-text">${escapeHtml(card.text)}</div>`;
       document.getElementById("preview-name").innerHTML = html;
       previewPanel.style.display = "block";
@@ -1840,7 +1894,7 @@
         if (action === "toHand") { el.style.display = (isMine && card.zoneType !== "hand") ? "block" : "none"; return; }
         // Tap/flip/counters only make sense for a card that's actually on the battlefield --
         // a card still in hand isn't a permanent yet, so these shouldn't apply to it.
-        if (["tap", "flip", "counterUp", "counterDown"].includes(action)) { el.style.display = (isMine && card.zoneType !== "hand") ? "block" : "none"; return; }
+        if (["tap", "flip", "counterUp", "counterDown", "keywords"].includes(action)) { el.style.display = (isMine && card.zoneType !== "hand") ? "block" : "none"; return; }
         el.style.display = isMine ? "block" : "none";
       });
     }
@@ -1856,6 +1910,7 @@
           if (action === "target") socket.emit("toggleTarget", activeCardId);
           if (action === "counterUp") socket.emit("counter", { id: activeCardId, delta: 1 });
           if (action === "counterDown") socket.emit("counter", { id: activeCardId, delta: -1 });
+          if (action === "keywords") openKeywordModal(activeCardId);
           if (action === "toGraveyard") socket.emit("toGraveyard", activeCardId);
           if (action === "toExile") socket.emit("toExile", activeCardId);
           if (action === "toLibrary") socket.emit("toLibraryTop", activeCardId);

@@ -66,6 +66,11 @@ function newId() { return "c_" + Date.now() + "_" + randInt(100000); }
 function newLobbyId() { return crypto.randomBytes(4).toString("hex"); }
 
 const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End Step"];
+// Manually grantable keywords (auras, equipment, anthems, etc. -- none of which are automated in
+// this app) -- a curated list matching Scryfall's own keyword naming so a granted keyword looks
+// identical to one a card was natively printed with. Haste already plugs straight into the
+// existing summoning-sickness check in declareAttackers with zero extra code.
+const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection"];
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
 
 function createLobbyState(id, name, hostUsername, password) {
@@ -1304,6 +1309,17 @@ io.on("connection", (socket) => {
     const card = lobby.cards[id];
     if (!card || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
     card.counters = (card.counters || 0) + delta;
+    broadcastCard(lobby, card);
+  });
+
+  // Manually granted keywords -- represents an aura/equipment/anthem/etc. effect, since none of
+  // those are automated. Replaces the whole set at once (the client sends the full checked list)
+  // rather than individual add/remove events, so there's no way for the two sides to desync.
+  socket.on("setKeywords", ({ id, keywords }) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
+    if (!card || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
+    card.keywords = Array.isArray(keywords) ? [...new Set(keywords)].filter((k) => KNOWN_KEYWORDS.includes(k)) : [];
     broadcastCard(lobby, card);
   });
 
