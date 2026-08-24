@@ -1271,6 +1271,31 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Represents an effect like Cascade or Through the Breach -- "you may cast this without paying
+  // its mana cost." Skips checkTiming and attemptPlay entirely, since this isn't the player
+  // playing a card through normal channels; it's a manual tool for whatever already-resolved
+  // effect earned the free cast (same trust model as everything else this app leaves to the
+  // players to use honestly). Still goes through the stack like any other cast -- a free-cast
+  // spell can still be responded to.
+  socket.on("freeCastCard", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
+    const p = lobby.players[socket.id];
+    if (!card || !p || card.owner !== socket.id || card.zoneType !== "hand") return;
+    const targetZoneType = classifyType(card.type);
+    if (targetZoneType === "mana" || !lobby.turn.started) {
+      card.zoneType = targetZoneType;
+      card.faceDown = false;
+      card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+      if (entersTapped(card)) card.tapped = true;
+      broadcastCard(lobby, card);
+      pushLog(lobby, `${p.name} played ${card.name || "a card"} without paying its cost`);
+    } else {
+      pushToStack(lobby, card, socket.id);
+      pushLog(lobby, `${p.name} cast ${card.name || "a spell"} without paying its mana cost`);
+    }
+  });
+
   socket.on("tap", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
