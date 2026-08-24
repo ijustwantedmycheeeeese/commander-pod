@@ -516,6 +516,7 @@ function spawnBattlefieldCard(lobby, data) {
     owner, ownerColor: p ? p.color : "#999",
     isCommander: !!isCommander,
     attachedTo: null, // equipment/aura attachment link, set only via the attachCard handler
+    originalOwner: null, // set only via takeControl -- who to give it back to via returnControl
     // Summoning sickness: stamped with the turn number it entered the battlefield. A creature is
     // sick (can't attack, can still block) if this still matches the CURRENT turn number when its
     // controller tries to attack with it — irrelevant for non-creatures, but harmless to set.
@@ -669,9 +670,12 @@ function hasNoMaxHandSize(lobby, playerId) {
 }
 
 // A commander that leaves the battlefield (dies, gets bounced, etc.) becomes recastable
-// again — clear the slot's battlefield reference so castCommander stops rejecting it.
+// again — clear the slot's battlefield reference so castCommander stops rejecting it. Uses
+// originalOwner first: a stolen commander's battlefieldId lives in its TRUE owner's commander
+// slot, not whoever currently controls it, so clearing via card.owner alone would leave that
+// reference stale forever if the commander died while under someone else's control.
 function clearCommanderRef(lobby, card) {
-  const owner = lobby.players[card.owner];
+  const owner = lobby.players[card.originalOwner || card.owner];
   if (!owner || !card.isCommander) return;
   owner.commanders.forEach((c) => { if (c && c.battlefieldId === card.id) c.battlefieldId = null; });
 }
@@ -706,7 +710,9 @@ function sendToGraveyardInternal(lobby, card) {
   io.to(lobby.id).emit("cardRemove", card.id);
   clearCommanderRef(lobby, card);
   detachDependents(lobby, card);
-  const owner = lobby.players[card.owner];
+  // A card's owner (where it goes when it leaves play) isn't necessarily who currently controls
+  // it -- a permanent stolen via takeControl still belongs to whoever it was stolen from.
+  const owner = lobby.players[card.originalOwner || card.owner];
   if (owner) owner.graveyard.push(toEntry(card));
 }
 
@@ -1381,6 +1387,41 @@ io.on("connection", (socket) => {
     broadcastCard(lobby, card);
   });
 
+  // Taking control represents an effect like Control Magic -- open to anyone on anyone's
+  // permanent, same trust model as targeting, since the whole point is acting on someone else's
+  // card. The true owner is remembered (only on the FIRST hand-off, so a card that changes hands
+  // more than once still remembers who it originally belonged to) so returnControl can hand it
+  // back later; how long the effect actually lasts isn't tracked automatically, same as every
+  // other effect duration in this app -- players return it manually when it should end.
+  socket.on("takeControl", (id) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    const card = lobby && lobby.cards[id];
+    if (!p || !card || card.owner === socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
+    if (card.originalOwner === null) card.originalOwner = card.owner;
+    const prevOwner = lobby.players[card.owner];
+    card.owner = socket.id;
+    card.ownerColor = p.color;
+    // Changing control resets summoning sickness for the new controller, same as a freshly cast
+    // creature -- real Magic treats a stolen creature as sick until your next turn too.
+    card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+    broadcastCard(lobby, card);
+    pushLog(lobby, `${p.name} took control of ${card.name || "a card"}${prevOwner ? ` from ${prevOwner.name}` : ""}`);
+  });
+
+  socket.on("returnControl", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
+    if (!card || !card.originalOwner || (card.owner !== socket.id && card.originalOwner !== socket.id)) return;
+    const trueOwner = lobby.players[card.originalOwner];
+    if (!trueOwner) return; // the real owner isn't seated anymore -- nowhere sensible to send it back to
+    card.owner = card.originalOwner;
+    card.ownerColor = trueOwner.color;
+    card.originalOwner = null;
+    card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+    broadcastCard(lobby, card);
+    pushLog(lobby, `${trueOwner.name} got ${card.name || "a card"} back`);
+  });
+
   socket.on("removeCard", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
@@ -1406,9 +1447,13 @@ io.on("connection", (socket) => {
     io.to(lobby.id).emit("cardRemove", id);
     clearCommanderRef(lobby, card);
     detachDependents(lobby, card);
-    spawnBattlefieldCard(lobby, { ...toEntry(card), owner: socket.id, faceDown: true, zoneType: "hand" });
+    // Bounces to its true OWNER's hand, not the current controller's -- a stolen permanent still
+    // belongs to whoever it was taken from.
+    const destOwnerId = card.originalOwner || card.owner;
+    const destOwner = lobby.players[destOwnerId];
+    spawnBattlefieldCard(lobby, { ...toEntry(card), owner: destOwnerId, faceDown: true, zoneType: "hand" });
     broadcastPlayers(lobby);
-    pushLog(lobby, `${p.name} returned ${card.name || "a face-down card"} to their hand`);
+    pushLog(lobby, `${p.name} returned ${card.name || "a face-down card"} to ${destOwner ? destOwner.name + "'s" : "their"} hand`);
   });
 
   socket.on("untapAll", () => {
@@ -1443,7 +1488,9 @@ io.on("connection", (socket) => {
     // A card on the stack can't be moved this way -- lobby.stack still holds the same object
     // reference and has no idea it's gone, which would double-process it when it resolves.
     if (!card || card.owner !== socket.id || card.zoneType === "stack") return;
-    const owner = card.owner;
+    // Only the current controller can decide to move it, but it goes to its true OWNER's zone --
+    // a stolen permanent still belongs to whoever it was taken from.
+    const owner = card.originalOwner || card.owner;
     delete lobby.cards[cardId];
     if (lobby.targets[cardId]) { delete lobby.targets[cardId]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", cardId);

@@ -78,6 +78,7 @@
     .kw-badges { position: absolute; top: 2px; left: 2px; display: flex; flex-wrap: wrap; gap: 1px; max-width: 100px; }
     .kw-badge { background: rgba(10,8,6,0.75); border-radius: 4px; font-size: 11px; padding: 0 2px; line-height: 15px; }
     .attach-label { position: absolute; bottom: 2px; left: 2px; right: 2px; font-size: 9px; color: #d4af37; background: rgba(10,8,6,0.75); border-radius: 3px; padding: 1px 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .control-label { position: absolute; top: 2px; right: 2px; left: 2px; font-size: 9px; color: #f87171; background: rgba(10,8,6,0.75); border-radius: 3px; padding: 1px 3px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     #preview-panel { position: fixed; top: 64px; right: 16px; width: 260px; max-height: 80vh; overflow-y: auto; z-index: 50; background: #171310; border: 1px solid #5a4423; border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); display: none; }
     #preview-panel img { width: 100%; border-radius: 6px; display: block; }
@@ -366,6 +367,8 @@
       <button data-action="keywords">Manage Keywords</button>
       <button data-action="attach">Attach To...</button>
       <button data-action="detach">Detach</button>
+      <button data-action="takeControl">Take Control</button>
+      <button data-action="returnControl">Return Control</button>
       <hr>
       <button data-action="toGraveyard">Send to Graveyard</button>
       <button data-action="toExile">Send to Exile</button>
@@ -424,6 +427,7 @@
           <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing. Any player can hit <strong>Counter</strong> on a stack item to send it straight to the graveyard, representing a counterspell that resolved elsewhere.</li>
           <li><strong>Manage Keywords</strong> (right-click a battlefield permanent) lets you grant it Flying, Haste, Indestructible, and other common keywords, representing an aura/equipment/anthem effect — shown as small icon badges on the card. Nothing is enforced automatically except Haste, which already plugs into the summoning-sickness check.</li>
           <li><strong>Attach To...</strong> (right-click, on equipment/auras or anything else) links a card to another permanent — shown as a small "⚭ Host Name" label. If the card's text has a real Equip cost, it's paid automatically from your mana pool; anything else (like an aura, whose cost was already paid casting it) attaches for free. If the host leaves the battlefield, an attached Aura goes to the graveyard with it; anything else just becomes unattached. <strong>Detach</strong> is always free, for manual correction.</li>
+          <li><strong>Take Control</strong> (right-click any permanent that isn't already yours) represents an effect like Control Magic — the card moves to your board and you can play it as your own; it's marked "stolen from X" and treated as freshly under your control (summoning sick again, like real Magic). <strong>Return Control</strong> hands it back to its real owner whenever the effect should end — nothing tracks that duration automatically, same as everything else this app doesn't automate.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
@@ -1314,6 +1318,13 @@
       return `<div class="attach-label">⚭ ${escapeHtml((host && host.name) || "?")}</div>`;
     }
 
+    // ---------------- control-stealing ----------------
+    function controlLabel(card) {
+      if (!card.originalOwner) return "";
+      const trueOwner = (players[card.originalOwner] && players[card.originalOwner].name) || "?";
+      return `<div class="control-label">🏴 stolen from ${escapeHtml(trueOwner)}</div>`;
+    }
+
     // ---------------- token creation ----------------
     // Tokens aren't real cards, so there's nothing to look up on Scryfall -- spawnCard already
     // accepts arbitrary card data with no lookup required, which is exactly what a token needs.
@@ -1887,7 +1898,7 @@
       if (isMasked) {
         inner = `<div class="card-back">🂠</div><div class="card-label">Face-down card</div>`;
       } else {
-        inner = `<img src="${card.img || ""}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>${attachmentLabel(card)}`;
+        inner = `<img src="${card.img || ""}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>${attachmentLabel(card)}${controlLabel(card)}`;
       }
       if (card.counters) inner += `<div class="counter-badge">${card.counters > 0 ? "+" : ""}${card.counters}</div>`;
       if (!isMasked) inner += keywordBadgeRow(card);
@@ -1948,6 +1959,8 @@
         // a card still in hand isn't a permanent yet, so these shouldn't apply to it.
         if (["tap", "flip", "counterUp", "counterDown", "keywords", "attach"].includes(action)) { el.style.display = (isMine && card.zoneType !== "hand" && card.zoneType !== "stack") ? "block" : "none"; return; }
         if (action === "detach") { el.style.display = (isMine && !!card.attachedTo) ? "block" : "none"; return; }
+        if (action === "takeControl") { el.style.display = (!isMine && card.zoneType !== "hand" && card.zoneType !== "stack") ? "block" : "none"; return; }
+        if (action === "returnControl") { el.style.display = (!!card.originalOwner && (isMine || card.originalOwner === myId)) ? "block" : "none"; return; }
         el.style.display = isMine ? "block" : "none";
       });
     }
@@ -1966,6 +1979,8 @@
           if (action === "keywords") openKeywordModal(activeCardId);
           if (action === "attach") openAttachModal(activeCardId);
           if (action === "detach") socket.emit("detachCard", activeCardId);
+          if (action === "takeControl") socket.emit("takeControl", activeCardId);
+          if (action === "returnControl") socket.emit("returnControl", activeCardId);
           if (action === "toGraveyard") socket.emit("toGraveyard", activeCardId);
           if (action === "toExile") socket.emit("toExile", activeCardId);
           if (action === "toLibrary") socket.emit("toLibraryTop", activeCardId);
