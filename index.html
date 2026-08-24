@@ -96,6 +96,9 @@
     .zone-card-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
     .zone-card-thumb { width: 44px; height: 61px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
     .zone-card-name { flex: 1; font-size: 13px; }
+    .stack-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
+    .stack-item:last-child { border-bottom: none; }
+    .stack-item.stack-top { background: rgba(212,175,55,0.08); border-radius: 6px; padding: 6px; }
     .zone-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
     .cmdr-player-box { padding: 10px 12px; border-bottom: 1px solid #2e2618; }
@@ -262,6 +265,10 @@
 
     <div id="main-container">
       <div id="sidebar">
+        <div class="panel" id="stack-panel" style="display:none;border:1px solid #5a4423;">
+          <h3>Stack</h3>
+          <div id="stack-list"></div>
+        </div>
         <div class="panel" id="my-status-panel">
           <h3>My Status</h3>
           <div class="stat-widget">
@@ -407,6 +414,7 @@
           <li>A creature has <strong>summoning sickness</strong> (shown tilted) until it's been under your control since the start of your most recent turn — it can still block, just not attack, unless it has Haste.</li>
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
           <li><strong>Hand size</strong> is capped at 7: ending your turn (past End Step) with more than that opens a required discard prompt — pick exactly enough cards to get back to 7 before the turn actually ends. A permanent whose text says "no maximum hand size" exempts you entirely.</li>
+          <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase, stepping through Untap (auto-untaps + resets land drops) → Upkeep → Draw (auto-draws, skipped turn 1 for the starting player) → Main 1 → Combat → Main 2 → End Step.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board.</li>
@@ -445,6 +453,16 @@
         <div id="discard-modal-status" style="font-size:13px;margin-bottom:8px;">0 / 0 selected</div>
         <div class="modal-close-row" style="justify-content:center;">
           <button id="discard-modal-confirm" onclick="confirmDiscard()" disabled>Discard Selected</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="priority-modal">
+      <div class="modal-box" style="max-width:380px;text-align:center;">
+        <h2>You have priority</h2>
+        <p style="font-size:12px;color:#a89a70;">Something's on the stack. Cast an instant/flash spell in response, or pass — once everyone passes in a row, the top of the stack resolves.</p>
+        <div class="modal-close-row" style="justify-content:center;">
+          <button onclick="passPriority()">Pass</button>
         </div>
       </div>
     </div>
@@ -683,6 +701,8 @@
       el.innerText = names && names.length ? `👁 Spectating: ${names.join(", ")}` : "";
     }
     let currentCombat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+    let currentStack = [];
+    let currentPriority = { holderId: null, lastActorId: null };
 
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
     socket.on("authOk", (data) => {
@@ -717,6 +737,8 @@
       allCards = data.cards;
       currentTurn = data.turn || currentTurn;
       currentCombat = data.combat || currentCombat;
+      currentStack = data.stack || [];
+      currentPriority = data.priority || currentPriority;
 
       applySpectatorUI();
       renderSpectatorRoster(data.spectatorRoster || []);
@@ -727,6 +749,7 @@
       renderVisibleBoard();
       renderTurnState(currentTurn);
       renderCombatState(currentCombat);
+      renderStackState();
       checkPendingDiscard();
       renderOpeningHandStatus();
       renderManaPool();
@@ -750,6 +773,7 @@
 
     socket.on("targets", (data) => { targets = data; applyAllTargetRings(); });
     socket.on("spectatorRoster", renderSpectatorRoster);
+    socket.on("stackState", (data) => { currentStack = data.stack || []; currentPriority = data.priority || currentPriority; renderStackState(); renderCombatState(currentCombat); renderTurnState(currentTurn); });
     socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); checkPendingDiscard(); });
     socket.on("combatState", (data) => { currentCombat = data; renderCombatState(currentCombat); });
     socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
@@ -973,13 +997,15 @@
       const activeId = t.order[t.activeIndex];
       const activeName = (players[activeId] && players[activeId].name) || "?";
       info.innerText = `Turn ${t.turnNumber} — ${activeName}'s turn — ${t.phase}`;
-      nextBtn.style.display = activeId === myId ? "inline-block" : "none";
+      nextBtn.style.display = (activeId === myId && currentStack.length === 0) ? "inline-block" : "none";
     }
 
     function renderCombatState(c) {
       const btn = document.getElementById("combat-action-btn");
       const activeId = currentTurn.order[currentTurn.activeIndex];
-      if (c.step === "declareAttackers" && activeId === myId) {
+      if (currentStack.length > 0) {
+        btn.style.display = "none"; // combat can't move forward with something pending on the stack
+      } else if (c.step === "declareAttackers" && activeId === myId) {
         btn.style.display = "inline-block";
         btn.innerText = "Declare Attackers";
         btn.onclick = openAttackersModal;
@@ -991,6 +1017,38 @@
         btn.style.display = "none";
       }
     }
+
+    // ---------------- stack / priority ----------------
+
+    function renderStackState() {
+      const panel = document.getElementById("stack-panel");
+      const list = document.getElementById("stack-list");
+      if (!currentStack.length) {
+        panel.style.display = "none";
+      } else {
+        panel.style.display = "block";
+        // Top of stack (resolves next) is the last element -- show it first, most prominent.
+        list.innerHTML = currentStack.slice().reverse().map((c, i) => {
+          const caster = (players[c.owner] && players[c.owner].name) || "?";
+          return `<div class="stack-item${i === 0 ? " stack-top" : ""}">
+            <img src="${c.img || ''}" class="zone-card-thumb">
+            <div class="zone-card-name">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">cast by ${escapeHtml(caster)}${i === 0 ? " — resolves next" : ""}</div></div>
+          </div>`;
+        }).join("");
+      }
+      checkPriorityModal();
+    }
+
+    function checkPriorityModal() {
+      const modal = document.getElementById("priority-modal");
+      if (currentStack.length > 0 && currentPriority.holderId === myId) {
+        modal.style.display = "flex";
+      } else {
+        modal.style.display = "none";
+      }
+    }
+
+    function passPriority() { socket.emit("passPriority"); }
 
     function escapeHtml(s) {
       const d = document.createElement("div");

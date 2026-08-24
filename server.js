@@ -86,7 +86,9 @@ function createLobbyState(id, name, hostUsername, password) {
     spectators: {}, // socket.id -> { username, name } -- watch-only, never touches lobby.players
     voiceParticipants: new Set(),
     turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null },
-    combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] }
+    combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] },
+    stack: [], // cast spells awaiting resolution, top = last element
+    priority: { holderId: null, lastActorId: null } // only meaningful while stack.length > 0
   };
 }
 function lobbySummaries() {
@@ -132,6 +134,8 @@ function restoreLobbies() {
     if (!l.spectators) l.spectators = {};
     if (!l.turn) l.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
     if (l.turn.pendingDiscard === undefined) l.turn.pendingDiscard = null;
+    if (!l.stack) l.stack = [];
+    if (!l.priority) l.priority = { holderId: null, lastActorId: null };
     // Nobody is actually connected right after a restart — mark every seated player as
     // disconnected so the normal reconnect-grace mechanism below picks up the cleanup/resume.
     for (const sid in l.players) l.players[sid].disconnectedAt = Date.now();
@@ -152,11 +156,23 @@ function removePlayerFromLobby(lobby, socketId, verb) {
   lobby.voiceParticipants.delete(socketId);
   const turn = lobby.turn;
   const idx = turn.order.indexOf(socketId);
+  const wasPriorityHolder = lobby.priority.holderId === socketId;
+  const wasLastActor = lobby.priority.lastActorId === socketId;
   if (idx !== -1) {
     turn.order.splice(idx, 1);
     if (turn.order.length === 0) turn.started = false;
     else if (idx < turn.activeIndex) turn.activeIndex--;
     else if (turn.activeIndex >= turn.order.length) turn.activeIndex = 0;
+  }
+  // A departing player can't be left holding (or gating the close of) a pending stack -- that
+  // would soft-lock the table forever waiting on someone who's gone. Auto-advance/replace them so
+  // the round can still terminate normally for whoever's left.
+  if (turn.order.length === 0) {
+    lobby.priority.holderId = null;
+    lobby.priority.lastActorId = null;
+  } else if (lobby.stack.length > 0) {
+    if (wasPriorityHolder) lobby.priority.holderId = turn.order[idx % turn.order.length];
+    if (wasLastActor) lobby.priority.lastActorId = lobby.priority.holderId;
   }
   if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators || {}).length === 0) {
     delete lobbies[lobby.id];
@@ -164,6 +180,7 @@ function removePlayerFromLobby(lobby, socketId, verb) {
     broadcastVoiceRoster(lobby);
     broadcastTurn(lobby);
     broadcastPlayers(lobby);
+    broadcastStack(lobby);
     if (uname) pushLog(lobby, `${uname} ${verb} the table`);
   }
   broadcastLobbyList();
@@ -212,6 +229,8 @@ function reattachPlayer(lobby, oldId, newId) {
   }
   lobby.turn.order = lobby.turn.order.map((id) => (id === oldId ? newId : id));
   if (lobby.turn.pendingDiscard && lobby.turn.pendingDiscard.playerId === oldId) lobby.turn.pendingDiscard.playerId = newId;
+  if (lobby.priority.holderId === oldId) lobby.priority.holderId = newId;
+  if (lobby.priority.lastActorId === oldId) lobby.priority.lastActorId = newId;
   for (const cardId in lobby.combat.attackers) {
     if (lobby.combat.attackers[cardId] === oldId) lobby.combat.attackers[cardId] = newId;
   }
@@ -230,6 +249,8 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     targets: lobby.targets,
     turn: lobby.turn,
     combat: lobby.combat,
+    stack: lobby.stack.map((c) => maskCard(c, socketId)),
+    priority: lobby.priority,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
     spectatorRoster: Object.values(lobby.spectators).map((s) => s.name),
@@ -259,6 +280,15 @@ function classifyType(type) {
   if (t.includes("land")) return "mana";
   if (t.includes("creature")) return "creature";
   return "artifact"; // artifacts, enchantments, planeswalkers, instants/sorceries, etc.
+}
+
+// Resolution-time distinction (type line only, not casting speed -- a Flash *creature* is still
+// a permanent when it resolves). Instants/sorceries have no permanent form, so on resolution they
+// go to the graveyard instead of the battlefield; their actual effect is manually adjudicated by
+// the players, same as every other unautomated effect in this app.
+function isInstantOrSorcery(type) {
+  const t = (type || "").toLowerCase();
+  return t.includes("instant") || t.includes("sorcery");
 }
 
 function basicLandColor(type) {
@@ -515,11 +545,20 @@ function attemptPlay(p, card, targetZoneType, xValue) {
 }
 
 // Instants (and anything with Flash) can be played anytime; everything else is sorcery-speed —
-// only on your own turn, during a main phase. Before the game is actually started there's no
-// turn structure yet, so pregame setup stays unrestricted.
+// only on your own turn, during a main phase, with the stack empty. Before the game is actually
+// started there's no turn structure yet, so pregame setup stays unrestricted.
 function checkTiming(lobby, socketId, card) {
   const text = (card.type || "").toLowerCase();
   const isInstantSpeed = text.includes("instant") || (Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash"));
+  if (lobby.stack.length > 0) {
+    // A priority round is active: only the current holder may act, and only with an
+    // instant-speed spell (which includes land drops? no -- lands are never instant-speed, so
+    // this correctly blocks them too) -- sorcery-speed casting is never legal with something
+    // already pending, same as real Magic.
+    if (!isInstantSpeed) return { ok: false, error: `You can't play ${card.name || "that"} while something is on the stack.` };
+    if (lobby.priority.holderId !== socketId) return { ok: false, error: "You don't have priority right now." };
+    return { ok: true };
+  }
   if (isInstantSpeed) return { ok: true };
   if (!lobby.turn.started) return { ok: true };
   if (lobby.turn.order[lobby.turn.activeIndex] !== socketId) {
@@ -529,6 +568,64 @@ function checkTiming(lobby, socketId, card) {
     return { ok: false, error: `You can only play ${card.name || "that"} during a main phase.` };
   }
   return { ok: true };
+}
+
+// ---------------- stack / priority ----------------
+
+function nextInOrder(order, id) {
+  const idx = order.indexOf(id);
+  if (idx === -1 || order.length === 0) return null;
+  return order[(idx + 1) % order.length];
+}
+
+function broadcastStack(lobby) { io.to(lobby.id).emit("stackState", { stack: lobby.stack, priority: lobby.priority }); }
+
+// Pushes a cast spell onto the stack and (re)starts a priority round from the next player after
+// the caster -- only the caster passing priority all the way back around, with nobody else
+// adding anything new, closes the round and resolves it. Lands never call this; they're not
+// spells and resolve immediately in the caller, same as today.
+function pushToStack(lobby, card, casterId) {
+  card.zoneType = "stack";
+  card.faceDown = false; // casting is public information
+  lobby.stack.push(card);
+  lobby.priority.lastActorId = casterId;
+  lobby.priority.holderId = nextInOrder(lobby.turn.order, casterId);
+  broadcastCard(lobby, card);
+  broadcastStack(lobby);
+}
+
+// Pops the top of the stack and resolves it: permanents go to the battlefield (identical
+// placement logic to a normal cast -- classifyType/entersTapped/controllerSince), instants and
+// sorceries go to their controller's graveyard, since they have no permanent form. What the
+// spell actually *does* is, like every other unautomated effect in this app, adjudicated
+// manually by the players.
+function resolveStackTop(lobby) {
+  const card = lobby.stack.pop();
+  if (!card) return;
+  const owner = lobby.players[card.owner];
+  if (isInstantOrSorcery(card.type)) {
+    sendToGraveyardInternal(lobby, card);
+    if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
+  } else {
+    card.zoneType = classifyType(card.type);
+    card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+    if (entersTapped(card)) card.tapped = true;
+    broadcastCard(lobby, card);
+    if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved onto the battlefield`);
+  }
+  if (lobby.stack.length === 0) {
+    lobby.priority.holderId = null;
+    lobby.priority.lastActorId = null;
+  } else {
+    // Fresh lap: the active player gets first crack at what's still pending, and the round
+    // closes once priority has cycled all the way back around to them with everyone else
+    // having passed in between.
+    const activeId = lobby.turn.order[lobby.turn.activeIndex] || null;
+    lobby.priority.holderId = activeId;
+    lobby.priority.lastActorId = activeId;
+  }
+  broadcastPlayers(lobby);
+  broadcastStack(lobby);
 }
 
 // "You have no maximum hand size" effects come from a permanent's oracle text — check every
@@ -1039,20 +1136,29 @@ io.on("connection", (socket) => {
       if (!timing.ok) { socket.emit("actionError", timing.error); return; }
       const result = attemptPlay(p, card, zoneType, x);
       if (!result.ok) { socket.emit("actionError", result.error); return; }
-      card.zoneType = zoneType;
-      card.faceDown = false;
-      // A card sitting in hand was stamped with whatever turn it was drawn on (or 0, pregame) --
-      // that's stale the moment it actually enters the battlefield, which is what summoning
-      // sickness needs to key off. Same story for entersTapped: spawnBattlefieldCard already
-      // applies it for cards created straight onto the battlefield, but a card played from hand
-      // never goes through that function again, so it was silently skipped.
-      card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
-      if (entersTapped(card)) card.tapped = true;
-      broadcastCard(lobby, card);
-      broadcastPlayers(lobby);
-      pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
+      if (zoneType === "mana" || !lobby.turn.started) {
+        // Lands aren't spells -- no stack, no priority window, resolves immediately like today.
+        // Pregame (no turn structure yet, no turn.order to hold a priority round) stays
+        // unrestricted the same way it always has -- everything just resolves immediately.
+        card.zoneType = zoneType;
+        card.faceDown = false;
+        // A card sitting in hand was stamped with whatever turn it was drawn on (or 0, pregame) --
+        // that's stale the moment it actually enters the battlefield, which is what summoning
+        // sickness needs to key off. Same story for entersTapped: spawnBattlefieldCard already
+        // applies it for cards created straight onto the battlefield, but a card played from hand
+        // never goes through that function again, so it was silently skipped.
+        card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+        if (entersTapped(card)) card.tapped = true;
+        broadcastCard(lobby, card);
+        broadcastPlayers(lobby);
+        pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
+      } else {
+        pushToStack(lobby, card, socket.id);
+        pushLog(lobby, `${p.name} cast ${card.name || "a spell"}`);
+      }
       return;
     }
+    if (card.zoneType === "stack") return; // can't yank a pending spell straight onto the battlefield, bypassing resolution
     // reclassifying an existing battlefield permanent between creature/artifact/mana rows — purely
     // organizational, no cost.
     card.zoneType = zoneType;
@@ -1071,19 +1177,24 @@ io.on("connection", (socket) => {
     if (!timing.ok) { socket.emit("actionError", timing.error); return; }
     const result = attemptPlay(p, card, targetZoneType, xValue);
     if (!result.ok) { socket.emit("actionError", result.error); return; }
-    card.zoneType = targetZoneType;
-    card.faceDown = false;
-    card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
-    if (entersTapped(card)) card.tapped = true;
-    broadcastCard(lobby, card);
-    broadcastPlayers(lobby);
-    pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
+    if (targetZoneType === "mana" || !lobby.turn.started) {
+      card.zoneType = targetZoneType;
+      card.faceDown = false;
+      card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+      if (entersTapped(card)) card.tapped = true;
+      broadcastCard(lobby, card);
+      broadcastPlayers(lobby);
+      pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
+    } else {
+      pushToStack(lobby, card, socket.id);
+      pushLog(lobby, `${p.name} cast ${card.name || "a spell"}`);
+    }
   });
 
   socket.on("tap", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
-    if (!card || card.owner !== socket.id || card.zoneType === "hand") return;
+    if (!card || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
     // One-way now: this only ever taps. Real Magic has no "double-click to untap at will" —
     // untapping only happens automatically each Untap step (or via Untap All for effects that
     // untap things). Letting a player freely toggle back and forth on the same land was a way to
@@ -1128,8 +1239,9 @@ io.on("connection", (socket) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
     // Hand cards are already always faceDown for non-owners via maskCard; flipping one to
-    // faceDown:false would leak its identity to every other player at the table.
-    if (!card || card.owner !== socket.id || card.zoneType === "hand") return;
+    // faceDown:false would leak its identity to every other player at the table. A card on the
+    // stack is already public (face up) and shouldn't be hideable either.
+    if (!card || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
     card.faceDown = !card.faceDown;
     broadcastCard(lobby, card);
     const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
@@ -1139,7 +1251,7 @@ io.on("connection", (socket) => {
   socket.on("counter", ({ id, delta }) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
-    if (!card || card.owner !== socket.id || card.zoneType === "hand") return;
+    if (!card || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
     card.counters = (card.counters || 0) + delta;
     broadcastCard(lobby, card);
   });
@@ -1147,7 +1259,9 @@ io.on("connection", (socket) => {
   socket.on("removeCard", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
-    if (!card || card.owner !== socket.id) return;
+    // A card on the stack can't be removed this way -- lobby.stack still holds the same object
+    // reference and has no idea it's gone, which would double-process it when it resolves.
+    if (!card || card.owner !== socket.id || card.zoneType === "stack") return;
     delete lobby.cards[id];
     if (lobby.targets[id]) { delete lobby.targets[id]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", id);
@@ -1160,7 +1274,7 @@ io.on("connection", (socket) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
     const p = lobby.players[socket.id];
-    if (!card || !p || card.owner !== socket.id || card.zoneType === "hand") return;
+    if (!card || !p || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
     delete lobby.cards[id];
     if (lobby.targets[id]) { delete lobby.targets[id]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", id);
@@ -1199,7 +1313,9 @@ io.on("connection", (socket) => {
 
   function moveOut(lobby, cardId, zone, pos) {
     const card = lobby.cards[cardId];
-    if (!card || card.owner !== socket.id) return;
+    // A card on the stack can't be moved this way -- lobby.stack still holds the same object
+    // reference and has no idea it's gone, which would double-process it when it resolves.
+    if (!card || card.owner !== socket.id || card.zoneType === "stack") return;
     const owner = card.owner;
     delete lobby.cards[cardId];
     if (lobby.targets[cardId]) { delete lobby.targets[cardId]; broadcastTargets(lobby); }
@@ -1426,6 +1542,9 @@ io.on("connection", (socket) => {
       socket.emit("actionError", `${cmd.name} is already on the battlefield.`);
       return;
     }
+    // Casting a commander is a cast like any other -- same timing/stack rules, not a bypass.
+    const timing = checkTiming(lobby, socket.id, cmd);
+    if (!timing.ok) { socket.emit("actionError", timing.error); return; }
     const cost = parseManaCost(cmd.manaCost);
     cost.generic += cmd.tax || 0; // commander tax: +{2} generic per previous cast from the command zone
     const remaining = canAffordAndPay(p.mana, cost, 0);
@@ -1437,6 +1556,9 @@ io.on("connection", (socket) => {
     const card = spawnBattlefieldCard(lobby, { ...cmd, owner: socket.id, faceDown: false, zoneType: classifyType(cmd.type), isCommander: true });
     cmd.battlefieldId = card.id;
     cmd.tax += 2;
+    // Pregame (no turn.order yet) stays unrestricted like every other cast -- spawnBattlefieldCard
+    // already placed it straight on the battlefield, so there's nothing more to do.
+    if (lobby.turn.started) pushToStack(lobby, card, socket.id);
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} cast their commander: ${cmd.name} (tax now ${cmd.tax})`);
   });
@@ -1456,6 +1578,8 @@ io.on("connection", (socket) => {
     lobby.turn.turnNumber = 1;
     lobby.turn.started = true;
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+    lobby.stack = [];
+    lobby.priority = { holderId: null, lastActorId: null };
     for (const pid in lobby.players) {
       lobby.players[pid].mana = EMPTY_MANA();
       lobby.players[pid].landsPlayedThisTurn = 0;
@@ -1471,6 +1595,7 @@ io.on("connection", (socket) => {
     if (!lobby.turn.started) return;
     const activeId = lobby.turn.order[lobby.turn.activeIndex];
     if (activeId !== socket.id) return;
+    if (lobby.stack.length > 0) return; // can't advance the turn with something pending on the stack
     if (lobby.turn.pendingDiscard) return; // can't advance past End Step until the discard is resolved
     if (lobby.turn.phase === "End Step") {
       const handCount = Object.values(lobby.cards).filter((c) => c.owner === activeId && c.zoneType === "hand").length;
@@ -1501,11 +1626,27 @@ io.on("connection", (socket) => {
     advancePhase(lobby);
   });
 
+  // ---- stack / priority ----
+
+  socket.on("passPriority", () => {
+    const lobby = currentLobby(); if (!lobby) return;
+    if (lobby.stack.length === 0 || lobby.priority.holderId !== socket.id) return;
+    const next = nextInOrder(lobby.turn.order, socket.id);
+    if (!next) return; // shouldn't happen with a non-empty stack and a non-empty turn order
+    if (next === lobby.priority.lastActorId) {
+      resolveStackTop(lobby);
+    } else {
+      lobby.priority.holderId = next;
+      broadcastStack(lobby);
+    }
+  });
+
   // ---- combat ----
 
   socket.on("declareAttackers", (assignments) => {
     const lobby = currentLobby(); if (!lobby) return;
     if (!lobby.turn.started || lobby.turn.order[lobby.turn.activeIndex] !== socket.id) return;
+    if (lobby.stack.length > 0) return; // can't move combat forward with something pending
     if (lobby.combat.step !== "declareAttackers") return;
     const validAttackers = {};
     const defendersSet = new Set();
@@ -1537,6 +1678,7 @@ io.on("connection", (socket) => {
 
   socket.on("declareBlockers", (assignments) => {
     const lobby = currentLobby(); if (!lobby) return;
+    if (lobby.stack.length > 0) return; // can't move combat forward with something pending
     if (lobby.combat.step !== "declareBlockers") return;
     if (!lobby.combat.defendersPending.includes(socket.id)) return;
     const usedBlockers = new Set(Object.values(lobby.combat.blocks).filter(Boolean));
@@ -1631,11 +1773,14 @@ io.on("connection", (socket) => {
     lobby.gameState.log = [];
     lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+    lobby.stack = [];
+    lobby.priority = { holderId: null, lastActorId: null };
     io.to(lobby.id).emit("cleared");
     broadcastPlayers(lobby);
     broadcastTargets(lobby);
     broadcastTurn(lobby);
     broadcastCombat(lobby);
+    broadcastStack(lobby);
   });
 
   socket.on("disconnect", () => {
