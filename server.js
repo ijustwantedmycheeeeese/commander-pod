@@ -313,6 +313,30 @@ function entersTapped(card) {
   return true;
 }
 
+// Exotic Orchard / Reflecting Pool-style sources derive their color from OTHER permanents on the
+// battlefield rather than having a fixed set of their own -- detected via oracle text since
+// there's no structured field for it. Deliberately narrow to the opponent-facing wording so a
+// card like Reflecting Pool ("...a land YOU control...") doesn't get treated the same way.
+function dependsOnOpponentLands(card) {
+  const text = (card.text || "").toLowerCase();
+  return text.includes("opponent controls could produce") || text.includes("opponent controls can produce");
+}
+
+// The actual set of colors any opponent's lands could currently produce, for a source like
+// Exotic Orchard. Basic land types are unambiguous by type line; anything else falls back to
+// the archive's producedMana list.
+function opponentLandColors(lobby, ownerId) {
+  const colors = new Set();
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === ownerId || c.zoneType !== "mana") continue;
+    const basic = basicLandColor(c.type);
+    if (basic) colors.add(basic);
+    if (Array.isArray(c.producedMana)) c.producedMana.forEach((col) => { if (["W", "U", "B", "R", "G", "C"].includes(col)) colors.add(col); });
+  }
+  return Array.from(colors);
+}
+
 function parsePT(v) {
   const n = parseInt(v, 10);
   return isNaN(n) ? 0 : n;
@@ -1227,8 +1251,14 @@ io.on("connection", (socket) => {
     // one color. A source that can produce more than one color (Command Tower, most signets/
     // talismans, City of Brass, mana dorks with a choice) prompts the player to pick instead of
     // silently guessing or staying fully manual.
-    let color = basicLandColor(card.type);
-    if (!color && Array.isArray(card.producedMana) && card.producedMana.length === 1) {
+    let options = null;
+    if (dependsOnOpponentLands(card)) {
+      // Exotic Orchard and the like: narrow to what opponents' lands could actually produce
+      // right now, instead of the card's raw (all-five) producedMana list.
+      options = opponentLandColors(lobby, socket.id);
+    }
+    let color = options ? (options.length === 1 ? options[0] : null) : basicLandColor(card.type);
+    if (!color && !options && Array.isArray(card.producedMana) && card.producedMana.length === 1) {
       color = card.producedMana[0];
     }
     if (color && ["W", "U", "B", "R", "G", "C"].includes(color)) {
@@ -1236,9 +1266,11 @@ io.on("connection", (socket) => {
       p.mana[color] = (p.mana[color] || 0) + 1;
       broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
-    } else if (Array.isArray(card.producedMana) && card.producedMana.length > 1) {
-      const options = card.producedMana.filter((c) => ["W", "U", "B", "R", "G", "C"].includes(c));
-      if (options.length) socket.emit("chooseMana", { cardId: card.id, cardName: card.name, options });
+    } else if (options ? options.length > 1 : (Array.isArray(card.producedMana) && card.producedMana.length > 1)) {
+      const finalOptions = (options || card.producedMana).filter((c) => ["W", "U", "B", "R", "G", "C"].includes(c));
+      if (finalOptions.length) socket.emit("chooseMana", { cardId: card.id, cardName: card.name, options: finalOptions });
+    } else if (options && options.length === 0) {
+      socket.emit("actionError", `No opponent controls a land right now, so ${card.name} can't produce mana.`);
     }
   });
 
