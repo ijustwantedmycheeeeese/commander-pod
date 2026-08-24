@@ -515,6 +515,7 @@ function spawnBattlefieldCard(lobby, data) {
     faceDown: !!faceDown, counters: 0,
     owner, ownerColor: p ? p.color : "#999",
     isCommander: !!isCommander,
+    attachedTo: null, // equipment/aura attachment link, set only via the attachCard handler
     // Summoning sickness: stamped with the turn number it entered the battlefield. A creature is
     // sick (can't attack, can still block) if this still matches the CURRENT turn number when its
     // controller tries to attack with it — irrelevant for non-creatures, but harmless to set.
@@ -675,11 +676,36 @@ function clearCommanderRef(lobby, card) {
   owner.commanders.forEach((c) => { if (c && c.battlefieldId === card.id) c.battlefieldId = null; });
 }
 
+// Equipment stays on the battlefield unattached when its host leaves; an aura has no legal host
+// without one, so it goes to the graveyard too (a rough approximation of the real state-based
+// action). Detected via type line since there's no structured "is this an aura" field.
+function detachDependents(lobby, hostCard) {
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.attachedTo !== hostCard.id) continue;
+    c.attachedTo = null;
+    if ((c.type || "").toLowerCase().includes("aura")) {
+      sendToGraveyardInternal(lobby, c);
+    } else {
+      broadcastCard(lobby, c);
+    }
+  }
+}
+
+// Parses "Equip {2}" / "Equip {1}{W}" from oracle text into a mana cost, or null if there isn't
+// one (an Aura, or anything without a real equip cost -- attaching those is free).
+function equipCostFromText(text) {
+  const m = (text || "").match(/equip\s*((?:\{[^}]+\})+)/i);
+  if (!m) return null;
+  return parseManaCost(m[1]);
+}
+
 function sendToGraveyardInternal(lobby, card) {
   delete lobby.cards[card.id];
   if (lobby.targets[card.id]) delete lobby.targets[card.id];
   io.to(lobby.id).emit("cardRemove", card.id);
   clearCommanderRef(lobby, card);
+  detachDependents(lobby, card);
   const owner = lobby.players[card.owner];
   if (owner) owner.graveyard.push(toEntry(card));
 }
@@ -1323,6 +1349,38 @@ io.on("connection", (socket) => {
     broadcastCard(lobby, card);
   });
 
+  // Attaching represents equipping (pays the real Equip cost, parsed from oracle text, if there
+  // is one) or an aura settling onto what it enchants (free -- its real cost was already paid via
+  // the stack when it was cast). No ownership restriction on the target, same trust model as
+  // targeting -- your Pacifism attaching to an opponent's creature is the normal case, not an
+  // exception. Detaching is always free, a manual correction/undo tool.
+  socket.on("attachCard", ({ id, targetId }) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    const card = lobby && lobby.cards[id];
+    const target = lobby && lobby.cards[targetId];
+    if (!p || !card || !target || card.owner !== socket.id || card.id === target.id) return;
+    if (card.zoneType === "hand" || card.zoneType === "stack") return;
+    if (target.zoneType === "hand" || target.zoneType === "stack") return;
+    const cost = equipCostFromText(card.text);
+    if (cost) {
+      const remaining = canAffordAndPay(p.mana, cost, 0);
+      if (!remaining) { socket.emit("actionError", `Not enough mana to equip ${card.name || "this"}.`); return; }
+      p.mana = remaining;
+      broadcastPlayers(lobby);
+    }
+    card.attachedTo = targetId;
+    broadcastCard(lobby, card);
+    pushLog(lobby, `${p.name} attached ${card.name || "a card"} to ${target.name || "a card"}`);
+  });
+
+  socket.on("detachCard", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
+    if (!card || card.owner !== socket.id || !card.attachedTo) return;
+    card.attachedTo = null;
+    broadcastCard(lobby, card);
+  });
+
   socket.on("removeCard", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
@@ -1333,6 +1391,7 @@ io.on("connection", (socket) => {
     if (lobby.targets[id]) { delete lobby.targets[id]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", id);
     clearCommanderRef(lobby, card);
+    detachDependents(lobby, card);
   });
 
   // Deliberate "this permanent is being bounced/returned to hand" action — represents a bounce
@@ -1346,6 +1405,7 @@ io.on("connection", (socket) => {
     if (lobby.targets[id]) { delete lobby.targets[id]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", id);
     clearCommanderRef(lobby, card);
+    detachDependents(lobby, card);
     spawnBattlefieldCard(lobby, { ...toEntry(card), owner: socket.id, faceDown: true, zoneType: "hand" });
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} returned ${card.name || "a face-down card"} to their hand`);
@@ -1388,6 +1448,7 @@ io.on("connection", (socket) => {
     if (lobby.targets[cardId]) { delete lobby.targets[cardId]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", cardId);
     clearCommanderRef(lobby, card);
+    detachDependents(lobby, card);
     if (!lobby.players[owner]) return;
     const entry = toEntry(card);
     if (zone === "graveyard") lobby.players[owner].graveyard.push(entry);
