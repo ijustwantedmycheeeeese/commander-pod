@@ -415,7 +415,7 @@
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
           <li><strong>Hand size</strong> is capped at 7: ending your turn (past End Step) with more than that opens a required discard prompt — pick exactly enough cards to get back to 7 before the turn actually ends. A permanent whose text says "no maximum hand size" exempts you entirely.</li>
           <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing.</li>
-          <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase, stepping through Untap (auto-untaps + resets land drops) → Upkeep → Draw (auto-draws, skipped turn 1 for the starting player) → Main 1 → Combat → Main 2 → End Step.</li>
+          <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board.</li>
           <li><strong>Chat</strong> and <strong>Voice Chat</strong> (experimental, peer-to-peer) are in the sidebar.</li>
@@ -1033,6 +1033,7 @@
           return `<div class="stack-item${i === 0 ? " stack-top" : ""}">
             <img src="${c.img || ''}" class="zone-card-thumb">
             <div class="zone-card-name">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">cast by ${escapeHtml(caster)}${i === 0 ? " — resolves next" : ""}</div></div>
+            <button class="mini-btn" style="background:#7a1f1f;" onclick="counterStackItem('${c.id}')" title="Represents a counterspell resolving against this -- sends it straight to the graveyard">Counter</button>
           </div>`;
         }).join("");
       }
@@ -1049,6 +1050,7 @@
     }
 
     function passPriority() { socket.emit("passPriority"); }
+    function counterStackItem(cardId) { socket.emit("counterStackItem", cardId); }
 
     function escapeHtml(s) {
       const d = document.createElement("div");

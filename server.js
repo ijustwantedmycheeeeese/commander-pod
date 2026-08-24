@@ -657,7 +657,26 @@ function sendToGraveyardInternal(lobby, card) {
 
 // ---------------- turn engine ----------------
 
+// Untap/Upkeep/Draw never require a decision (no triggers are automated, draw already happens on
+// its own), and Combat is skipped too when the active player has no creature to attack with --
+// no need to make them click through three no-op phases (or an empty combat) every single turn.
+function shouldAutoAdvance(lobby) {
+  const turn = lobby.turn;
+  if (!turn.started || turn.order.length === 0) return false;
+  if (turn.phase === "Untap" || turn.phase === "Upkeep" || turn.phase === "Draw") return true;
+  if (turn.phase === "Combat") {
+    const activeId = turn.order[turn.activeIndex];
+    return !Object.values(lobby.cards).some((c) => c.owner === activeId && c.zoneType === "creature");
+  }
+  return false;
+}
+
 function advancePhase(lobby) {
+  advanceOnePhase(lobby);
+  while (shouldAutoAdvance(lobby)) advanceOnePhase(lobby);
+}
+
+function advanceOnePhase(lobby) {
   const turn = lobby.turn;
   if (!turn.started || turn.order.length === 0) return;
   const oldPhase = turn.phase;
@@ -1639,6 +1658,29 @@ io.on("connection", (socket) => {
       lobby.priority.holderId = next;
       broadcastStack(lobby);
     }
+  });
+
+  // Manual "this got countered" tool -- there's no card-text automation anywhere in this app, so
+  // a counterspell's effect is represented the same way every other spell effect already is:
+  // whoever cast/resolved it (via the normal stack, elsewhere) just applies the outcome directly.
+  // Open to anyone, same spirit as targeting ("anyone can Target anything") -- not gated on
+  // priority, since by the time you're representing "it got countered" the actual counterspell
+  // has already been cast and resolved through the normal flow.
+  socket.on("counterStackItem", (cardId) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const idx = lobby.stack.findIndex((c) => c.id === cardId);
+    if (idx === -1) return;
+    const card = lobby.stack.splice(idx, 1)[0];
+    const owner = lobby.players[card.owner];
+    const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
+    sendToGraveyardInternal(lobby, card);
+    if (owner) pushLog(lobby, `${who} countered ${owner.name}'s ${card.name || "spell"}`);
+    if (lobby.stack.length === 0) {
+      lobby.priority.holderId = null;
+      lobby.priority.lastActorId = null;
+    }
+    broadcastPlayers(lobby);
+    broadcastStack(lobby);
   });
 
   // ---- combat ----
