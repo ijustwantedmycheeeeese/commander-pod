@@ -245,6 +245,7 @@
         <datalist id="cardSuggestions"></datalist>
         <button id="spawn-face-up-btn" onclick="requestSpawn(false)">Spawn Face Up</button>
         <button id="spawn-face-down-btn" onclick="requestSpawn(true)" class="secondary">Spawn Face Down</button>
+        <button id="create-token-btn" onclick="openTokenModal()" class="secondary">Create Token</button>
         <button onclick="openDeckEditor()" class="secondary">Deck Editor</button>
       </div>
       <div class="flex-row">
@@ -414,7 +415,8 @@
           <li>A creature has <strong>summoning sickness</strong> (shown tilted) until it's been under your control since the start of your most recent turn — it can still block, just not attack, unless it has Haste.</li>
           <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
           <li><strong>Hand size</strong> is capped at 7: ending your turn (past End Step) with more than that opens a required discard prompt — pick exactly enough cards to get back to 7 before the turn actually ends. A permanent whose text says "no maximum hand size" exempts you entirely.</li>
-          <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing.</li>
+          <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing. Any player can hit <strong>Counter</strong> on a stack item to send it straight to the graveyard, representing a counterspell that resolved elsewhere.</li>
+          <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board.</li>
@@ -463,6 +465,35 @@
         <p style="font-size:12px;color:#a89a70;">Something's on the stack. Cast an instant/flash spell in response, or pass — once everyone passes in a row, the top of the stack resolves.</p>
         <div class="modal-close-row" style="justify-content:center;">
           <button onclick="passPriority()">Pass</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="token-modal">
+      <div class="modal-box" style="max-width:420px;">
+        <h2>Create Token</h2>
+        <div class="mm-label" style="margin-top:0;">Quick presets</div>
+        <div id="token-presets" class="flex-row" style="flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
+        <input type="text" id="tok-name" placeholder="Name" style="width:100%;margin-bottom:6px;">
+        <input type="text" id="tok-type" placeholder="Type line (e.g. Token Creature — Zombie)" style="width:100%;margin-bottom:6px;">
+        <div class="flex-row" style="margin-bottom:6px;">
+          <input type="text" id="tok-power" placeholder="Power" style="width:70px;">
+          <input type="text" id="tok-toughness" placeholder="Toughness" style="width:70px;">
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="tok-flying"> Flying</label>
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="tok-haste"> Haste</label>
+        </div>
+        <div class="mm-label">Colors</div>
+        <div class="flex-row" style="margin-bottom:10px;">
+          <label style="font-size:12px;"><input type="checkbox" class="tok-color" value="W"> W</label>
+          <label style="font-size:12px;"><input type="checkbox" class="tok-color" value="U"> U</label>
+          <label style="font-size:12px;"><input type="checkbox" class="tok-color" value="B"> B</label>
+          <label style="font-size:12px;"><input type="checkbox" class="tok-color" value="R"> R</label>
+          <label style="font-size:12px;"><input type="checkbox" class="tok-color" value="G"> G</label>
+        </div>
+        <div id="tok-status" style="font-size:12px;color:#a89a70;margin-bottom:6px;"></div>
+        <div class="modal-close-row">
+          <button class="secondary" onclick="closeTokenModal()">Close</button>
+          <button onclick="createToken()">Create Token</button>
         </div>
       </div>
     </div>
@@ -692,7 +723,7 @@
     // top-bar/panel controls that aren't tied to a specific card or player id.
     function applySpectatorUI() {
       document.getElementById("spectator-badge").style.display = amSpectator ? "inline-block" : "none";
-      ["spawn-face-up-btn", "spawn-face-down-btn", "untap-all-btn", "new-game-btn", "opening-hand-panel", "my-status-panel", "mana-pool-panel"].forEach((id) => {
+      ["spawn-face-up-btn", "spawn-face-down-btn", "create-token-btn", "untap-all-btn", "new-game-btn", "opening-hand-panel", "my-status-panel", "mana-pool-panel"].forEach((id) => {
         document.getElementById(id).style.display = amSpectator ? "none" : "";
       });
     }
@@ -1177,6 +1208,57 @@
             alert("Card lookup failed! Check name spelling.");
           }
         });
+    }
+
+    // ---------------- token creation ----------------
+    // Tokens aren't real cards, so there's nothing to look up on Scryfall -- spawnCard already
+    // accepts arbitrary card data with no lookup required, which is exactly what a token needs.
+    const TOKEN_PRESETS = [
+      { name: "Soldier", type: "Token Creature — Soldier", power: "1", toughness: "1", colors: ["W"] },
+      { name: "Zombie", type: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] },
+      { name: "Spirit", type: "Token Creature — Spirit", power: "1", toughness: "1", colors: ["W"], flying: true },
+      { name: "Goblin", type: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], haste: true },
+      { name: "Elemental", type: "Token Creature — Elemental", power: "3", toughness: "3", colors: ["G"] },
+      { name: "Treasure", type: "Token Artifact — Treasure", power: null, toughness: null, colors: [] },
+      { name: "Clue", type: "Token Artifact — Clue", power: null, toughness: null, colors: [] },
+      { name: "Food", type: "Token Artifact — Food", power: null, toughness: null, colors: [] }
+    ];
+    function renderTokenPresets() {
+      document.getElementById("token-presets").innerHTML = TOKEN_PRESETS.map((t, i) =>
+        `<button class="mini-btn" onclick="applyTokenPreset(${i})">${escapeHtml(t.name)}</button>`
+      ).join("");
+    }
+    function applyTokenPreset(i) {
+      const t = TOKEN_PRESETS[i];
+      document.getElementById("tok-name").value = t.name;
+      document.getElementById("tok-type").value = t.type;
+      document.getElementById("tok-power").value = t.power || "";
+      document.getElementById("tok-toughness").value = t.toughness || "";
+      document.getElementById("tok-flying").checked = !!t.flying;
+      document.getElementById("tok-haste").checked = !!t.haste;
+      document.querySelectorAll(".tok-color").forEach((cb) => { cb.checked = t.colors.includes(cb.value); });
+    }
+    function openTokenModal() {
+      renderTokenPresets();
+      document.getElementById("tok-status").innerText = "";
+      document.getElementById("token-modal").style.display = "flex";
+    }
+    function closeTokenModal() { document.getElementById("token-modal").style.display = "none"; }
+    function createToken() {
+      const name = document.getElementById("tok-name").value.trim();
+      if (!name) { document.getElementById("tok-status").innerText = "Enter a name first."; return; }
+      const type = document.getElementById("tok-type").value.trim() || "Token Creature";
+      const power = document.getElementById("tok-power").value.trim();
+      const toughness = document.getElementById("tok-toughness").value.trim();
+      const colors = Array.from(document.querySelectorAll(".tok-color:checked")).map((cb) => cb.value);
+      const keywords = [];
+      if (document.getElementById("tok-flying").checked) keywords.push("Flying");
+      if (document.getElementById("tok-haste").checked) keywords.push("Haste");
+      socket.emit("spawnCard", {
+        name, type, power: power || null, toughness: toughness || null,
+        colors, colorIdentity: colors, manaCost: "", cmc: 0, text: "", keywords, producedMana: null, faceDown: false
+      });
+      closeTokenModal();
     }
 
     function drawCard(n) { socket.emit("drawCard", n); }
