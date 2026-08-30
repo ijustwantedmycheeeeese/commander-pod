@@ -174,6 +174,7 @@ function executeAbilityEffects(lobby, item) {
     const fn = EFFECTS[params.type];
     if (fn) fn(lobby, ctx, params);
   });
+  checkEliminations(lobby);
   broadcastPlayers(lobby);
 }
 
@@ -247,7 +248,10 @@ function restoreLobbies() {
     if (!l.priority) l.priority = { holderId: null, lastActorId: null };
     // Nobody is actually connected right after a restart — mark every seated player as
     // disconnected so the normal reconnect-grace mechanism below picks up the cleanup/resume.
-    for (const sid in l.players) l.players[sid].disconnectedAt = Date.now();
+    for (const sid in l.players) {
+      l.players[sid].disconnectedAt = Date.now();
+      if (l.players[sid].eliminated === undefined) l.players[sid].eliminated = false;
+    }
     restored[id] = l;
   }
   return restored;
@@ -258,11 +262,12 @@ let lobbies = restoreLobbies(); // id -> lobby state
 setInterval(saveLobbies, 20000);
 process.on("SIGTERM", () => { saveLobbies(); process.exit(0); });
 
-function removePlayerFromLobby(lobby, socketId, verb) {
-  const p = lobby.players[socketId];
-  const uname = p ? p.username : null;
-  delete lobby.players[socketId];
-  lobby.voiceParticipants.delete(socketId);
+// Shared by removePlayerFromLobby (a real disconnect/leave) and eliminatePlayer (life <= 0 or
+// 21+ damage from a single commander): removes socketId from turn.order, fixing up activeIndex
+// and re-deriving priority the same way either kind of departure needs to. A departing player
+// can't be left holding (or gating the close of) a pending stack -- that would soft-lock the
+// table forever waiting on someone who's gone.
+function spliceFromTurnOrder(lobby, socketId) {
   const turn = lobby.turn;
   const idx = turn.order.indexOf(socketId);
   const wasPriorityHolder = lobby.priority.holderId === socketId;
@@ -273,9 +278,6 @@ function removePlayerFromLobby(lobby, socketId, verb) {
     else if (idx < turn.activeIndex) turn.activeIndex--;
     else if (turn.activeIndex >= turn.order.length) turn.activeIndex = 0;
   }
-  // A departing player can't be left holding (or gating the close of) a pending stack -- that
-  // would soft-lock the table forever waiting on someone who's gone. Auto-advance/replace them so
-  // the round can still terminate normally for whoever's left.
   if (turn.order.length === 0) {
     lobby.priority.holderId = null;
     lobby.priority.lastActorId = null;
@@ -283,6 +285,26 @@ function removePlayerFromLobby(lobby, socketId, verb) {
     if (wasPriorityHolder) lobby.priority.holderId = turn.order[idx % turn.order.length];
     if (wasLastActor) lobby.priority.lastActorId = lobby.priority.holderId;
   }
+}
+
+// Not touched by a normal disconnect/leave (removePlayerFromLobby never cleaned this up either --
+// a genuine departure mid-declareBlockers could permanently stall combat for the whole table,
+// since defendersPending.length === 0 is what gates it moving forward and the stale id can never
+// submit another declareBlockers). Shared so both paths get the fix.
+function removeFromCombatRefs(lobby, socketId) {
+  lobby.combat.defendersPending = (lobby.combat.defendersPending || []).filter((id) => id !== socketId);
+  for (const attackerId in lobby.combat.attackers) {
+    if (lobby.combat.attackers[attackerId] === socketId) delete lobby.combat.attackers[attackerId];
+  }
+}
+
+function removePlayerFromLobby(lobby, socketId, verb) {
+  const p = lobby.players[socketId];
+  const uname = p ? p.username : null;
+  delete lobby.players[socketId];
+  lobby.voiceParticipants.delete(socketId);
+  spliceFromTurnOrder(lobby, socketId);
+  removeFromCombatRefs(lobby, socketId);
   if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators || {}).length === 0) {
     delete lobbies[lobby.id];
   } else {
@@ -290,9 +312,63 @@ function removePlayerFromLobby(lobby, socketId, verb) {
     broadcastTurn(lobby);
     broadcastPlayers(lobby);
     broadcastStack(lobby);
+    broadcastCombat(lobby);
     if (uname) pushLog(lobby, `${uname} ${verb} the table`);
   }
   broadcastLobbyList();
+}
+
+// Marks a player eliminated (life <= 0, or 21+ damage from a single commander -- checked by
+// checkEliminations below) WITHOUT deleting their player record or touching lobby.cards, unlike
+// removePlayerFromLobby -- an eliminated player's board stays visible/frozen, matching real
+// Commander etiquette, and they can keep spectating rather than being booted from the table.
+function eliminatePlayer(lobby, socketId) {
+  const p = lobby.players[socketId];
+  if (!p || p.eliminated) return;
+  p.eliminated = true;
+  spliceFromTurnOrder(lobby, socketId);
+  removeFromCombatRefs(lobby, socketId);
+  pushLog(lobby, `${p.name} has been eliminated!`);
+  io.to(lobby.id).emit("playerEliminated", socketId);
+}
+
+// Only meaningful once a game has actually started and someone was just eliminated -- turn.order
+// by this point only contains players who are still in the game (eliminatePlayer already spliced
+// the loser out), so its length alone tells the story: one player left standing is the winner,
+// zero is a simultaneous-elimination draw.
+function checkGameOver(lobby) {
+  if (!lobby.turn.started) return;
+  if (lobby.turn.order.length === 1) {
+    const winner = lobby.players[lobby.turn.order[0]];
+    if (!winner) return;
+    pushLog(lobby, `${winner.name} wins the game!`);
+    io.to(lobby.id).emit("gameOver", { winnerId: lobby.turn.order[0], winnerName: winner.name });
+  } else if (lobby.turn.order.length === 0) {
+    pushLog(lobby, `The game ends in a draw -- no players remaining.`);
+    io.to(lobby.id).emit("gameOver", { winnerId: null, winnerName: null });
+  }
+}
+
+// The single choke point for "did anyone just lose the game" -- called explicitly right before
+// broadcastPlayers from every place life or commander damage actually changes (resolveCombatDamage,
+// executeAbilityEffects, the statChange handler), rather than hooked into broadcastPlayers itself
+// (which has ~12 unrelated call sites, e.g. setBoardMat/addMana, that have nothing to do with a
+// win condition). Safe to call from inside resolveCombatDamage's damage loop: it's only ever
+// invoked once, after both loops there finish and all of that combat's damage has fully settled.
+function checkEliminations(lobby) {
+  const newlyEliminated = [];
+  for (const id in lobby.players) {
+    const p = lobby.players[id];
+    if (p.eliminated) continue;
+    const cmdrLethal = p.cmdrDamage && Object.values(p.cmdrDamage).some((v) => v >= 21);
+    if (p.life <= 0 || cmdrLethal) newlyEliminated.push(id);
+  }
+  if (!newlyEliminated.length) return;
+  newlyEliminated.forEach((id) => eliminatePlayer(lobby, id));
+  broadcastTurn(lobby);
+  broadcastStack(lobby);
+  broadcastCombat(lobby);
+  checkGameOver(lobby);
 }
 
 function scheduleGraceRemoval(lobby, socketId, ms) {
@@ -624,6 +700,7 @@ function playersView(lobby, viewerId) {
       life: p.life,
       cmdr: p.cmdr,
       cmdrDamage: p.cmdrDamage || {},
+      eliminated: !!p.eliminated,
       poison: p.poison,
       boardMat: p.boardMat || null,
       mulligans: p.mulligans,
@@ -1070,6 +1147,7 @@ function resolveCombatDamage(lobby) {
   lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
   if (dmgEvents.length) io.to(lobby.id).emit("combatDamage", dmgEvents);
   broadcastCombat(lobby);
+  checkEliminations(lobby);
   broadcastPlayers(lobby);
 }
 
@@ -1323,7 +1401,7 @@ io.on("connection", (socket) => {
       username,
       name: (users[username] && users[username].defaultName) || username,
       color: nextColor(),
-      life: 40, cmdr: 0, cmdrDamage: {}, poison: 0, boardMat: null,
+      life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0, boardMat: null,
       library: [], graveyard: [], exile: [],
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
@@ -1463,6 +1541,11 @@ io.on("connection", (socket) => {
   socket.on("statChange", ({ key, val }) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id] || !["life", "cmdr", "poison"].includes(key)) return;
     lobby.players[socket.id][key] += val;
+    // Manual life adjustment can trigger elimination just like combat can; the manual cmdr/poison
+    // buttons only ever touch the flat aggregate/poison counters, never cmdrDamage[key] itself
+    // (only resolveCombatDamage writes that), so this is really just the life <= 0 path in
+    // practice for this call site -- included anyway since checkEliminations checks both.
+    checkEliminations(lobby);
     broadcastPlayers(lobby);
   });
 
@@ -2342,7 +2425,7 @@ io.on("connection", (socket) => {
       p.graveyard = [];
       p.exile = [];
       shuffle(p.library);
-      p.life = 40; p.cmdr = 0; p.cmdrDamage = {}; p.poison = 0;
+      p.life = 40; p.cmdr = 0; p.cmdrDamage = {}; p.eliminated = false; p.poison = 0;
       p.commanders.forEach((c) => { if (c) { c.tax = 0; c.battlefieldId = null; } });
       p.mulligans = 0;
       p.handKept = false;
