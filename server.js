@@ -92,6 +92,16 @@ const CARD_ABILITIES = {
   "hornet queen": [{
     trigger: "etb", label: "Hornet Queen — create four Insect tokens",
     effects: [{ type: "createToken", amount: 4, name: "Insect", type: "Token Creature — Insect", power: "1", toughness: "1", colors: ["G"], keywords: ["Flying", "Deathtouch"] }]
+  }],
+  // Real text is "you may draw a card" -- optional triggers ("may") aren't modeled, always resolves.
+  "solemn simulacrum": [{ trigger: "death", label: "Solemn Simulacrum — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  // Real text: "each opponent loses 5 life. You gain life equal to the life lost this way." The gain
+  // is hardcoded to 5 rather than actually summing what opponents lost -- correct 1v1, undercounts
+  // in a 3+ opponent pod (real Magic would gain 15 there). Accepted v1 simplification; no effect
+  // in this vocabulary can reference another effect's outcome yet.
+  "kokusho, the evening star": [{
+    trigger: "death", label: "Kokusho, the Evening Star — drains for 5",
+    effects: [{ type: "loseLife", target: "eachOpponent", amount: 5 }, { type: "gainLife", target: "controller", amount: 5 }]
   }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
@@ -749,6 +759,16 @@ function fireEtbTriggers(lobby, card) {
   });
 }
 
+// Fires every authored "dies" ability for `card` (self-referential only). Must be called BEFORE
+// the card is actually removed from lobby.cards, so its data (owner, etc.) is still intact to
+// build the ability instance from.
+function fireDeathTriggers(lobby, card) {
+  if (!lobby.turn.started) return;
+  getAutomatedAbilities(card.name, "death").forEach((ability) => {
+    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
+  });
+}
+
 // Pops the top of the stack and resolves it: a triggered ability runs its effects; a permanent
 // goes to the battlefield (identical placement logic to a normal cast --
 // classifyType/entersTapped/controllerSince) and fires its own ETB triggers; instants and
@@ -968,7 +988,13 @@ function resolveCombatDamage(lobby) {
     }
   }
   const seen = new Set();
-  deaths.forEach((c) => { if (!seen.has(c.id) && lobby.cards[c.id]) { seen.add(c.id); sendToGraveyardInternal(lobby, c); } });
+  deaths.forEach((c) => {
+    if (!seen.has(c.id) && lobby.cards[c.id]) {
+      seen.add(c.id);
+      fireDeathTriggers(lobby, c);
+      sendToGraveyardInternal(lobby, c);
+    }
+  });
   lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
   if (dmgEvents.length) io.to(lobby.id).emit("combatDamage", dmgEvents);
   broadcastCombat(lobby);
@@ -1719,6 +1745,13 @@ io.on("connection", (socket) => {
     // Only the current controller can decide to move it, but it goes to its true OWNER's zone --
     // a stolen permanent still belongs to whoever it was taken from.
     const owner = card.originalOwner || card.owner;
+    // A manual "move to graveyard" click is how removal-spell/wrath-style death gets represented in
+    // this app (there's no automated spell-effect execution) -- covering only combat-lethal death
+    // would silently miss the majority of actual EDH deaths. Only fires for something that was
+    // really on the battlefield -- discarding a hand card or moving an exiled card isn't a death.
+    if (zone === "graveyard" && ["creature", "artifact", "mana"].includes(card.zoneType)) {
+      fireDeathTriggers(lobby, card);
+    }
     delete lobby.cards[cardId];
     if (lobby.targets[cardId]) { delete lobby.targets[cardId]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", cardId);
