@@ -131,10 +131,27 @@
     .modal-box { position: relative; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 18px; max-width: 640px; width: 90%; max-height: 80vh; overflow-y: auto; }
     .modal-box h2 { margin-top: 0; margin-right: 24px; font-size: 16px; font-family: 'Cinzel', serif; color: #d4af37; }
     .modal-close-row { display: flex; justify-content: flex-end; margin-top: 12px; gap: 8px; }
-    .modal-close-x { position: absolute; top: 10px; right: 12px; background: none; border: none; color: #a89a70; font-size: 20px; line-height: 1; cursor: pointer; padding: 4px 6px; }
+    /* display:block + margin-left:auto right-aligns it in normal flow (no float, so no text
+       wrap-around glitches on the heading next to it); position:sticky keeps it pinned to the top
+       of the modal-box's own scroll as long CONTENT scrolls under it, instead of scrolling away
+       with the rest of the modal's content the way position:absolute did. */
+    .modal-close-x { display: block; width: fit-content; margin-left: auto; position: sticky; top: 0; background: none; border: none; color: #a89a70; font-size: 20px; line-height: 1; cursor: pointer; padding: 4px 6px; z-index: 5; }
     .modal-close-x:hover { color: #d4af37; }
 
+    /* Non-blocking equivalent of .modal-overlay -- no full-screen backdrop, so the board (hand
+       cards, glowing castable ones, etc.) stays visible and clickable underneath. Used for
+       transient "you need to do something, but shouldn't be locked out of the board while you
+       decide" prompts: priority, the opening-hand draw/mulligan loop, choosing a target. */
+    .floating-banner { display: none; flex-direction: column; align-items: center; position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: #171310; border: 2px solid #d4af37; border-radius: 8px; padding: 10px 18px; z-index: 150; text-align: center; box-shadow: 0 4px 16px rgba(0,0,0,0.7); max-width: 90vw; }
+    .floating-banner h2 { margin: 0 0 4px; font-size: 15px; font-family: 'Cinzel', serif; color: #d4af37; }
+
     .zone-card-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
+    /* The whole row toggles the checkbox (it's a <label>), not just a small tickbox easy to miss
+       -- a visible red highlight when selected makes it unambiguous a creature is set to attack. */
+    .atk-row { cursor: pointer; border: 2px solid transparent; border-radius: 6px; padding: 8px; margin-bottom: 4px; transition: background 0.15s, border-color 0.15s; }
+    .atk-row:hover { background: rgba(255,255,255,0.04); }
+    .atk-row:has(.atk-check:checked) { background: rgba(220,38,38,0.18); border-color: #dc2626; }
+    .atk-row .atk-check { width: 18px; height: 18px; flex-shrink: 0; }
     .zone-card-thumb { width: 44px; height: 61px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
     .zone-card-name { flex: 1; font-size: 13px; }
     .stack-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
@@ -503,14 +520,10 @@
       </div>
     </div>
 
-    <div class="modal-overlay" id="priority-modal">
-      <div class="modal-box" style="max-width:380px;text-align:center;">
-        <h2>You have priority</h2>
-        <p style="font-size:12px;color:#a89a70;">Something's on the stack. Any hand card glowing gold on the board can be cast right now in response — or pass, and once everyone passes in a row, the top of the stack resolves.</p>
-        <div class="modal-close-row" style="justify-content:center;">
-          <button onclick="passPriority()">Pass</button>
-        </div>
-      </div>
+    <div class="floating-banner" id="priority-modal">
+      <h2>You have priority</h2>
+      <p style="font-size:12px;color:#a89a70;max-width:320px;margin:0 0 8px;">Something's on the stack. Any hand card glowing gold on the board can be cast right now in response — click it to cast, same as any other time. Or pass, and once everyone passes in a row, the top of the stack resolves.</p>
+      <button onclick="passPriority()">Pass</button>
     </div>
 
     <div class="modal-overlay" id="stack-detail-modal">
@@ -540,15 +553,13 @@
       </div>
     </div>
 
-    <div class="modal-overlay" id="opening-hand-modal">
-      <div class="modal-box" style="max-width:380px;text-align:center;">
-        <h2>Opening Hand</h2>
-        <div id="opening-hand-status" style="font-size:12px;color:#a89a70;margin-bottom:10px;">Not drawn yet.</div>
-        <div class="modal-close-row" style="justify-content:center;">
-          <button class="mini-btn" id="draw-opening-hand-btn" onclick="drawOpeningHand()">Draw 7</button>
-          <button class="mini-btn" id="mulligan-btn" onclick="mulligan()">Mulligan</button>
-          <button class="mini-btn" id="keep-hand-btn" onclick="keepHand()">Keep Hand</button>
-        </div>
+    <div class="floating-banner" id="opening-hand-modal">
+      <h2>Opening Hand</h2>
+      <div id="opening-hand-status" style="font-size:12px;color:#a89a70;margin-bottom:8px;">Not drawn yet.</div>
+      <div class="flex-row">
+        <button class="mini-btn" id="draw-opening-hand-btn" onclick="drawOpeningHand()">Draw 7</button>
+        <button class="mini-btn" id="mulligan-btn" onclick="mulligan()">Mulligan</button>
+        <button class="mini-btn" id="keep-hand-btn" onclick="keepHand()">Keep Hand</button>
       </div>
     </div>
 
@@ -2670,7 +2681,7 @@
         noAttacksBtn.innerText = "Continue";
         body.innerHTML = allUntapped.length === 0
           ? "<div style='color:#8a7a55;'>No untapped creatures to attack with.</div>"
-          : `<div style='color:#8a7a55;'>${sickCount} creature${sickCount === 1 ? "" : "s"} still has summoning sickness and can't attack yet (no Haste).</div>`;
+          : `<div style='color:#8a7a55;'>${sickCount} creature${sickCount === 1 ? " still has" : "s still have"} summoning sickness and can't attack yet (no Haste).</div>`;
       } else {
         confirmBtn.style.display = "";
         noAttacksBtn.innerText = "No Attacks";
@@ -2681,18 +2692,36 @@
           body.appendChild(note);
         }
       }
+      if (myCreatures.length > 0) {
+        const hint = document.createElement("div");
+        hint.id = "attackers-selected-count";
+        hint.style.cssText = "font-size:12px;color:#a89a70;margin-bottom:8px;";
+        body.appendChild(hint);
+      }
       myCreatures.forEach((card) => {
-        const row = document.createElement("div");
-        row.className = "zone-card-row";
-        const options = otherPlayers.map(([id, p]) => `<option value="${id}">${escapeHtml(p.name)}</option>`).join("");
+        // The row itself IS the <label> -- clicking anywhere in it (image, name, empty space)
+        // toggles the checkbox, not just the small tickbox that was easy to miss before. Clicking
+        // the target <select> still works normally (a nested interactive control inside a label
+        // doesn't trigger the label's own click-through, standard browser behavior).
+        const row = document.createElement("label");
+        row.className = "zone-card-row atk-row";
+        // A 1v1 table has exactly one legal target -- pre-select it so checking the box alone is
+        // enough; a 3+ player pod still requires actually picking who to attack.
         row.innerHTML = `
+          <input type="checkbox" class="atk-check" data-id="${card.id}" onchange="updateAttackersSelectedCount()">
           <img src="${card.img || ''}" class="zone-card-thumb">
           <div class="zone-card-name">${escapeHtml(card.name || '')} (${effectivePT(card)})</div>
-          <label style="font-size:11px;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="atk-check" data-id="${card.id}"> Attack</label>
-          <select class="atk-target" data-id="${card.id}"><option value="">-- target --</option>${options}</select>`;
+          <select class="atk-target" data-id="${card.id}"><option value="">-- target --</option>${otherPlayers.map(([id, p]) => `<option value="${id}"${otherPlayers.length === 1 ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}</select>`;
         body.appendChild(row);
       });
+      updateAttackersSelectedCount();
       document.getElementById("attackers-modal").style.display = "flex";
+    }
+    function updateAttackersSelectedCount() {
+      const el = document.getElementById("attackers-selected-count");
+      if (!el) return;
+      const n = document.querySelectorAll("#attackers-modal-body .atk-check:checked").length;
+      el.innerText = n === 0 ? "Click a creature to attack with it." : `${n} creature${n === 1 ? "" : "s"} set to attack.`;
     }
     function closeAttackersModal() {
       document.getElementById("attackers-modal").style.display = "none";
