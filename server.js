@@ -457,6 +457,52 @@ function parsePT(v) {
   return isNaN(n) ? 0 : n;
 }
 
+// Parses the two common equipment/aura patterns -- "Equipped/Enchanted creature gets +X/+Y"
+// and "...has/have [keyword(s)]" -- into a stat bonus and keyword grant. Same substring/regex
+// style as entersTapped/equipCostFromText: no tokenizer, just the specific wording these cards
+// actually use. Anything more conditional (P/T scaling with something, "as long as" clauses,
+// keywords outside KNOWN_KEYWORDS) is silently not picked up -- same "close approximation,
+// adjudicate the rest manually" philosophy as everywhere else unautomated in this app.
+function equipEffectsFromText(text) {
+  const t = text || "";
+  let powerBonus = 0, toughnessBonus = 0;
+  const ptMatch = t.match(/(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+)/i);
+  if (ptMatch) { powerBonus = parseInt(ptMatch[1], 10) || 0; toughnessBonus = parseInt(ptMatch[2], 10) || 0; }
+  const keywords = [];
+  const hasMatch = t.match(/(?:equipped|enchanted) creature (?:gets [+-]\d+\/[+-]\d+ and )?has ([^.]+)\./i);
+  if (hasMatch) {
+    hasMatch[1].split(/,| and /i).map((s) => s.trim()).forEach((raw) => {
+      const found = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === raw.toLowerCase());
+      if (found) keywords.push(found);
+    });
+  }
+  return { powerBonus, toughnessBonus, keywords };
+}
+
+// Live-computed, never stored on the card -- scans for anything currently attachedTo this card
+// each time it's needed, so detaching (detachCard) or the host leaving (detachDependents, which
+// already severs attachedTo in both the "equipment survives" and "aura dies" branches) requires
+// zero new cleanup code; the bonus just stops applying because the scan no longer finds it.
+function attachedBonusFor(lobby, card) {
+  let powerBonus = 0, toughnessBonus = 0, keywords = [];
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.attachedTo !== card.id) continue;
+    const eff = equipEffectsFromText(c.text);
+    powerBonus += eff.powerBonus;
+    toughnessBonus += eff.toughnessBonus;
+    keywords = keywords.concat(eff.keywords);
+  }
+  return { powerBonus, toughnessBonus, keywords };
+}
+// A card's keywords plus whatever any attached equipment/aura grants -- the one thing that
+// matters for gameplay (Haste-gated summoning sickness, and anything else that reads keywords).
+function effectiveKeywords(lobby, card) {
+  const bonus = attachedBonusFor(lobby, card);
+  if (!bonus.keywords.length) return card.keywords || [];
+  return [...new Set([...(card.keywords || []), ...bonus.keywords])];
+}
+
 function parseManaCost(costStr) {
   const cost = { generic: 0, W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, hybrid: [], x: false };
   if (!costStr) return cost;
@@ -982,13 +1028,15 @@ function resolveCombatDamage(lobby) {
   for (const [attackerId, defenderId] of Object.entries(combat.attackers)) {
     const attacker = lobby.cards[attackerId];
     if (!attacker) continue;
-    const atkPower = parsePT(attacker.power) + (attacker.counters || 0);
-    const atkTough = parsePT(attacker.toughness) + (attacker.counters || 0);
+    const atkBonus = attachedBonusFor(lobby, attacker);
+    const atkPower = parsePT(attacker.power) + (attacker.counters || 0) + atkBonus.powerBonus;
+    const atkTough = parsePT(attacker.toughness) + (attacker.counters || 0) + atkBonus.toughnessBonus;
     const blockerId = combat.blocks[attackerId];
     if (blockerId && lobby.cards[blockerId]) {
       const blocker = lobby.cards[blockerId];
-      const defPower = parsePT(blocker.power) + (blocker.counters || 0);
-      const defTough = parsePT(blocker.toughness) + (blocker.counters || 0);
+      const defBonus = attachedBonusFor(lobby, blocker);
+      const defPower = parsePT(blocker.power) + (blocker.counters || 0) + defBonus.powerBonus;
+      const defTough = parsePT(blocker.toughness) + (blocker.counters || 0) + defBonus.toughnessBonus;
       pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkPower}/${atkTough}) fights ${blocker.name || "a face-down creature"} (${defPower}/${defTough})`);
       if (atkPower >= defTough) deaths.push(blocker);
       if (defPower >= atkTough) deaths.push(attacker);
@@ -2154,7 +2202,7 @@ io.on("connection", (socket) => {
     for (const [cardId, defenderId] of Object.entries(assignments || {})) {
       const card = lobby.cards[cardId];
       if (!card || card.owner !== socket.id || card.zoneType !== "creature" || card.tapped) continue;
-      const hasHaste = Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "haste");
+      const hasHaste = effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "haste");
       if (card.controllerSince === lobby.turn.turnNumber && !hasHaste) continue; // summoning sick
       if (!lobby.players[defenderId] || defenderId === socket.id) continue;
       validAttackers[cardId] = defenderId;

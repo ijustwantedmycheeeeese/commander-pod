@@ -106,6 +106,7 @@
     .clash-flash { position: absolute; width: 40px; height: 40px; margin-left: -20px; margin-top: -20px; border-radius: 50%; background: radial-gradient(circle, rgba(255,220,120,0.9), rgba(255,120,40,0.4) 60%, transparent 80%); animation: clashFlashAnim 0.4s ease-out forwards; pointer-events: none; z-index: 56; }
     .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
     .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+    .equip-bonus-badge { position: absolute; bottom: 18px; left: 4px; background: #3b82f6; color: #fff; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
     .kw-badges { position: absolute; top: 2px; left: 2px; display: flex; flex-wrap: wrap; gap: 1px; max-width: 100px; }
     .kw-badge { background: rgba(10,8,6,0.75); border-radius: 4px; font-size: 11px; padding: 0 2px; line-height: 15px; }
     .attach-label { position: absolute; bottom: 2px; left: 2px; right: 2px; font-size: 9px; color: #d4af37; background: rgba(10,8,6,0.75); border-radius: 3px; padding: 1px 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -443,7 +444,7 @@
           <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing. Any player can hit <strong>Counter</strong> on a stack item to send it straight to the graveyard (or, for a ⚡ triggered ability, just remove it), representing a counterspell or similar effect that resolved elsewhere.</li>
           <li>A small, growing list of specific cards have a real <strong>triggered ability</strong> ("when this enters the battlefield...") automated — it shows up on the Stack marked ⚡, resolves the same way a spell does, and actually applies its effect (draws cards, creates tokens, changes life totals) when it resolves. This only covers a card's own trigger about itself, hand-picked and added over time — everything else about every card, and every card without one of these, is still adjudicated manually exactly as before.</li>
           <li><strong>Manage Keywords</strong> (right-click a battlefield permanent) lets you grant it Flying, Haste, Indestructible, and other common keywords, representing an aura/equipment/anthem effect — shown as small icon badges on the card. Nothing is enforced automatically except Haste, which already plugs into the summoning-sickness check.</li>
-          <li><strong>Attach To...</strong> (right-click, on equipment/auras or anything else) links a card to another permanent — shown as a small "⚭ Host Name" label. If the card's text has a real Equip cost, it's paid automatically from your mana pool; anything else (like an aura, whose cost was already paid casting it) attaches for free. If the host leaves the battlefield, an attached Aura goes to the graveyard with it; anything else just becomes unattached. <strong>Detach</strong> is always free, for manual correction.</li>
+          <li><strong>Attach To...</strong> (right-click, on equipment/auras or anything else) links a card to another permanent — shown as a small "⚭ Host Name" label on the attached card, and "🔗 Name" on the host listing what's attached to it. If the card's text has a real Equip cost, it's paid automatically from your mana pool; anything else (like an aura, whose cost was already paid casting it) attaches for free. A simple, common pattern of oracle text — "Equipped/Enchanted creature gets +X/+Y" and/or "...has [keyword]" — is automated: the bonus and any granted keyword actually apply to combat math and summoning-sickness checks (shown as a small blue +X/+Y badge and a keyword icon on the card), for as long as the attachment lasts. Anything more conditional than that plain wording isn't picked up and still needs a manual <strong>Manage Keywords</strong> grant. If the host leaves the battlefield, an attached Aura goes to the graveyard with it; anything else just becomes unattached. <strong>Detach</strong> is always free, for manual correction.</li>
           <li><strong>Take Control</strong> (right-click any permanent that isn't already yours) represents an effect like Control Magic — the card moves to your board and you can play it as your own; it's marked "stolen from X" and treated as freshly under your control (summoning sick again, like real Magic). <strong>Return Control</strong> hands it back to its real owner whenever the effect should end — nothing tracks that duration automatically, same as everything else this app doesn't automate.</li>
           <li>Cards get a brief glow/pop-in when they enter the battlefield and fade out when they leave, attacking/blocking creatures pulse red/blue during combat, damage shows as a floating number (or a red flash on a player's row when it's life loss), and casting a spell gives it a quick golden pulse.</li>
           <li><strong>Free Cast (no cost)</strong> (right-click a hand card) represents an effect like Cascade or Through the Breach — casts it without paying its mana cost or checking whose turn it is, straight onto the stack like any other cast. A manual tool for whatever already-resolved effect earned it; nothing verifies you actually earned it.</li>
@@ -1578,8 +1579,55 @@
       closeKeywordModal();
     }
     function keywordBadgeRow(card) {
-      if (!card.keywords || !card.keywords.length) return "";
-      return `<div class="kw-badges">${card.keywords.map((k) => `<span class="kw-badge" title="${escapeHtml(k)}">${KEYWORD_ICONS[k] || k[0]}</span>`).join("")}</div>`;
+      const keywords = effectiveKeywords(card);
+      if (!keywords.length) return "";
+      return `<div class="kw-badges">${keywords.map((k) => `<span class="kw-badge" title="${escapeHtml(k)}">${KEYWORD_ICONS[k] || k[0]}</span>`).join("")}</div>`;
+    }
+
+    // ---------------- equipment/aura continuous effects (client mirror of server.js) ----------------
+    // Same regex patterns as server.js's equipEffectsFromText -- kept in sync by convention like
+    // KNOWN_KEYWORDS already is, since there's no shared source of truth between the two files.
+    function equipEffectsFromText(text) {
+      const t = text || "";
+      let powerBonus = 0, toughnessBonus = 0;
+      const ptMatch = t.match(/(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+)/i);
+      if (ptMatch) { powerBonus = parseInt(ptMatch[1], 10) || 0; toughnessBonus = parseInt(ptMatch[2], 10) || 0; }
+      const keywords = [];
+      const hasMatch = t.match(/(?:equipped|enchanted) creature (?:gets [+-]\d+\/[+-]\d+ and )?has ([^.]+)\./i);
+      if (hasMatch) {
+        hasMatch[1].split(/,| and /i).map((s) => s.trim()).forEach((raw) => {
+          const found = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === raw.toLowerCase());
+          if (found) keywords.push(found);
+        });
+      }
+      return { powerBonus, toughnessBonus, keywords };
+    }
+    // Live-computed from allCards (the global cross-board cache), never stored -- mirrors
+    // server.js's attachedBonusFor so what's displayed always matches what combat actually uses.
+    function attachedBonusFor(card) {
+      let powerBonus = 0, toughnessBonus = 0, keywords = [];
+      Object.values(allCards).forEach((c) => {
+        if (c.attachedTo !== card.id) return;
+        const eff = equipEffectsFromText(c.text);
+        powerBonus += eff.powerBonus;
+        toughnessBonus += eff.toughnessBonus;
+        keywords = keywords.concat(eff.keywords);
+      });
+      return { powerBonus, toughnessBonus, keywords };
+    }
+    function effectiveKeywords(card) {
+      const bonus = attachedBonusFor(card);
+      if (!bonus.keywords.length) return card.keywords || [];
+      return [...new Set([...(card.keywords || []), ...bonus.keywords])];
+    }
+    // "7/6" -> "9/8" style effective-P/T string, or just the raw P/T if there's no bonus --
+    // shared by every place a card's power/toughness gets shown as text.
+    function effectivePT(card) {
+      const bonus = attachedBonusFor(card);
+      if (!bonus.powerBonus && !bonus.toughnessBonus) return `${card.power || 0}/${card.toughness || 0}`;
+      const p = (parseInt(card.power, 10) || 0) + bonus.powerBonus;
+      const t = (parseInt(card.toughness, 10) || 0) + bonus.toughnessBonus;
+      return `${p}/${t}`;
     }
 
     // ---------------- attachments (equipment / auras) ----------------
@@ -2142,7 +2190,7 @@
     // unless Haste) -- kept as one shared helper so the attackers modal can't drift from what the
     // server actually allows, which is what let a summoning-sick creature show as checkable before.
     function isSummoningSick(card) {
-      const hasHaste = Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "haste");
+      const hasHaste = effectiveKeywords(card).some((k) => (k || "").toLowerCase() === "haste");
       return card.zoneType === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber && !hasHaste;
     }
 
@@ -2255,6 +2303,14 @@
         inner = `<img src="${card.img || ""}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>${attachmentLabel(card)}${controlLabel(card)}`;
       }
       if (card.counters) inner += `<div class="counter-badge">${card.counters > 0 ? "+" : ""}${card.counters}</div>`;
+      if (!isMasked && card.zoneType === "creature") {
+        const eqBonus = attachedBonusFor(card);
+        if (eqBonus.powerBonus || eqBonus.toughnessBonus) {
+          const pStr = (eqBonus.powerBonus >= 0 ? "+" : "") + eqBonus.powerBonus;
+          const tStr = (eqBonus.toughnessBonus >= 0 ? "+" : "") + eqBonus.toughnessBonus;
+          inner += `<div class="equip-bonus-badge" title="From attached equipment/auras">${pStr}/${tStr}</div>`;
+        }
+      }
       if (!isMasked) inner += keywordBadgeRow(card);
       div.innerHTML = inner;
       div._cardData = card;
@@ -2366,13 +2422,14 @@
     function buildCardPreviewHtml(card) {
       let extra = card.name || "";
       if (card.power !== undefined && card.power !== null && card.toughness !== undefined && card.toughness !== null) {
-        extra += ` — ${card.power}/${card.toughness}`;
+        extra += ` — ${effectivePT(card)}`;
       } else if (card.loyalty !== undefined && card.loyalty !== null) {
         extra += ` — Loyalty ${card.loyalty}`;
       }
       if (card.cmc) extra += ` (MV ${card.cmc})`;
       let html = escapeHtml(extra) + (card.manaCost ? "<br>" + manaCostPips(card.manaCost) : "");
-      if (card.keywords && card.keywords.length) html += `<div style="font-size:12px;margin-top:2px;">${card.keywords.map((k) => `${KEYWORD_ICONS[k] || ""} ${escapeHtml(k)}`).join(" · ")}</div>`;
+      const shownKeywords = effectiveKeywords(card);
+      if (shownKeywords.length) html += `<div style="font-size:12px;margin-top:2px;">${shownKeywords.map((k) => `${KEYWORD_ICONS[k] || ""} ${escapeHtml(k)}`).join(" · ")}</div>`;
       if (card.text) html += `<div class="pv-text">${escapeHtml(card.text)}</div>`;
       return html;
     }
@@ -2504,7 +2561,7 @@
         const options = otherPlayers.map(([id, p]) => `<option value="${id}">${escapeHtml(p.name)}</option>`).join("");
         row.innerHTML = `
           <img src="${card.img || ''}" class="zone-card-thumb">
-          <div class="zone-card-name">${escapeHtml(card.name || '')} (${card.power || 0}/${card.toughness || 0})</div>
+          <div class="zone-card-name">${escapeHtml(card.name || '')} (${effectivePT(card)})</div>
           <label style="font-size:11px;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="atk-check" data-id="${card.id}"> Attack</label>
           <select class="atk-target" data-id="${card.id}"><option value="">-- target --</option>${options}</select>`;
         body.appendChild(row);
@@ -2537,11 +2594,11 @@
         const atkOwner = atk ? players[atk.owner] : null;
         const row = document.createElement("div");
         row.className = "zone-card-row";
-        const options = myCreatures.map((c) => `<option value="${c.id}">${escapeHtml(c.name || '')} (${c.power || 0}/${c.toughness || 0})</option>`).join("");
+        const options = myCreatures.map((c) => `<option value="${c.id}">${escapeHtml(c.name || '')} (${effectivePT(c)})</option>`).join("");
         const visibleName = atk && !atk.faceDown ? escapeHtml(atk.name || '') : "Face-down attacker";
         row.innerHTML = `
           <img src="${atk && !atk.faceDown ? atk.img : ''}" class="zone-card-thumb">
-          <div class="zone-card-name">${visibleName} (${atk ? atk.power || 0 : 0}/${atk ? atk.toughness || 0 : 0}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}</div>
+          <div class="zone-card-name">${visibleName} (${atk ? effectivePT(atk) : "0/0"}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}</div>
           <select class="blk-select" data-attacker="${attackerId}"><option value="">No block</option>${options}</select>`;
         body.appendChild(row);
       });
