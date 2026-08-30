@@ -7,6 +7,12 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; }
+    * { scrollbar-width: thin; scrollbar-color: #5a4423 #100c08; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: #100c08; }
+    ::-webkit-scrollbar-thumb { background: #5a4423; border-radius: 5px; border: 2px solid #100c08; }
+    ::-webkit-scrollbar-thumb:hover { background: #6b4f27; }
+    ::-webkit-scrollbar-corner { background: #100c08; }
     body { margin: 0; background: radial-gradient(ellipse at top, #1c1611 0%, #0a0806 100%); color: #e8dfc8; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; height: 100vh; }
     .mtg-title { font-family: 'Cinzel', serif; letter-spacing: 0.04em; color: #d4af37; }
     input, button, select, textarea { padding: 6px 10px; background: #241c12; border: 1px solid #5a4423; color: #e8dfc8; border-radius: 6px; font-size: 13px; font-family: inherit; }
@@ -328,6 +334,8 @@
       <div id="board-column">
         <div id="turn-bar">
           <span id="turn-info">No game in progress</span>
+          <select id="load-deck-select" style="display:none;"><option value="">Load a deck...</option></select>
+          <button id="load-deck-btn" class="mini-btn secondary" onclick="loadSelectedDeck()" style="display:none;">Load Deck</button>
           <button id="start-game-btn" class="mini-btn" onclick="startGame()">Start Game</button>
           <button id="next-phase-btn" class="mini-btn" onclick="nextPhaseFn()" style="display:none;">Next Phase →</button>
           <button id="combat-action-btn" class="mini-btn" style="display:none;"></button>
@@ -480,7 +488,7 @@
         <h2>Opening Hand</h2>
         <div id="opening-hand-status" style="font-size:12px;color:#a89a70;margin-bottom:10px;">Not drawn yet.</div>
         <div class="modal-close-row" style="justify-content:center;">
-          <button class="mini-btn" onclick="drawOpeningHand()">Draw 7</button>
+          <button class="mini-btn" id="draw-opening-hand-btn" onclick="drawOpeningHand()">Draw 7</button>
           <button class="mini-btn" id="mulligan-btn" onclick="mulligan()">Mulligan</button>
           <button class="mini-btn" id="keep-hand-btn" onclick="keepHand()">Keep Hand</button>
         </div>
@@ -789,6 +797,7 @@
     let players = {};
     let targets = {};
     let allCards = {};
+    let myDeckNames = [];
     // ---------------- visual effects state ----------------
     // Card ids we've already rendered at least once -- a truly new id gets the "enter" pop-in
     // animation; anything already seen just re-renders normally, no matter how often that happens.
@@ -1036,20 +1045,27 @@
       checkOpeningHandModal();
       const me = players[myId];
       const statusEl = document.getElementById("opening-hand-status");
+      const drawBtn = document.getElementById("draw-opening-hand-btn");
       const mulliganBtn = document.getElementById("mulligan-btn");
       const keepBtn = document.getElementById("keep-hand-btn");
       if (!me) return;
       if (me.handKept) {
         statusEl.innerText = "Hand kept — you're ready.";
+        drawBtn.style.display = "none";
         mulliganBtn.disabled = true;
         keepBtn.disabled = true;
-      } else if (me.mulligans > 0) {
-        statusEl.innerText = `Mulligans used: ${me.mulligans}/2`;
-        mulliganBtn.disabled = me.mulligans >= 2;
-        keepBtn.disabled = false;
+      } else if (!me.openingHandDrawn) {
+        // "Draw 7" is the one-time initial draw -- once used it's gone, so there's no way to
+        // re-click it later and silently wipe an in-progress mulligan count back to 0. Anything
+        // after this first draw goes through Mulligan instead.
+        statusEl.innerText = "Draw your opening hand to begin.";
+        drawBtn.style.display = "inline-block";
+        mulliganBtn.disabled = true;
+        keepBtn.disabled = true;
       } else {
-        statusEl.innerText = "Not drawn yet.";
-        mulliganBtn.disabled = false;
+        statusEl.innerText = me.mulligans > 0 ? `Mulligans used: ${me.mulligans}/2` : "Hand drawn — keep it or mulligan.";
+        drawBtn.style.display = "none";
+        mulliganBtn.disabled = me.mulligans >= 2;
         keepBtn.disabled = false;
       }
     }
@@ -1066,6 +1082,8 @@
     }
 
     function renderDeckList(names) {
+      myDeckNames = names || [];
+      renderLoadDeckSelect();
       const el = document.getElementById("deck-list");
       el.innerHTML = "";
       if (!names || names.length === 0) {
@@ -1149,17 +1167,38 @@
       const info = document.getElementById("turn-info");
       const startBtn = document.getElementById("start-game-btn");
       const nextBtn = document.getElementById("next-phase-btn");
+      const loadSelect = document.getElementById("load-deck-select");
+      const loadBtn = document.getElementById("load-deck-btn");
       if (!t.started) {
         info.innerText = "No game in progress";
-        startBtn.style.display = (players[myId] && !amSpectator) ? "inline-block" : "none";
+        const canLoad = !!(players[myId] && !amSpectator);
+        startBtn.style.display = canLoad ? "inline-block" : "none";
+        loadSelect.style.display = canLoad ? "inline-block" : "none";
+        loadBtn.style.display = canLoad ? "inline-block" : "none";
         nextBtn.style.display = "none";
         return;
       }
       startBtn.style.display = "none";
+      loadSelect.style.display = "none";
+      loadBtn.style.display = "none";
       const activeId = t.order[t.activeIndex];
       const activeName = (players[activeId] && players[activeId].name) || "?";
       info.innerText = `Turn ${t.turnNumber} — ${activeName}'s turn — ${t.phase}`;
       nextBtn.style.display = (activeId === myId && currentStack.length === 0) ? "inline-block" : "none";
+    }
+
+    // Loading a deck into your seat -- discoverable right next to Start Game instead of buried in
+    // the Deck Editor, since picking your deck is naturally part of getting ready to start.
+    function renderLoadDeckSelect() {
+      const sel = document.getElementById("load-deck-select");
+      const current = sel.value;
+      sel.innerHTML = '<option value="">Load a deck...</option>' + myDeckNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+      if (myDeckNames.includes(current)) sel.value = current;
+    }
+    function loadSelectedDeck() {
+      const name = document.getElementById("load-deck-select").value;
+      if (!name) return;
+      if (confirm(`Load "${name}"? This replaces your current library (and commander slots, if the deck has any).`)) socket.emit("loadDeck", name);
     }
 
     function renderCombatState(c) {
