@@ -83,6 +83,8 @@
     .card.summoning-sick:not(.tapped) { transform: rotate(8deg); }
     .card.dragging { transition: none; z-index: 60; }
     .card.face-down-mine { box-shadow: 0 0 0 2px #f59e0b inset; }
+    @keyframes castableGlowAnim { 0%, 100% { box-shadow: 0 0 0 2px #d4af37, 0 4px 12px rgba(0,0,0,0.7); } 50% { box-shadow: 0 0 10px 3px #d4af37, 0 4px 12px rgba(0,0,0,0.7); } }
+    .card.castable-now { animation: castableGlowAnim 1.4s ease-in-out infinite; }
 
     /* ---- visual effects ---- */
     #fx-layer { position: absolute; inset: 0; pointer-events: none; z-index: 55; }
@@ -120,9 +122,11 @@
     #zoom-row input[type=range] { width: 100px; }
 
     .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: none; align-items: center; justify-content: center; z-index: 200; }
-    .modal-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 18px; max-width: 640px; width: 90%; max-height: 80vh; overflow-y: auto; }
-    .modal-box h2 { margin-top: 0; font-size: 16px; font-family: 'Cinzel', serif; color: #d4af37; }
+    .modal-box { position: relative; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 18px; max-width: 640px; width: 90%; max-height: 80vh; overflow-y: auto; }
+    .modal-box h2 { margin-top: 0; margin-right: 24px; font-size: 16px; font-family: 'Cinzel', serif; color: #d4af37; }
     .modal-close-row { display: flex; justify-content: flex-end; margin-top: 12px; gap: 8px; }
+    .modal-close-x { position: absolute; top: 10px; right: 12px; background: none; border: none; color: #a89a70; font-size: 20px; line-height: 1; cursor: pointer; padding: 4px 6px; }
+    .modal-close-x:hover { color: #d4af37; }
 
     .zone-card-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
     .zone-card-thumb { width: 44px; height: 61px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
@@ -388,9 +392,9 @@
 
     <div class="modal-overlay" id="zone-modal">
       <div class="modal-box">
+        <button class="modal-close-x" onclick="closeZoneModal()" title="Close">✕</button>
         <h2 id="zone-modal-title">Zone</h2>
         <div id="zone-modal-body"></div>
-        <div class="modal-close-row"><button class="secondary" onclick="closeZoneModal()">Close</button></div>
       </div>
     </div>
 
@@ -419,6 +423,7 @@
 
     <div class="modal-overlay" id="help-modal">
       <div class="modal-box">
+        <button class="modal-close-x" onclick="closeHelpModal()" title="Close">✕</button>
         <h2>How to Play</h2>
         <ul>
           <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named, optionally password-protected — 🔒 in the list means it needs one) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>My Decks</strong> (also on the Main Menu) is where your saved decks live — Edit opens one in the Deck Editor, Del removes it. <strong>Leave Table</strong> (⚙ Menu, in-game) returns to the menu — your seat (board, hand, library, commander, everything) is held for 60 seconds in case you rejoin the same table, shown as a countdown next to your name in the Players panel; after that it's freed up for good.</li>
@@ -449,18 +454,17 @@
           <li><strong>Account</strong> (Main Menu, or ⚙ Menu → Profile → Account Settings) is where account-wide preferences live, separate from the per-table nickname field: an avatar (by image URL, shown next to your color dot in the Players panel), a default nickname used every time you join a new table, and a change-password form. These persist across every table, unlike the per-table nickname override.</li>
           <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
         </ul>
-        <div class="modal-close-row"><button onclick="closeHelpModal()">Got it</button></div>
       </div>
     </div>
 
     <div class="modal-overlay" id="bug-report-modal">
       <div class="modal-box modal-box-wide">
+        <button class="modal-close-x" onclick="closeBugReportModal()" title="Close">✕</button>
         <h2>Bug Report</h2>
         <p style="font-size:12px;color:#a89a70;">Copy this and send it over — it's just a snapshot of recent game log and client-side error activity, generated locally, nothing is sent anywhere automatically.</p>
         <textarea id="bug-report-text" rows="16" style="width:100%;font-family:ui-monospace,monospace;font-size:11px;" readonly></textarea>
         <div id="bug-report-status" style="font-size:12px;color:#a89a70;margin-top:6px;"></div>
         <div class="modal-close-row">
-          <button class="secondary" onclick="closeBugReportModal()">Close</button>
           <button onclick="copyBugReport()">Copy to Clipboard</button>
         </div>
       </div>
@@ -488,10 +492,18 @@
     <div class="modal-overlay" id="priority-modal">
       <div class="modal-box" style="max-width:380px;text-align:center;">
         <h2>You have priority</h2>
-        <p style="font-size:12px;color:#a89a70;">Something's on the stack. Cast an instant/flash spell in response, or pass — once everyone passes in a row, the top of the stack resolves.</p>
+        <p style="font-size:12px;color:#a89a70;">Something's on the stack. Any hand card glowing gold on the board can be cast right now in response — or pass, and once everyone passes in a row, the top of the stack resolves.</p>
         <div class="modal-close-row" style="justify-content:center;">
           <button onclick="passPriority()">Pass</button>
         </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="stack-detail-modal">
+      <div class="modal-box" style="max-width:380px;text-align:center;">
+        <button class="modal-close-x" onclick="closeStackItemDetail()" title="Close">✕</button>
+        <img id="stack-detail-img" src="" style="width:220px;border-radius:8px;margin-bottom:10px;">
+        <div id="stack-detail-name" style="text-align:left;font-size:13px;"></div>
       </div>
     </div>
 
@@ -509,6 +521,7 @@
 
     <div class="modal-overlay" id="settings-modal">
       <div class="modal-box" style="max-width:420px;">
+        <button class="modal-close-x" onclick="closeSettingsModal()" title="Close">✕</button>
         <h2>Menu</h2>
 
         <div class="mm-label">Game</div>
@@ -545,15 +558,12 @@
           <button class="secondary" onclick="showMainMenu()">Leave Table</button>
           <button class="secondary" onclick="logout()">Log Out</button>
         </div>
-
-        <div class="modal-close-row">
-          <button class="secondary" onclick="closeSettingsModal()">Close</button>
-        </div>
       </div>
     </div>
 
     <div class="modal-overlay" id="account-modal">
       <div class="modal-box" style="max-width:420px;">
+        <button class="modal-close-x" onclick="closeAccountModal()" title="Close">✕</button>
         <h2>Account</h2>
 
         <div class="mm-label" style="margin-top:0;">Avatar</div>
@@ -579,15 +589,12 @@
           <button class="secondary" onclick="changeAccountPassword()">Change Password</button>
         </div>
         <div id="account-password-status" style="font-size:12px;color:#a89a70;"></div>
-
-        <div class="modal-close-row">
-          <button class="secondary" onclick="closeAccountModal()">Close</button>
-        </div>
       </div>
     </div>
 
     <div class="modal-overlay" id="token-modal">
       <div class="modal-box" style="max-width:420px;">
+        <button class="modal-close-x" onclick="closeTokenModal()" title="Close">✕</button>
         <h2>Create Token</h2>
         <div class="mm-label" style="margin-top:0;">Quick presets</div>
         <div id="token-presets" class="flex-row" style="flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
@@ -609,7 +616,6 @@
         </div>
         <div id="tok-status" style="font-size:12px;color:#a89a70;margin-bottom:6px;"></div>
         <div class="modal-close-row">
-          <button class="secondary" onclick="closeTokenModal()">Close</button>
           <button onclick="createToken()">Create Token</button>
         </div>
       </div>
@@ -617,22 +623,20 @@
 
     <div class="modal-overlay" id="attach-modal">
       <div class="modal-box" style="max-width:400px;">
+        <button class="modal-close-x" onclick="closeAttachModal()" title="Close">✕</button>
         <h2 id="attach-modal-title">Attach To...</h2>
         <p style="font-size:12px;color:#a89a70;">If this card's text has a real Equip cost, it's paid automatically. Auras attach for free (their cast cost was already paid).</p>
         <div id="attach-modal-list" style="max-height:320px;overflow-y:auto;"></div>
-        <div class="modal-close-row">
-          <button class="secondary" onclick="closeAttachModal()">Cancel</button>
-        </div>
       </div>
     </div>
 
     <div class="modal-overlay" id="keyword-modal">
       <div class="modal-box" style="max-width:360px;">
+        <button class="modal-close-x" onclick="closeKeywordModal()" title="Close">✕</button>
         <h2 id="keyword-modal-title">Manage Keywords</h2>
         <p style="font-size:12px;color:#a89a70;">Represents an aura, equipment, or other effect granting this card an ability -- nothing here is enforced automatically (Haste is the one exception: it already plugs into the summoning-sickness check).</p>
         <div id="keyword-modal-list" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 0;"></div>
         <div class="modal-close-row">
-          <button class="secondary" onclick="closeKeywordModal()">Close</button>
           <button onclick="saveKeywords()">Save</button>
         </div>
       </div>
@@ -965,7 +969,10 @@
 
     socket.on("targets", (data) => { targets = data; applyAllTargetRings(); });
     socket.on("spectatorRoster", renderSpectatorRoster);
-    socket.on("stackState", (data) => { currentStack = data.stack || []; currentPriority = data.priority || currentPriority; renderStackState(); renderCombatState(currentCombat); renderTurnState(currentTurn); });
+    // renderVisibleBoard() re-render is needed here (not just renderStackState()) so hand cards
+    // pick up/lose the castable-now glow immediately as priority actually changes hands, instead
+    // of only at the next unrelated re-render.
+    socket.on("stackState", (data) => { currentStack = data.stack || []; currentPriority = data.priority || currentPriority; renderStackState(); renderCombatState(currentCombat); renderTurnState(currentTurn); renderVisibleBoard(); });
     socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); checkPendingDiscard(); checkOpeningHandModal(); });
     socket.on("combatState", (data) => { currentCombat = data; renderCombatState(currentCombat); });
     socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
@@ -1318,8 +1325,8 @@
           const subtitle = isAbility ? `⚡ Triggered ability — ${escapeHtml(caster)}'s ${escapeHtml(c.sourceName || "")}` : `cast by ${escapeHtml(caster)}`;
           const counterTitle = isAbility ? "Represents a response that removes this triggered ability from the stack without it resolving" : "Represents a counterspell resolving against this -- sends it straight to the graveyard";
           return `<div class="stack-item${i === 0 ? " stack-top" : ""}">
-            <img src="${c.img || ''}" class="zone-card-thumb">
-            <div class="zone-card-name">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
+            <img src="${c.img || ''}" class="zone-card-thumb" style="cursor:pointer;" onclick="openStackItemDetail('${c.id}')" title="Click to see the full card">
+            <div class="zone-card-name" style="cursor:pointer;" onclick="openStackItemDetail('${c.id}')">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
             <button class="mini-btn" style="background:#7a1f1f;" onclick="counterStackItem('${c.id}')" title="${counterTitle}">Counter</button>
           </div>`;
         }).join("");
@@ -1598,11 +1605,21 @@
       socket.emit("attachCard", { id: attachModalCardId, targetId });
       closeAttachModal();
     }
-    // Small "⚭ Attached to X" label under the card name, and a link badge count on the host.
+    // One label covering both directions: "⚭ Host Name" if this card is attached to something,
+    // and/or "🔗 Name(s)" listing whatever is attached TO this card (the host side previously had
+    // no indication at all despite a stale comment claiming one existed).
     function attachmentLabel(card) {
-      if (!card.attachedTo) return "";
-      const host = allCards[card.attachedTo];
-      return `<div class="attach-label">⚭ ${escapeHtml((host && host.name) || "?")}</div>`;
+      const parts = [];
+      if (card.attachedTo) {
+        const host = allCards[card.attachedTo];
+        parts.push(`⚭ ${escapeHtml((host && host.name) || "?")}`);
+      }
+      const dependents = Object.values(allCards).filter((c) => c.attachedTo === card.id);
+      if (dependents.length) {
+        parts.push(`🔗 ${dependents.map((c) => escapeHtml(c.name || "?")).join(", ")}`);
+      }
+      if (!parts.length) return "";
+      return `<div class="attach-label">${parts.join(" · ")}</div>`;
     }
 
     // ---------------- control-stealing ----------------
@@ -2119,6 +2136,18 @@
       return card.zoneType === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber && !hasHaste;
     }
 
+    // Mirrors the server's own instant-speed check in checkTiming (server.js) -- kept as one
+    // shared helper for the same reason as isSummoningSick: the client shouldn't have its own,
+    // possibly-drifted opinion about what the server will actually allow.
+    function isInstantSpeed(card) {
+      const text = (card.type || "").toLowerCase();
+      const hasFlash = Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash");
+      return text.includes("instant") || hasFlash;
+    }
+    // Only the current stack's priority holder may act -- same condition checkPriorityModal()
+    // already uses to decide whether to show "You have priority".
+    function hasPriority() { return currentStack.length > 0 && currentPriority.holderId === myId; }
+
     function renderCard(card) {
       const div = document.createElement("div");
       div.id = card.id;
@@ -2193,6 +2222,7 @@
 
       div.classList.toggle("tapped", !!card.tapped);
       div.classList.toggle("summoning-sick", isSummoningSick(card));
+      div.classList.toggle("castable-now", card.owner === myId && card.zoneType === "hand" && hasPriority() && isInstantSpeed(card));
 
       // ---- visual effects ----
       if (!seenCardIds.has(card.id)) {
@@ -2264,13 +2294,9 @@
       }
     }
 
-    function showPreview(id) {
-      const el = cardEls[id];
-      if (!el || !el._cardData) return;
-      const card = el._cardData;
-      const isMasked = card.faceDown && card.owner !== myId;
-      if (isMasked || !card.img) return;
-      document.getElementById("preview-img").src = card.img;
+    // Shared by the hover preview and the click-to-open stack/card detail modal, so both always
+    // show the exact same information built the exact same way.
+    function buildCardPreviewHtml(card) {
       let extra = card.name || "";
       if (card.power !== undefined && card.power !== null && card.toughness !== undefined && card.toughness !== null) {
         extra += ` — ${card.power}/${card.toughness}`;
@@ -2281,10 +2307,35 @@
       let html = escapeHtml(extra) + (card.manaCost ? "<br>" + manaCostPips(card.manaCost) : "");
       if (card.keywords && card.keywords.length) html += `<div style="font-size:12px;margin-top:2px;">${card.keywords.map((k) => `${KEYWORD_ICONS[k] || ""} ${escapeHtml(k)}`).join(" · ")}</div>`;
       if (card.text) html += `<div class="pv-text">${escapeHtml(card.text)}</div>`;
-      document.getElementById("preview-name").innerHTML = html;
+      return html;
+    }
+    function showPreview(id) {
+      const el = cardEls[id];
+      if (!el || !el._cardData) return;
+      const card = el._cardData;
+      const isMasked = card.faceDown && card.owner !== myId;
+      if (isMasked || !card.img) return;
+      document.getElementById("preview-img").src = card.img;
+      document.getElementById("preview-name").innerHTML = buildCardPreviewHtml(card);
       previewPanel.style.display = "block";
     }
     function hidePreview() { previewPanel.style.display = "none"; }
+
+    // Click-to-open detail view for a stack item -- works for a real spell (full card data already
+    // on the item) or a triggered ability (shows its SOURCE card's details via the sourceName/img
+    // already carried on the ability item; oracle text isn't stored on an ability item itself, so
+    // that field is naturally omitted for those).
+    function openStackItemDetail(stackItemId) {
+      const item = currentStack.find((s) => s.id === stackItemId);
+      if (!item) return;
+      const isAbility = item.kind === "ability";
+      const card = isAbility ? { name: item.sourceName, img: item.img } : item;
+      if (!card.img) return;
+      document.getElementById("stack-detail-img").src = card.img;
+      document.getElementById("stack-detail-name").innerHTML = buildCardPreviewHtml(card);
+      document.getElementById("stack-detail-modal").style.display = "flex";
+    }
+    function closeStackItemDetail() { document.getElementById("stack-detail-modal").style.display = "none"; }
 
     function applyTargetRing(id) {
       const el = cardEls[id];
