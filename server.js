@@ -1748,6 +1748,30 @@ io.on("connection", (socket) => {
     pushLog(lobby, `${trueOwner.name} got ${card.name || "a card"} back`);
   });
 
+  // Represents an effect like Clone -- a fresh token sharing the target's current PRINTED
+  // characteristics (name/type/P/T/text/keywords/colors), not its counters, attachments, or any
+  // equipment-derived bonus -- matching how a real copy effect works. Available on anyone's
+  // permanent, same trust model as Target, except a face-down card that isn't the copier's own:
+  // the server always holds the real data regardless of faceDown (only the outbound broadcast to
+  // other players masks it), so allowing that would let a player materialize a duplicate of an
+  // opponent's hidden card with its real name/text/image, leaking exactly the information a
+  // face-down card exists to hide.
+  socket.on("copyCard", (id) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    const original = lobby && lobby.cards[id];
+    if (!p || !original || original.zoneType === "hand" || original.zoneType === "stack") return;
+    if (original.faceDown && original.owner !== socket.id) return;
+    const copy = spawnBattlefieldCard(lobby, {
+      name: original.name, img: original.img, type: original.type, manaCost: original.manaCost,
+      cmc: original.cmc, colors: original.colors, colorIdentity: original.colorIdentity,
+      power: original.power, toughness: original.toughness, loyalty: original.loyalty,
+      text: original.text, keywords: original.keywords, producedMana: original.producedMana,
+      owner: socket.id, faceDown: false, zoneType: original.zoneType, isCommander: false
+    });
+    pushLog(lobby, `${p.name} created a copy of ${original.name || "a card"}`);
+    fireEtbTriggers(lobby, copy);
+  });
+
   socket.on("removeCard", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
