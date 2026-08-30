@@ -102,7 +102,13 @@ const CARD_ABILITIES = {
   "kokusho, the evening star": [{
     trigger: "death", label: "Kokusho, the Evening Star — drains for 5",
     effects: [{ type: "loseLife", target: "eachOpponent", amount: 5 }, { type: "gainLife", target: "controller", amount: 5 }]
-  }]
+  }],
+  "library larcenist": [{ trigger: "attack", label: "Library Larcenist — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  // Real text also grants first strike + becomes an Assassin once it has 2+ counters -- that's a
+  // conditional continuous effect, out of scope for this vocabulary; only the counter itself is
+  // automated. Chosen specifically to prove combat-sequencing: the counter needs to land BEFORE
+  // damage is computed for this to matter (a 1/1 that's genuinely a 2/2 by the time it deals damage).
+  "ezio, brash novice": [{ trigger: "attack", label: "Ezio, Brash Novice — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -769,6 +775,17 @@ function fireDeathTriggers(lobby, card) {
   });
 }
 
+// Fires every authored "attacks" ability for `card` (self-referential only). Called from
+// declareAttackers once combat.attackers is already committed -- combat-sequencing correctness
+// (the trigger resolving BEFORE damage, not after) is handled entirely by resolveStackTop's
+// combat.step check, not by anything here.
+function fireAttackTriggers(lobby, card) {
+  if (!lobby.turn.started) return;
+  getAutomatedAbilities(card.name, "attack").forEach((ability) => {
+    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
+  });
+}
+
 // Pops the top of the stack and resolves it: a triggered ability runs its effects; a permanent
 // goes to the battlefield (identical placement logic to a normal cast --
 // classifyType/entersTapped/controllerSince) and fires its own ETB triggers; instants and
@@ -800,6 +817,13 @@ function resolveStackTop(lobby) {
   if (lobby.stack.length === 0) {
     lobby.priority.holderId = null;
     lobby.priority.lastActorId = null;
+    // An attack trigger (or anything else) drained the stack while combat was genuinely waiting
+    // on damage -- combat.step only ever becomes "damage" once declareAttackers/declareBlockers
+    // have confirmed there's nothing left to block with, and both are already gated on
+    // stack.length === 0 at entry, so this can't fire while a block decision is still legitimately
+    // owed. Resolving here (instead of at the original declare-time call site) is what makes an
+    // attack trigger's effect -- e.g. a +1/+1 counter -- actually land before damage is computed.
+    if (lobby.combat.step === "damage") resolveCombatDamage(lobby);
   } else {
     // Fresh lap: the active player gets first crack at what's still pending, and the round
     // closes once priority has cycled all the way back around to them with everyone else
@@ -2141,7 +2165,14 @@ io.on("connection", (socket) => {
     broadcastCombat(lobby);
     const activeName = lobby.players[socket.id] ? lobby.players[socket.id].name : "?";
     pushLog(lobby, `${activeName} declared ${Object.keys(validAttackers).length} attacker(s)`);
-    if (lobby.combat.step === "damage") resolveCombatDamage(lobby);
+    Object.keys(validAttackers).forEach((cardId) => {
+      const card = lobby.cards[cardId];
+      if (card) fireAttackTriggers(lobby, card);
+    });
+    // If any attack trigger actually fired, it's now sitting on the stack -- damage has to wait
+    // for that to resolve (handled by resolveStackTop's own combat.step check once the stack
+    // drains) instead of firing immediately here, bypassing the priority window entirely.
+    if (lobby.combat.step === "damage" && lobby.stack.length === 0) resolveCombatDamage(lobby);
   });
 
   socket.on("declareBlockers", (assignments) => {
