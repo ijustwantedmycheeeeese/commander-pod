@@ -469,6 +469,7 @@ function playersView(lobby, viewerId) {
       poison: p.poison,
       mulligans: p.mulligans,
       handKept: p.handKept,
+      openingHandDrawn: !!p.openingHandDrawn,
       mana: p.mana,
       landsPlayedThisTurn: p.landsPlayedThisTurn,
       landDropBonus: p.landDropBonus,
@@ -1053,7 +1054,7 @@ io.on("connection", (socket) => {
       life: 40, cmdr: 0, poison: 0,
       library: [], graveyard: [], exile: [],
       commanders: [null, null],
-      mulligans: 0, handKept: false,
+      mulligans: 0, handKept: false, openingHandDrawn: false,
       mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0
     };
 
@@ -1612,14 +1613,16 @@ io.on("connection", (socket) => {
 
   // ---- opening hand / mulligan ----
 
+  // The very first draw only -- once used it's gone from the UI (openingHandDrawn), so this can't
+  // be clicked again later to silently wipe an in-progress mulligan count back to 0. Any redraw
+  // after this one goes through "mulligan" instead, which correctly keeps counting up.
   socket.on("drawOpeningHand", () => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
-    if (!p) return;
+    if (!p || p.openingHandDrawn) return;
     returnAllHandToLibrary(lobby, socket.id);
     shuffle(p.library);
     drawN(lobby, socket.id, 7);
-    p.mulligans = 0;
-    p.handKept = false;
+    p.openingHandDrawn = true;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} drew their opening hand`);
   });
@@ -1631,6 +1634,7 @@ io.on("connection", (socket) => {
     shuffle(p.library);
     drawN(lobby, socket.id, 7);
     p.mulligans += 1;
+    p.openingHandDrawn = true;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} took a mulligan (${p.mulligans}/2)`);
   });
@@ -1994,6 +1998,7 @@ io.on("connection", (socket) => {
       p.commanders.forEach((c) => { if (c) { c.tax = 0; c.battlefieldId = null; } });
       p.mulligans = 0;
       p.handKept = false;
+      p.openingHandDrawn = false;
       p.mana = EMPTY_MANA();
       p.landsPlayedThisTurn = 0;
       p.landDropBonus = 0;
