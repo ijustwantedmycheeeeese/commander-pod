@@ -45,6 +45,7 @@
     #log-box div, #chat-box div { padding: 2px 0; border-bottom: 1px solid #1c170f; }
 
     .player-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #221c12; }
+    .player-row.eliminated-row { opacity: 0.5; }
     .player-row:last-child { border-bottom: none; }
     .player-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 6px currentColor; }
     .player-avatar { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; object-fit: cover; border: 2px solid; }
@@ -448,6 +449,7 @@
           <li><strong>Attach To...</strong> (right-click, on equipment/auras or anything else) links a card to another permanent — shown as a small "⚭ Host Name" label on the attached card, and "🔗 Name" on the host listing what's attached to it. If the card's text has a real Equip cost, it's paid automatically from your mana pool; anything else (like an aura, whose cost was already paid casting it) attaches for free. A simple, common pattern of oracle text — "Equipped/Enchanted creature gets +X/+Y" and/or "...has [keyword]" — is automated: the bonus and any granted keyword actually apply to combat math and summoning-sickness checks (shown as a small blue +X/+Y badge and a keyword icon on the card), for as long as the attachment lasts. Anything more conditional than that plain wording isn't picked up and still needs a manual <strong>Manage Keywords</strong> grant. If the host leaves the battlefield, an attached Aura goes to the graveyard with it; anything else just becomes unattached. <strong>Detach</strong> is always free, for manual correction.</li>
           <li><strong>Take Control</strong> (right-click any permanent that isn't already yours) represents an effect like Control Magic — the card moves to your board and you can play it as your own; it's marked "stolen from X" and treated as freshly under your control (summoning sick again, like real Magic). <strong>Return Control</strong> hands it back to its real owner whenever the effect should end — nothing tracks that duration automatically, same as everything else this app doesn't automate.</li>
           <li><strong>Create Copy</strong> (right-click any permanent) represents an effect like Clone — makes you a fresh token sharing that card's current printed name/type/P-T/text/keywords, not its counters, attachments, or any equipment bonus (matching how a real copy effect works). Fires that card's own "enters the battlefield" trigger if it has one, same as any other new permanent. Blocked on an opponent's face-down card, so it can't be used to peek at something hidden.</li>
+          <li>Life at 0 or below, or 21+ combat damage from a single commander, <strong>eliminates</strong> a player — their board stays on the table (frozen, not removed) and they're taken out of the turn order for the rest of the game, but they can keep watching by switching board tabs. Once only one player is left standing, the game ends and everyone sees a win screen (a simultaneous knockout of everyone remaining ends in a draw instead).</li>
           <li>Cards get a brief glow/pop-in when they enter the battlefield and fade out when they leave, attacking/blocking creatures pulse red/blue during combat, damage shows as a floating number (or a red flash on a player's row when it's life loss), and casting a spell gives it a quick golden pulse.</li>
           <li><strong>Free Cast (no cost)</strong> (right-click a hand card) represents an effect like Cascade or Through the Breach — casts it without paying its mana cost or checking whose turn it is, straight onto the stack like any other cast. A manual tool for whatever already-resolved effect earned it; nothing verifies you actually earned it.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
@@ -509,6 +511,25 @@
         <button class="modal-close-x" onclick="closeStackItemDetail()" title="Close">✕</button>
         <img id="stack-detail-img" src="" style="width:220px;border-radius:8px;margin-bottom:10px;">
         <div id="stack-detail-name" style="text-align:left;font-size:13px;"></div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="eliminated-modal">
+      <div class="modal-box" style="max-width:380px;text-align:center;">
+        <button class="modal-close-x" onclick="document.getElementById('eliminated-modal').style.display='none'" title="Close">✕</button>
+        <h2>You've Been Eliminated</h2>
+        <p style="font-size:12px;color:#a89a70;">Your board stays on the table, but you're out of the turn order for the rest of this game. You can still watch — switch board tabs to follow along.</p>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="gameover-modal">
+      <div class="modal-box" style="max-width:380px;text-align:center;">
+        <button class="modal-close-x" onclick="document.getElementById('gameover-modal').style.display='none'" title="Close">✕</button>
+        <h2>Game Over</h2>
+        <p id="gameover-message" style="font-size:14px;color:#d4af37;font-weight:600;"></p>
+        <div class="modal-close-row" style="justify-content:center;">
+          <button class="danger" onclick="triggerClear(); document.getElementById('gameover-modal').style.display='none';">New Game</button>
+        </div>
       </div>
     </div>
 
@@ -1011,6 +1032,19 @@
 
     socket.on("cleared", () => { allCards = {}; seenCardIds = new Set(); pendingCastPulse = new Set(); renderVisibleBoard(); });
 
+    // Only the eliminated player themselves gets the overlay -- everyone else just sees the log
+    // line (already pushed server-side) and, from here on, that player's board stays visible but
+    // frozen (removed from turn order, so they'll never hold priority or an active turn again).
+    socket.on("playerEliminated", (socketId) => {
+      renderPlayerList();
+      if (socketId === myId) document.getElementById("eliminated-modal").style.display = "flex";
+    });
+    socket.on("gameOver", (data) => {
+      const el = document.getElementById("gameover-message");
+      el.innerText = data.winnerId ? `${data.winnerName} wins the game!` : "The game ends in a draw — no players remaining.";
+      document.getElementById("gameover-modal").style.display = "flex";
+    });
+
     socket.on("log", appendLog);
     socket.on("chatMessage", appendChat);
 
@@ -1061,10 +1095,11 @@
         const row = document.createElement("div");
         row.className = "player-row";
         row.dataset.playerId = id;
+        row.classList.toggle("eliminated-row", !!p.eliminated);
         row.innerHTML = `
           ${p.avatar ? `<img class="player-avatar" src="${escapeHtml(p.avatar)}" style="border-color:${p.color};">` : `<div class="player-dot" style="background:${p.color};color:${p.color};"></div>`}
           <div class="player-info">
-            <div class="player-name">${escapeHtml(p.name)}${id === myId ? '<span class="you-badge">YOU</span>' : ''}${p.disconnected ? `<span class="you-badge" style="background:#7a1f1f;">DISCONNECTED${disconnectCountdownText(p)}</span>` : ''}</div>
+            <div class="player-name">${escapeHtml(p.name)}${id === myId ? '<span class="you-badge">YOU</span>' : ''}${p.eliminated ? '<span class="you-badge" style="background:#4b1f1f;">ELIMINATED</span>' : ''}${p.disconnected ? `<span class="you-badge" style="background:#7a1f1f;">DISCONNECTED${disconnectCountdownText(p)}</span>` : ''}</div>
             <div class="player-stats"><span>❤ ${p.life}</span><span>⚔ ${p.cmdr}</span><span>☠ ${p.poison}</span>${p.mulligans ? `<span>Mull ${p.mulligans}/2</span>` : ""}${p.handKept ? "<span>✅ Ready</span>" : ""}</div>
           </div>`;
         playerListEl.appendChild(row);
