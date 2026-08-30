@@ -400,8 +400,8 @@
         <h2>Declare Attackers</h2>
         <div id="attackers-modal-body"></div>
         <div class="modal-close-row">
-          <button class="secondary" onclick="closeAttackersModal()">No Attacks</button>
-          <button onclick="confirmAttackers()">Confirm Attacks</button>
+          <button class="secondary" id="no-attacks-btn" onclick="closeAttackersModal()">No Attacks</button>
+          <button id="confirm-attacks-btn" onclick="confirmAttackers()">Confirm Attacks</button>
         </div>
       </div>
     </div>
@@ -2111,6 +2111,14 @@
       socket.emit("playCard", { id, x });
     }
 
+    // Matches the server's exact declareAttackers check (card.controllerSince === turnNumber,
+    // unless Haste) -- kept as one shared helper so the attackers modal can't drift from what the
+    // server actually allows, which is what let a summoning-sick creature show as checkable before.
+    function isSummoningSick(card) {
+      const hasHaste = Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "haste");
+      return card.zoneType === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber && !hasHaste;
+    }
+
     function renderCard(card) {
       const div = document.createElement("div");
       div.id = card.id;
@@ -2184,9 +2192,7 @@
       div.ondragstart = () => false;
 
       div.classList.toggle("tapped", !!card.tapped);
-      const hasHaste = Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "haste");
-      const isSick = card.zoneType === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber && !hasHaste;
-      div.classList.toggle("summoning-sick", isSick);
+      div.classList.toggle("summoning-sick", isSummoningSick(card));
 
       // ---- visual effects ----
       if (!seenCardIds.has(card.id)) {
@@ -2348,9 +2354,32 @@
     function openAttackersModal() {
       const body = document.getElementById("attackers-modal-body");
       body.innerHTML = "";
-      const myCreatures = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "creature" && !c.tapped);
+      const allUntapped = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "creature" && !c.tapped);
+      // The server silently rejects a summoning-sick creature as an attacker (no Haste) -- filter
+      // it out here too instead of showing it as checkable, checking it, hitting Confirm, and
+      // having nothing happen with no explanation. isSummoningSick() mirrors the server's check
+      // exactly (server.js declareAttackers).
+      const myCreatures = allUntapped.filter((c) => !isSummoningSick(c));
+      const sickCount = allUntapped.length - myCreatures.length;
       const otherPlayers = Object.entries(players).filter(([id]) => id !== myId);
-      if (myCreatures.length === 0) { body.innerHTML = "<div style='color:#8a7a55;'>No untapped creatures to attack with.</div>"; }
+      const confirmBtn = document.getElementById("confirm-attacks-btn");
+      const noAttacksBtn = document.getElementById("no-attacks-btn");
+      if (myCreatures.length === 0) {
+        confirmBtn.style.display = "none";
+        noAttacksBtn.innerText = "Continue";
+        body.innerHTML = allUntapped.length === 0
+          ? "<div style='color:#8a7a55;'>No untapped creatures to attack with.</div>"
+          : `<div style='color:#8a7a55;'>${sickCount} creature${sickCount === 1 ? "" : "s"} still has summoning sickness and can't attack yet (no Haste).</div>`;
+      } else {
+        confirmBtn.style.display = "";
+        noAttacksBtn.innerText = "No Attacks";
+        if (sickCount > 0) {
+          const note = document.createElement("div");
+          note.style.cssText = "color:#8a7a55;font-size:11px;margin-bottom:6px;";
+          note.innerText = `${sickCount} other creature${sickCount === 1 ? "" : "s"} can't attack yet (summoning sick, no Haste).`;
+          body.appendChild(note);
+        }
+      }
       myCreatures.forEach((card) => {
         const row = document.createElement("div");
         row.className = "zone-card-row";
