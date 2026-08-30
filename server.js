@@ -464,6 +464,7 @@ function playersView(lobby, viewerId) {
     out[id] = {
       name: p.name,
       color: p.color,
+      avatar: (users[p.username] && users[p.username].avatar) || null,
       life: p.life,
       cmdr: p.cmdr,
       cmdrDamage: p.cmdrDamage || {},
@@ -941,6 +942,24 @@ app.post("/api/login", (req, res) => {
   res.json({ success: true, token, username });
 });
 
+// Known limitation: existing sessions aren't invalidated on password change -- `sessions` has no
+// per-user reverse index to support that cleanly. Fine for a small trusted pod, not silently glossed over.
+app.post("/api/changePassword", (req, res) => {
+  const { token, currentPassword, newPassword } = req.body || {};
+  const username = token && sessions[token];
+  if (!username) return res.json({ success: false, error: "Not authenticated." });
+  const u = users[username];
+  if (!u || !verifyPassword(currentPassword || "", u.salt, u.hash)) {
+    return res.json({ success: false, error: "Current password is incorrect." });
+  }
+  if (!newPassword || newPassword.length < 4) return res.json({ success: false, error: "New password must be at least 4 characters." });
+  const salt = crypto.randomBytes(16).toString("hex");
+  u.salt = salt;
+  u.hash = hashPassword(newPassword, salt);
+  saveUsers();
+  res.json({ success: true });
+});
+
 app.post("/api/spawn", async (req, res) => {
   try {
     const name = req.body.name || "";
@@ -1010,7 +1029,11 @@ io.on("connection", (socket) => {
   // the reattach: the server would correctly have the player back in their seat, but the client
   // would be stuck showing the Main Menu, and since the server thinks they're already in that
   // lobby, both rejoining and creating a new table would silently no-op — a total softlock.
-  socket.emit("authOk", { username, decks: Object.keys(decks[username] || {}) });
+  socket.emit("authOk", {
+    username, decks: Object.keys(decks[username] || {}),
+    avatar: (users[username] && users[username].avatar) || null,
+    defaultName: (users[username] && users[username].defaultName) || null
+  });
 
   // A reconnecting browser (network blip, tab refresh, server restart) resumes its seat silently
   // instead of landing back on the Main Menu with its board wiped. Matches by username regardless
@@ -1071,7 +1094,7 @@ io.on("connection", (socket) => {
 
     lobby.players[socket.id] = {
       username,
-      name: username,
+      name: (users[username] && users[username].defaultName) || username,
       color: nextColor(),
       life: 40, cmdr: 0, cmdrDamage: {}, poison: 0, boardMat: null,
       library: [], graveyard: [], exile: [],
@@ -1189,6 +1212,18 @@ io.on("connection", (socket) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
     lobby.players[socket.id].name = (name || "Player").toString().slice(0, 24);
     broadcastPlayers(lobby);
+  });
+
+  socket.on("updateAccount", ({ avatar, defaultName } = {}) => {
+    if (!users[username]) return;
+    users[username].avatar = (avatar || "").toString().trim().slice(0, 500) || null;
+    users[username].defaultName = (defaultName || "").toString().trim().slice(0, 24) || null;
+    saveUsers();
+    const lobby = currentLobby();
+    if (lobby && lobby.players[socket.id]) {
+      lobby.players[socket.id].name = users[username].defaultName || username;
+      broadcastPlayers(lobby);
+    }
   });
 
   socket.on("setBoardMat", (url) => {
