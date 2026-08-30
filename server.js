@@ -466,6 +466,7 @@ function playersView(lobby, viewerId) {
       color: p.color,
       life: p.life,
       cmdr: p.cmdr,
+      cmdrDamage: p.cmdrDamage || {},
       poison: p.poison,
       mulligans: p.mulligans,
       handKept: p.handKept,
@@ -681,6 +682,19 @@ function clearCommanderRef(lobby, card) {
   owner.commanders.forEach((c) => { if (c && c.battlefieldId === card.id) c.battlefieldId = null; });
 }
 
+// Real Commander tracks damage per COMMANDER, not per opponent -- partners can each independently
+// reach the lethal 21. Keyed by owner+slot (not battlefieldId, which changes every time the
+// commander leaves and re-enters play) so a damage total survives the commander dying/bouncing/
+// being recast, matching the real rule that the total keeps counting regardless.
+function commanderSlotKey(lobby, card) {
+  if (!card.isCommander) return null;
+  const owner = lobby.players[card.originalOwner || card.owner];
+  if (!owner) return null;
+  const slot = owner.commanders.findIndex((c) => c && c.battlefieldId === card.id);
+  if (slot === -1) return null;
+  return `${card.originalOwner || card.owner}:${slot}`;
+}
+
 // Equipment stays on the battlefield unattached when its host leaves; an aura has no legal host
 // without one, so it goes to the graveyard too (a rough approximation of the real state-based
 // action). Detected via type line since there's no structured "is this an aura" field.
@@ -809,7 +823,14 @@ function resolveCombatDamage(lobby) {
       const defender = lobby.players[defenderId];
       if (defender) {
         defender.life -= atkPower;
-        if (attacker.isCommander) defender.cmdr = (defender.cmdr || 0) + atkPower;
+        if (attacker.isCommander) {
+          defender.cmdr = (defender.cmdr || 0) + atkPower; // kept as the quick-glance total
+          const key = commanderSlotKey(lobby, attacker);
+          if (key) {
+            if (!defender.cmdrDamage) defender.cmdrDamage = {};
+            defender.cmdrDamage[key] = (defender.cmdrDamage[key] || 0) + atkPower;
+          }
+        }
         pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
         if (atkPower > 0) dmgEvents.push({ targetId: defenderId, amount: atkPower });
       }
@@ -1051,7 +1072,7 @@ io.on("connection", (socket) => {
       username,
       name: username,
       color: nextColor(),
-      life: 40, cmdr: 0, poison: 0,
+      life: 40, cmdr: 0, cmdrDamage: {}, poison: 0,
       library: [], graveyard: [], exile: [],
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
@@ -1994,7 +2015,7 @@ io.on("connection", (socket) => {
       p.graveyard = [];
       p.exile = [];
       shuffle(p.library);
-      p.life = 40; p.cmdr = 0; p.poison = 0;
+      p.life = 40; p.cmdr = 0; p.cmdrDamage = {}; p.poison = 0;
       p.commanders.forEach((c) => { if (c) { c.tax = 0; c.battlefieldId = null; } });
       p.mulligans = 0;
       p.handKept = false;

@@ -54,6 +54,8 @@
 
     .stat-widget { background: #1c170f; padding: 10px; border-radius: 8px; border: 1px solid #3a2e18; }
     .stat-row { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+    .cmdr-dmg-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #c9bc98; padding: 3px 8px; background: #1c170f; border-radius: 5px; margin-top: 4px; }
+    .cmdr-dmg-row strong { color: #d4af37; }
     .stat-btn { padding: 2px 8px; font-size: 13px; background: #33302b; }
 
     #board-column { flex: 1; display: flex; flex-direction: column; overflow: hidden; height: 100%; }
@@ -302,6 +304,7 @@
             <div class="stat-row"><span>Cmdr Dmg</span><div><button class="stat-btn" onclick="changeStat('cmdr',-1)">-</button> <strong id="lbl-cmdr">0</strong> <button class="stat-btn" onclick="changeStat('cmdr',1)">+</button></div></div>
             <div class="stat-row" id="poison-row" style="display:none;"><span>Poison</span><div><button class="stat-btn" onclick="changeStat('poison',-1)">-</button> <strong id="lbl-poison">0</strong> <button class="stat-btn" onclick="changeStat('poison',1)">+</button></div></div>
           </div>
+          <div id="cmdr-damage-breakdown" style="margin-top:8px;"></div>
         </div>
         <div class="panel" id="mana-pool-panel">
           <h3>Mana Pool</h3>
@@ -433,7 +436,7 @@
           <li><strong>Free Cast (no cost)</strong> (right-click a hand card) represents an effect like Cascade or Through the Breach — casts it without paying its mana cost or checking whose turn it is, straight onto the stack like any other cast. A manual tool for whatever already-resolved effect earned it; nothing verifies you actually earned it.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
-          <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
+          <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
           <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
@@ -1005,6 +1008,24 @@
       document.getElementById("lbl-cmdr").innerText = me.cmdr;
       document.getElementById("lbl-poison").innerText = me.poison;
       updatePoisonVisibility();
+      renderCmdrDamageBreakdown(me);
+    }
+
+    // One row per opposing commander that's actually dealt you damage -- scales naturally with
+    // player count (a 2-player game shows at most a row or two, a big pod can show many) and
+    // persists even if that commander has since left the battlefield or the game, matching the
+    // real rule that the damage total keeps counting regardless.
+    function renderCmdrDamageBreakdown(me) {
+      const el = document.getElementById("cmdr-damage-breakdown");
+      const entries = Object.entries(me.cmdrDamage || {});
+      if (!entries.length) { el.innerHTML = ""; return; }
+      el.innerHTML = entries.map(([key, amount]) => {
+        const [ownerId, slot] = key.split(":");
+        const owner = players[ownerId];
+        const cmd = owner && owner.commanders && owner.commanders[parseInt(slot)];
+        const label = cmd ? `${escapeHtml(cmd.name)} (${escapeHtml((owner && owner.name) || "?")})` : "a commander";
+        return `<div class="cmdr-dmg-row"><span>${label}</span><strong>${amount}</strong></div>`;
+      }).join("");
     }
 
     // Poison only matters once infect/toxic is actually possible at the table -- checks the
