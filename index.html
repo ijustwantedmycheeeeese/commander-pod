@@ -66,13 +66,30 @@
     .zone-band.zone-hand { background: rgba(59,130,246,0.07); border-style: dashed; }
     .zone-band-label { position: absolute; top: 4px; left: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(212,175,55,0.5); font-family: 'Cinzel', serif; }
 
-    .card { width: 108px; height: 150px; position: absolute; border-radius: 7px; box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,175,55,0.12); border: 3px solid #444; background: #1a1a1d; user-select: none; overflow: hidden; z-index: 2; transition: left 0.15s ease, top 0.15s ease; }
+    .card { width: 108px; height: 150px; position: absolute; border-radius: 7px; box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,175,55,0.12); border: 3px solid #444; background: #1a1a1d; user-select: none; overflow: hidden; z-index: 2; transition: left 0.15s ease, top 0.15s ease, transform 0.25s ease; }
     .card img { width: 100%; height: 120px; object-fit: cover; pointer-events: none; display: block; }
     .card .card-label { font-size: 10px; padding: 2px 4px; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .card.tapped { transform: rotate(90deg); }
     .card.summoning-sick:not(.tapped) { transform: rotate(8deg); }
     .card.dragging { transition: none; z-index: 60; }
     .card.face-down-mine { box-shadow: 0 0 0 2px #f59e0b inset; }
+
+    /* ---- visual effects ---- */
+    #fx-layer { position: absolute; inset: 0; pointer-events: none; z-index: 55; }
+    @keyframes cardEnterAnim { 0% { opacity: 0; transform: scale(0.4) rotate(-6deg); filter: brightness(2.2) drop-shadow(0 0 18px #d4af37); } 65% { opacity: 1; transform: scale(1.08) rotate(1deg); } 100% { opacity: 1; transform: scale(1) rotate(0deg); filter: none; } }
+    .card.card-enter { animation: cardEnterAnim 0.45s ease-out; }
+    @keyframes cardLeaveAnim { 0% { opacity: 1; transform: scale(1) rotate(0deg); filter: none; } 100% { opacity: 0; transform: scale(0.55) rotate(20deg); filter: brightness(0.3) saturate(0); } }
+    .card-ghost { width: 108px; height: 150px; position: absolute; border-radius: 7px; box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,175,55,0.12); border: 3px solid #444; background: #1a1a1d; overflow: hidden; pointer-events: none; z-index: 56; animation: cardLeaveAnim 0.55s ease-in forwards; }
+    @keyframes attackPulseAnim { 0%, 100% { box-shadow: 0 0 0 3px #dc2626, 0 4px 12px rgba(0,0,0,0.7); } 50% { box-shadow: 0 0 16px 6px #dc2626, 0 4px 12px rgba(0,0,0,0.7); } }
+    .card.attacking { animation: attackPulseAnim 1s ease-in-out infinite; }
+    @keyframes blockPulseAnim { 0%, 100% { box-shadow: 0 0 0 3px #2563eb, 0 4px 12px rgba(0,0,0,0.7); } 50% { box-shadow: 0 0 16px 6px #2563eb, 0 4px 12px rgba(0,0,0,0.7); } }
+    .card.blocking { animation: blockPulseAnim 1s ease-in-out infinite; }
+    @keyframes castPulseAnim { 0% { box-shadow: 0 0 0 3px #d4af37, 0 0 22px 8px rgba(212,175,55,0.6); } 100% { box-shadow: 0 0 0 3px #444, 0 4px 12px rgba(0,0,0,0.7); } }
+    .card.just-cast { animation: castPulseAnim 0.6s ease-out; }
+    @keyframes floatDamageAnim { 0% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-42px); } }
+    .dmg-float { position: absolute; pointer-events: none; font-weight: 800; font-size: 20px; color: #f87171; text-shadow: 0 0 4px #000, 0 0 8px #000; animation: floatDamageAnim 1s ease-out forwards; z-index: 57; }
+    @keyframes lifeFlashAnim { 0%, 100% { background: transparent; } 30% { background: rgba(220,38,38,0.35); } }
+    .player-row.life-flash { animation: lifeFlashAnim 0.7s ease-out; }
     .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
     .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
     .kw-badges { position: absolute; top: 2px; left: 2px; display: flex; flex-wrap: wrap; gap: 1px; max-width: 100px; }
@@ -343,7 +360,7 @@
         </div>
         <div id="board-tabs"></div>
         <div id="table-wrapper">
-          <div id="playmat"></div>
+          <div id="playmat"><div id="fx-layer"></div></div>
         </div>
       </div>
 
@@ -429,6 +446,7 @@
           <li><strong>Manage Keywords</strong> (right-click a battlefield permanent) lets you grant it Flying, Haste, Indestructible, and other common keywords, representing an aura/equipment/anthem effect — shown as small icon badges on the card. Nothing is enforced automatically except Haste, which already plugs into the summoning-sickness check.</li>
           <li><strong>Attach To...</strong> (right-click, on equipment/auras or anything else) links a card to another permanent — shown as a small "⚭ Host Name" label. If the card's text has a real Equip cost, it's paid automatically from your mana pool; anything else (like an aura, whose cost was already paid casting it) attaches for free. If the host leaves the battlefield, an attached Aura goes to the graveyard with it; anything else just becomes unattached. <strong>Detach</strong> is always free, for manual correction.</li>
           <li><strong>Take Control</strong> (right-click any permanent that isn't already yours) represents an effect like Control Magic — the card moves to your board and you can play it as your own; it's marked "stolen from X" and treated as freshly under your control (summoning sick again, like real Magic). <strong>Return Control</strong> hands it back to its real owner whenever the effect should end — nothing tracks that duration automatically, same as everything else this app doesn't automate.</li>
+          <li>Cards get a brief glow/pop-in when they enter the battlefield and fade out when they leave, attacking/blocking creatures pulse red/blue during combat, damage shows as a floating number (or a red flash on a player's row when it's life loss), and casting a spell gives it a quick golden pulse.</li>
           <li><strong>Free Cast (no cost)</strong> (right-click a hand card) represents an effect like Cascade or Through the Breach — casts it without paying its mana cost or checking whose turn it is, straight onto the stack like any other cast. A manual tool for whatever already-resolved effect earned it; nothing verifies you actually earned it.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
@@ -748,6 +766,11 @@
     let players = {};
     let targets = {};
     let allCards = {};
+    // ---------------- visual effects state ----------------
+    // Card ids we've already rendered at least once -- a truly new id gets the "enter" pop-in
+    // animation; anything already seen just re-renders normally, no matter how often that happens.
+    let seenCardIds = new Set();
+    let pendingCastPulse = new Set();
     let cardEls = {};
     let activeCardId = null;
     let activeBoardOwner = null;
@@ -803,6 +826,10 @@
       activeBoardOwner = players[myId] ? myId : Object.keys(players)[0] || null;
       targets = data.targets || {};
       allCards = data.cards;
+      // Loading into a game already in progress shouldn't play the "enter" animation for every
+      // card already on the board -- only genuinely new ones (arriving via a later cardUpdate)
+      // should pop in.
+      seenCardIds = new Set(Object.keys(allCards));
       currentTurn = data.turn || currentTurn;
       currentCombat = data.combat || currentCombat;
       currentStack = data.stack || [];
@@ -847,19 +874,26 @@
     socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
 
     socket.on("cardUpdate", (card) => {
+      const prev = allCards[card.id];
+      if (prev && prev.zoneType !== "stack" && card.zoneType === "stack") pendingCastPulse.add(card.id);
       allCards[card.id] = card;
       renderVisibleBoard();
       if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
     });
 
     socket.on("cardRemove", (id) => {
+      spawnLeaveGhost(id);
       delete allCards[id];
       delete targets[id];
       renderVisibleBoard();
       if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
     });
 
-    socket.on("cleared", () => { allCards = {}; renderVisibleBoard(); });
+    socket.on("combatDamage", (events) => {
+      (events || []).forEach((e) => spawnDamageFx(e.targetId, e.amount));
+    });
+
+    socket.on("cleared", () => { allCards = {}; seenCardIds = new Set(); pendingCastPulse = new Set(); renderVisibleBoard(); });
 
     socket.on("log", appendLog);
     socket.on("chatMessage", appendChat);
@@ -910,6 +944,7 @@
       Object.entries(players).forEach(([id, p]) => {
         const row = document.createElement("div");
         row.className = "player-row";
+        row.dataset.playerId = id;
         row.innerHTML = `
           <div class="player-dot" style="background:${p.color};color:${p.color};"></div>
           <div class="player-info">
@@ -1892,6 +1927,17 @@
       const hasHaste = Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "haste");
       const isSick = card.zoneType === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber && !hasHaste;
       div.classList.toggle("summoning-sick", isSick);
+
+      // ---- visual effects ----
+      if (!seenCardIds.has(card.id)) {
+        div.classList.add("card-enter");
+        seenCardIds.add(card.id);
+      } else if (pendingCastPulse.has(card.id)) {
+        div.classList.add("just-cast");
+        pendingCastPulse.delete(card.id);
+      }
+      if (currentCombat.attackers && currentCombat.attackers[card.id]) div.classList.add("attacking");
+      if (currentCombat.blocks && Object.values(currentCombat.blocks).includes(card.id)) div.classList.add("blocking");
       const isMasked = card.faceDown && card.owner !== myId;
       const isMineFaceDown = card.faceDown && card.owner === myId;
       div.classList.toggle("face-down-mine", isMineFaceDown);
@@ -1910,6 +1956,46 @@
       playmat.appendChild(div);
       cardEls[card.id] = div;
       applyTargetRing(card.id);
+    }
+
+    // Cloned into #fx-layer (never touched by renderVisibleBoard's wipe-and-rebuild) so the
+    // fade-out animation gets to actually finish instead of being yanked mid-flight by the very
+    // next re-render, which can happen within milliseconds of a card leaving the battlefield.
+    function spawnLeaveGhost(id) {
+      const el = cardEls[id];
+      if (!el) return;
+      const ghost = el.cloneNode(true);
+      ghost.removeAttribute("id");
+      ghost.className = "card-ghost";
+      ghost.style.left = el.style.left;
+      ghost.style.top = el.style.top;
+      ghost.style.borderColor = el.style.borderColor;
+      document.getElementById("fx-layer").appendChild(ghost);
+      setTimeout(() => ghost.remove(), 600);
+    }
+
+    // Floating "-N" over a creature that's currently on the visible board, or a brief flash on a
+    // player's sidebar row if the target is a player (or a creature on a board that's not the
+    // one currently being viewed).
+    function spawnDamageFx(targetId, amount) {
+      const cardEl = cardEls[targetId];
+      if (cardEl) {
+        const num = document.createElement("div");
+        num.className = "dmg-float";
+        num.innerText = "-" + amount;
+        num.style.left = (parseFloat(cardEl.style.left) + 30) + "px";
+        num.style.top = (parseFloat(cardEl.style.top) + 50) + "px";
+        document.getElementById("fx-layer").appendChild(num);
+        setTimeout(() => num.remove(), 1000);
+        return;
+      }
+      const row = playerListEl.querySelector(`[data-player-id="${targetId}"]`);
+      if (row) {
+        row.classList.remove("life-flash");
+        void row.offsetWidth; // restart the animation if it's already mid-flash
+        row.classList.add("life-flash");
+        setTimeout(() => row.classList.remove("life-flash"), 700);
+      }
     }
 
     function showPreview(id) {
