@@ -788,6 +788,7 @@ function advanceOnePhase(lobby) {
 function resolveCombatDamage(lobby) {
   const combat = lobby.combat;
   const deaths = [];
+  const dmgEvents = []; // purely for client-side damage-number animation, no gameplay effect
   for (const [attackerId, defenderId] of Object.entries(combat.attackers)) {
     const attacker = lobby.cards[attackerId];
     if (!attacker) continue;
@@ -801,18 +802,22 @@ function resolveCombatDamage(lobby) {
       pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkPower}/${atkTough}) fights ${blocker.name || "a face-down creature"} (${defPower}/${defTough})`);
       if (atkPower >= defTough) deaths.push(blocker);
       if (defPower >= atkTough) deaths.push(attacker);
+      if (atkPower > 0) dmgEvents.push({ targetId: blockerId, amount: atkPower });
+      if (defPower > 0) dmgEvents.push({ targetId: attackerId, amount: defPower });
     } else {
       const defender = lobby.players[defenderId];
       if (defender) {
         defender.life -= atkPower;
         if (attacker.isCommander) defender.cmdr = (defender.cmdr || 0) + atkPower;
         pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
+        if (atkPower > 0) dmgEvents.push({ targetId: defenderId, amount: atkPower });
       }
     }
   }
   const seen = new Set();
   deaths.forEach((c) => { if (!seen.has(c.id) && lobby.cards[c.id]) { seen.add(c.id); sendToGraveyardInternal(lobby, c); } });
   lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
+  if (dmgEvents.length) io.to(lobby.id).emit("combatDamage", dmgEvents);
   broadcastCombat(lobby);
   broadcastPlayers(lobby);
 }
