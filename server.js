@@ -116,7 +116,15 @@ const CARD_ABILITIES = {
   // conditional continuous effect, out of scope for this vocabulary; only the counter itself is
   // automated. Chosen specifically to prove combat-sequencing: the counter needs to land BEFORE
   // damage is computed for this to matter (a 1/1 that's genuinely a 2/2 by the time it deals damage).
-  "ezio, brash novice": [{ trigger: "attack", label: "Ezio, Brash Novice — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }]
+  "ezio, brash novice": [{ trigger: "attack", label: "Ezio, Brash Novice — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  // requiresTarget entries queue for a player-chosen target (see queueTargetChoice) instead of
+  // pushing straight to the stack -- everything else about them works the same once a target is
+  // picked. Real conditions this vocabulary can't check (nonartifact/nonblack, "an opponent
+  // controls") are simplified to "any creature" -- same "close approximation, adjudicate anything
+  // narrower manually" precedent as everywhere else unautomated in this app.
+  "nekrataal": [{ trigger: "etb", label: "Nekrataal — destroy target creature", requiresTarget: true, effects: [{ type: "destroyTarget" }] }],
+  "ravenous chupacabra": [{ trigger: "etb", label: "Ravenous Chupacabra — destroy target creature", requiresTarget: true, effects: [{ type: "destroyTarget" }] }],
+  "man-o'-war": [{ trigger: "etb", label: "Man-o'-War — bounce target creature", requiresTarget: true, effects: [{ type: "bounceTargetToHand" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -174,6 +182,29 @@ const EFFECTS = {
   addCountersToSelf(lobby, ctx, params) {
     const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
     if (card) { card.counters = (card.counters || 0) + (params.amount || 1); broadcastCard(lobby, card); }
+  },
+  // The four targeted effects -- params.chosenTargetId is baked in by chooseTargetFor before this
+  // ever runs (see queueTargetChoice), so resolveStackTop/passPriority need no knowledge of
+  // targeting at all. If the target already left play before this resolved (a legal response
+  // removed it, etc.), these all just no-op -- matches a real Magic spell/ability fizzling for
+  // lack of a legal target, not fully modeled but close enough.
+  destroyTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    fireDeathTriggers(lobby, card);
+    sendToGraveyardInternal(lobby, card);
+  },
+  exileTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (card) exileCardInternal(lobby, card);
+  },
+  bounceTargetToHand(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (card) bounceCardToHandInternal(lobby, card);
+  },
+  tapTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (card) { card.tapped = true; broadcastCard(lobby, card); }
   }
 };
 function executeAbilityEffects(lobby, item) {
@@ -206,7 +237,11 @@ function createLobbyState(id, name, hostUsername, password) {
     turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null },
     combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] },
     stack: [], // cast spells awaiting resolution, top = last element
-    priority: { holderId: null, lastActorId: null } // only meaningful while stack.length > 0
+    priority: { holderId: null, lastActorId: null }, // only meaningful while stack.length > 0
+    // A target-requiring triggered ability queues here INSTEAD OF going on the stack until its
+    // controller picks a legal target -- see queueTargetChoice. Only the front entry is actively
+    // prompted; a second one firing before the first is resolved just waits its turn.
+    pendingTargetChoices: []
   };
 }
 function lobbySummaries() {
@@ -254,6 +289,7 @@ function restoreLobbies() {
     if (l.turn.pendingDiscard === undefined) l.turn.pendingDiscard = null;
     if (!l.stack) l.stack = [];
     if (!l.priority) l.priority = { holderId: null, lastActorId: null };
+    if (!l.pendingTargetChoices) l.pendingTargetChoices = [];
     // Nobody is actually connected right after a restart — mark every seated player as
     // disconnected so the normal reconnect-grace mechanism below picks up the cleanup/resume.
     for (const sid in l.players) {
@@ -313,6 +349,7 @@ function removePlayerFromLobby(lobby, socketId, verb) {
   lobby.voiceParticipants.delete(socketId);
   spliceFromTurnOrder(lobby, socketId);
   removeFromCombatRefs(lobby, socketId);
+  discardPendingTargetChoices(lobby, socketId);
   if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators || {}).length === 0) {
     delete lobbies[lobby.id];
   } else {
@@ -336,6 +373,7 @@ function eliminatePlayer(lobby, socketId) {
   p.eliminated = true;
   spliceFromTurnOrder(lobby, socketId);
   removeFromCombatRefs(lobby, socketId);
+  discardPendingTargetChoices(lobby, socketId);
   pushLog(lobby, `${p.name} has been eliminated!`);
   io.to(lobby.id).emit("playerEliminated", socketId);
 }
@@ -434,11 +472,16 @@ function reattachPlayer(lobby, oldId, newId) {
     if (lobby.combat.attackers[cardId] === oldId) lobby.combat.attackers[cardId] = newId;
   }
   lobby.combat.defendersPending = (lobby.combat.defendersPending || []).map((id) => (id === oldId ? newId : id));
+  lobby.pendingTargetChoices.forEach((c) => { if (c.controllerId === oldId) c.controllerId = newId; });
 }
 
 function buildLobbyJoinedPayload(lobby, socketId) {
   const maskedCards = {};
   for (const id in lobby.cards) maskedCards[id] = maskCard(lobby.cards[id], socketId);
+  // If this reconnecting player is the one a pending trigger is actually waiting on, they need to
+  // know -- the chooseTarget prompt only fires once, at the moment the trigger first queued, so a
+  // fresh connection (a real reload, not just this socket) would otherwise never see it.
+  const myPendingChoice = lobby.pendingTargetChoices.find((c, i) => i === 0 && c.controllerId === socketId);
   return {
     lobbyId: lobby.id,
     lobbyName: lobby.name,
@@ -450,6 +493,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     stack: lobby.stack.map((c) => maskCard(c, socketId)),
     priority: lobby.priority,
+    pendingTargetChoice: myPendingChoice ? { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img } : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
     spectatorRoster: Object.values(lobby.spectators).map((s) => s.name),
@@ -886,14 +930,50 @@ function pushAbilityToStack(lobby, { sourceCard, controllerId, label, effects })
   return item;
 }
 
+// A target-requiring ability queues here instead of reaching the stack -- gating the PUSH, not
+// resolution, is the whole reason resolveStackTop/passPriority need zero knowledge of targeting:
+// by the time anything ever lands in lobby.stack, it's already fully resolvable, exactly like
+// every other item there. Real Magic locks a target in at cast/trigger time too (not resolution),
+// so this isn't just the path of least resistance. Only the front entry is actively prompted to
+// its controller; a second target-requiring trigger firing before the first is resolved just
+// waits in line.
+function queueTargetChoice(lobby, choice) {
+  const entry = { id: newAbilityId(), ...choice };
+  lobby.pendingTargetChoices.push(entry);
+  if (lobby.pendingTargetChoices.length === 1) promptTargetChoice(lobby, entry);
+  return entry;
+}
+function promptTargetChoice(lobby, entry) {
+  const sock = io.sockets.sockets.get(entry.controllerId);
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img });
+}
+// Discards any pending target choices belonging to a departing controller (a real disconnect/leave
+// or an elimination) -- otherwise the table would be stuck forever waiting on a target that will
+// never come. Mana/effects already spent stay spent, matching this app's existing no-undo
+// precedent elsewhere. If discarding changes who's at the front of the queue, prompt them.
+function discardPendingTargetChoices(lobby, socketId) {
+  const before = lobby.pendingTargetChoices.length;
+  lobby.pendingTargetChoices = lobby.pendingTargetChoices.filter((c) => c.controllerId !== socketId);
+  if (lobby.pendingTargetChoices.length !== before && lobby.pendingTargetChoices.length > 0) {
+    promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
+  }
+}
+// Shared by fireEtbTriggers/fireDeathTriggers/fireAttackTriggers: either queues for a target or
+// pushes straight to the stack, depending on the authored ability.
+function fireTrigger(lobby, card, ability) {
+  if (ability.requiresTarget) {
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType });
+  } else {
+    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
+  }
+}
+
 // Fires every authored "enters the battlefield" ability for `card` (self-referential only -- see
 // the CARD_ABILITIES comment). Pregame stays trigger-free, matching this file's existing
 // "pregame is unrestricted" convention -- there's no meaningful turn.order/priority system yet.
 function fireEtbTriggers(lobby, card) {
   if (!lobby.turn.started) return;
-  getAutomatedAbilities(card.name, "etb").forEach((ability) => {
-    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
-  });
+  getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
 }
 
 // Fires every authored "dies" ability for `card` (self-referential only). Must be called BEFORE
@@ -901,20 +981,16 @@ function fireEtbTriggers(lobby, card) {
 // build the ability instance from.
 function fireDeathTriggers(lobby, card) {
   if (!lobby.turn.started) return;
-  getAutomatedAbilities(card.name, "death").forEach((ability) => {
-    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
-  });
+  getAutomatedAbilities(card.name, "death").forEach((ability) => fireTrigger(lobby, card, ability));
 }
 
 // Fires every authored "attacks" ability for `card` (self-referential only). Called from
 // declareAttackers once combat.attackers is already committed -- combat-sequencing correctness
-// (the trigger resolving BEFORE damage, not after) is handled entirely by resolveStackTop's
-// combat.step check, not by anything here.
+// (the trigger resolving BEFORE damage, not after) is handled by resolveStackTop's combat.step
+// check AND declareAttackers' own pendingTargetChoices check, not by anything here.
 function fireAttackTriggers(lobby, card) {
   if (!lobby.turn.started) return;
-  getAutomatedAbilities(card.name, "attack").forEach((ability) => {
-    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
-  });
+  getAutomatedAbilities(card.name, "attack").forEach((ability) => fireTrigger(lobby, card, ability));
 }
 
 // Pops the top of the stack and resolves it: a triggered ability runs its effects; a permanent
@@ -954,7 +1030,10 @@ function resolveStackTop(lobby) {
     // stack.length === 0 at entry, so this can't fire while a block decision is still legitimately
     // owed. Resolving here (instead of at the original declare-time call site) is what makes an
     // attack trigger's effect -- e.g. a +1/+1 counter -- actually land before damage is computed.
-    if (lobby.combat.step === "damage") resolveCombatDamage(lobby);
+    // Also guarded on pendingTargetChoices: a chained trigger (e.g. a destroyed creature's own
+    // death trigger needing a target) can queue a fresh target choice in the same tick the stack
+    // drains to empty, which must still block damage the same way an unresolved stack item would.
+    if (lobby.combat.step === "damage" && lobby.pendingTargetChoices.length === 0) resolveCombatDamage(lobby);
   } else {
     // Fresh lap: the active player gets first crack at what's still pending, and the round
     // closes once priority has cycled all the way back around to them with everyone else
@@ -1035,6 +1114,39 @@ function sendToGraveyardInternal(lobby, card) {
   // it -- a permanent stolen via takeControl still belongs to whoever it was stolen from.
   const owner = lobby.players[card.originalOwner || card.owner];
   if (owner) owner.graveyard.push(toEntry(card));
+}
+
+// Same shape as sendToGraveyardInternal, for exileTarget -- kept as its own top-level function
+// (rather than calling the socket-closure-scoped moveOut) since it needs to be callable from
+// EFFECTS, which is defined outside any single connection's closure.
+function exileCardInternal(lobby, card) {
+  delete lobby.cards[card.id];
+  if (lobby.targets[card.id]) delete lobby.targets[card.id];
+  io.to(lobby.id).emit("cardRemove", card.id);
+  clearCommanderRef(lobby, card);
+  detachDependents(lobby, card);
+  const owner = lobby.players[card.originalOwner || card.owner];
+  if (owner) owner.exile.push(toEntry(card));
+}
+
+// Bounce returns to the card's true OWNER's hand (not necessarily its current controller -- a
+// stolen permanent goes back to whoever it was taken from), same originalOwner-first convention
+// as graveyard/exile.
+function bounceCardToHandInternal(lobby, card) {
+  const ownerId = card.originalOwner || card.owner;
+  const owner = lobby.players[ownerId];
+  delete lobby.cards[card.id];
+  if (lobby.targets[card.id]) delete lobby.targets[card.id];
+  io.to(lobby.id).emit("cardRemove", card.id);
+  clearCommanderRef(lobby, card);
+  detachDependents(lobby, card);
+  if (!owner) return;
+  spawnBattlefieldCard(lobby, {
+    name: card.name, img: card.img, type: card.type, manaCost: card.manaCost, cmc: card.cmc,
+    colors: card.colors, colorIdentity: card.colorIdentity, power: card.power, toughness: card.toughness,
+    loyalty: card.loyalty, text: card.text, keywords: card.keywords, producedMana: card.producedMana,
+    owner: ownerId, faceDown: true, zoneType: "hand"
+  });
 }
 
 // ---------------- turn engine ----------------
@@ -1948,6 +2060,28 @@ io.on("connection", (socket) => {
     pushLog(lobby, `${who} ${already ? "removed a target from" : "targeted"} a card`);
   });
 
+  // A separate handler from toggleTarget on purpose -- toggleTarget is a purely cosmetic, unlinked
+  // "anyone can ring the bell on any card" annotation, never consumed by resolution logic. This one
+  // resolves a SPECIFIC pending triggered ability's real target and actually pushes it to the stack.
+  socket.on("chooseTargetFor", ({ id, targetId }) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const idx = lobby.pendingTargetChoices.findIndex((c) => c.id === id);
+    if (idx === -1) return;
+    const entry = lobby.pendingTargetChoices[idx];
+    if (entry.controllerId !== socket.id) return; // only the controller who's actually being prompted may answer
+    const target = lobby.cards[targetId];
+    const requiredZone = entry.targetZoneType || "creature";
+    if (!target || target.zoneType !== requiredZone) {
+      socket.emit("actionError", `Choose a ${requiredZone === "creature" ? "creature" : requiredZone}.`);
+      return;
+    }
+    lobby.pendingTargetChoices.splice(idx, 1);
+    const effects = entry.effects.map((e) => ({ ...e, chosenTargetId: targetId }));
+    pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: entry.label, effects });
+    socket.emit("targetChoiceResolved", id);
+    if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
+  });
+
   // ---- zone transitions: battlefield -> graveyard/exile/library (owner only) ----
 
   function moveOut(lobby, cardId, zone, pos) {
@@ -2367,10 +2501,11 @@ io.on("connection", (socket) => {
       const card = lobby.cards[cardId];
       if (card) fireAttackTriggers(lobby, card);
     });
-    // If any attack trigger actually fired, it's now sitting on the stack -- damage has to wait
-    // for that to resolve (handled by resolveStackTop's own combat.step check once the stack
-    // drains) instead of firing immediately here, bypassing the priority window entirely.
-    if (lobby.combat.step === "damage" && lobby.stack.length === 0) resolveCombatDamage(lobby);
+    // If any attack trigger actually fired, it's now either sitting on the stack (handled by
+    // resolveStackTop's own combat.step check once the stack drains) or -- for a target-requiring
+    // one -- queued waiting on its controller to pick a target first. Either way damage has to
+    // wait instead of firing immediately here, bypassing the priority window/target choice entirely.
+    if (lobby.combat.step === "damage" && lobby.stack.length === 0 && lobby.pendingTargetChoices.length === 0) resolveCombatDamage(lobby);
   });
 
   socket.on("declareBlockers", (assignments) => {
