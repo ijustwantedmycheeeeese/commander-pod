@@ -1838,6 +1838,15 @@ io.on("connection", (socket) => {
     if (drawn) pushLog(lobby, `${p.name} drew ${drawn} card${drawn > 1 ? "s" : ""}`);
   });
 
+  // Purely informational -- doesn't restrict anything or reveal what was seen, just lets everyone
+  // else know a library was browsed, for the same trust/transparency reason a real table would
+  // notice you flipping through your deck.
+  socket.on("browsedLibrary", () => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p) return;
+    pushLog(lobby, `${p.name} looked through their library`);
+  });
+
   socket.on("drawSpecific", (index) => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !p.library[index]) return;

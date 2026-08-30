@@ -102,6 +102,8 @@
     .dmg-float { position: absolute; pointer-events: none; font-weight: 800; font-size: 20px; color: #f87171; text-shadow: 0 0 4px #000, 0 0 8px #000; animation: floatDamageAnim 1s ease-out forwards; z-index: 57; }
     @keyframes lifeFlashAnim { 0%, 100% { background: transparent; } 30% { background: rgba(220,38,38,0.35); } }
     .player-row.life-flash { animation: lifeFlashAnim 0.7s ease-out; }
+    @keyframes clashFlashAnim { 0% { transform: scale(0.3); opacity: 1; } 100% { transform: scale(1.8); opacity: 0; } }
+    .clash-flash { position: absolute; width: 40px; height: 40px; margin-left: -20px; margin-top: -20px; border-radius: 50%; background: radial-gradient(circle, rgba(255,220,120,0.9), rgba(255,120,40,0.4) 60%, transparent 80%); animation: clashFlashAnim 0.4s ease-out forwards; pointer-events: none; z-index: 56; }
     .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
     .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
     .kw-badges { position: absolute; top: 2px; left: 2px; display: flex; flex-wrap: wrap; gap: 1px; max-width: 100px; }
@@ -996,6 +998,11 @@
     });
 
     socket.on("combatDamage", (events) => {
+      // Must read currentCombat.blocks BEFORE anything else touches it -- this event always
+      // arrives before the combatState broadcast that resets combat.blocks to {} server-side
+      // (resolveCombatDamage emits combatDamage first), so this is the only moment the client
+      // still knows which attacker fought which blocker.
+      spawnClashEffects(currentCombat.blocks);
       (events || []).forEach((e) => spawnDamageFx(e.targetId, e.amount));
     });
 
@@ -1695,6 +1702,9 @@
       if (zoneName === "library") {
         if (!isMine) { alert("Libraries are private — you can only see the card count."); return; }
         list = p.library || [];
+        // Purely informational -- lets everyone else see in the log that you looked, without
+        // restricting anything or revealing what you saw. Once per modal-open, not per scroll/click.
+        socket.emit("browsedLibrary");
       } else {
         list = p[zoneName] || [];
       }
@@ -2270,9 +2280,12 @@
       setTimeout(() => ghost.remove(), 600);
     }
 
-    // Floating "-N" over a creature that's currently on the visible board, or a brief flash on a
-    // player's sidebar row if the target is a player (or a creature on a board that's not the
-    // one currently being viewed).
+    // Floating "-N" over a creature that's currently on the visible board, or a brief flash on
+    // the OWNING player's sidebar row otherwise -- covers both a direct player target
+    // (unblocked combat damage) and a creature target that belongs to a board you're not
+    // currently viewing (each player's battlefield renders on its own tab in this app, so a
+    // blocked fight's two combatants are never both on the same tab -- allCards is a global
+    // cache across every board, unlike cardEls, so this still resolves correctly).
     function spawnDamageFx(targetId, amount) {
       const cardEl = cardEls[targetId];
       if (cardEl) {
@@ -2285,13 +2298,67 @@
         setTimeout(() => num.remove(), 1000);
         return;
       }
-      const row = playerListEl.querySelector(`[data-player-id="${targetId}"]`);
+      const card = allCards[targetId];
+      const rowTargetId = card ? card.owner : targetId;
+      const row = playerListEl.querySelector(`[data-player-id="${rowTargetId}"]`);
       if (row) {
         row.classList.remove("life-flash");
         void row.offsetWidth; // restart the animation if it's already mid-flash
         row.classList.add("life-flash");
         setTimeout(() => row.classList.remove("life-flash"), 700);
       }
+    }
+
+    // A single card's "took an impact" recoil -- a quick shake-in-place plus a flash next to it.
+    // Used by spawnClashEffects for the (normal) case where only one combatant is on the
+    // currently-viewed board.
+    function spawnImpactRecoil(el) {
+      el.style.transition = "transform 0.12s ease-out";
+      el.style.transform = "translate(-4px, 3px) rotate(-2deg)";
+      setTimeout(() => { el.style.transform = "translate(3px, -2px) rotate(1deg)"; }, 120);
+      setTimeout(() => { el.style.transform = ""; }, 220);
+      const flash = document.createElement("div");
+      flash.className = "clash-flash";
+      flash.style.left = (parseFloat(el.style.left) + 54) + "px";
+      flash.style.top = (parseFloat(el.style.top) + 75) + "px";
+      document.getElementById("fx-layer").appendChild(flash);
+      setTimeout(() => flash.remove(), 400);
+    }
+
+    // A blocked fight's two combatants belong to two DIFFERENT players' boards, which this app
+    // always renders on separate tabs -- so in real play, at most one of the two is ever on the
+    // board you're currently viewing (never both, unlike the layout this function originally
+    // assumed). Nudge both toward each other when they somehow are both visible (kept for
+    // completeness), otherwise give whichever one IS visible its own impact recoil so a blocked
+    // fight is never silently invisible just because you're looking at your own board.
+    // Timed off the same combatDamage event that already drives spawnDamageFx -- called with the
+    // PRE-reset currentCombat.blocks (combatDamage always arrives before the combatState
+    // broadcast that clears it, since resolveCombatDamage emits them in that order server-side).
+    function spawnClashEffects(blocks) {
+      Object.entries(blocks || {}).forEach(([attackerId, blockerId]) => {
+        if (!blockerId) return;
+        const a = cardEls[attackerId], b = cardEls[blockerId];
+        if (a && b) {
+          const ax = parseFloat(a.style.left), ay = parseFloat(a.style.top);
+          const bx = parseFloat(b.style.left), by = parseFloat(b.style.top);
+          const dx = (bx - ax) * 0.12, dy = (by - ay) * 0.12;
+          a.style.transition = "transform 0.15s ease-out";
+          b.style.transition = "transform 0.15s ease-out";
+          a.style.transform = `translate(${dx}px, ${dy}px)`;
+          b.style.transform = `translate(${-dx}px, ${-dy}px)`;
+          setTimeout(() => { a.style.transform = ""; b.style.transform = ""; }, 150);
+          const flash = document.createElement("div");
+          flash.className = "clash-flash";
+          flash.style.left = ((ax + bx) / 2 + 30) + "px";
+          flash.style.top = ((ay + by) / 2 + 50) + "px";
+          document.getElementById("fx-layer").appendChild(flash);
+          setTimeout(() => flash.remove(), 400);
+        } else if (a) {
+          spawnImpactRecoil(a);
+        } else if (b) {
+          spawnImpactRecoil(b);
+        }
+      });
     }
 
     // Shared by the hover preview and the click-to-open stack/card detail modal, so both always
