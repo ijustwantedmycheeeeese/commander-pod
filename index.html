@@ -47,6 +47,7 @@
     .player-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #221c12; }
     .player-row:last-child { border-bottom: none; }
     .player-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 6px currentColor; }
+    .player-avatar { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; object-fit: cover; border: 2px solid; }
     .player-info { flex: 1; min-width: 0; }
     .player-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .player-stats { font-size: 11px; color: #a89a70; display: flex; gap: 8px; flex-wrap: wrap; }
@@ -231,7 +232,10 @@
         <div id="deck-list"></div>
         <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
       </div>
-      <button class="secondary" onclick="logout()">Log Out</button>
+      <div class="flex-row">
+        <button class="secondary" onclick="openAccountModal()">Account</button>
+        <button class="secondary" onclick="logout()">Log Out</button>
+      </div>
     </div>
   </div>
 
@@ -441,6 +445,7 @@
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
           <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it.</li>
+          <li><strong>Account</strong> (Main Menu, or ⚙ Menu → Profile → Account Settings) is where account-wide preferences live, separate from the per-table nickname field: an avatar (by image URL, shown next to your color dot in the Players panel), a default nickname used every time you join a new table, and a change-password form. These persist across every table, unlike the per-table nickname override.</li>
           <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
         </ul>
         <div class="modal-close-row"><button onclick="closeHelpModal()">Got it</button></div>
@@ -521,7 +526,8 @@
         <div id="voice-roster" style="font-size:11px;color:#a89a70;margin-bottom:6px;">No one in voice.</div>
 
         <div class="mm-label">Profile</div>
-        <input type="text" id="playerName" placeholder="Set Nickname..." onchange="updateName()" style="width:100%;margin-bottom:6px;">
+        <input type="text" id="playerName" placeholder="Set Nickname (this table only)..." onchange="updateName()" style="width:100%;margin-bottom:6px;">
+        <button class="secondary" onclick="openAccountModal()" style="margin-bottom:6px;">Account Settings</button>
 
         <div class="mm-label">Board Mat</div>
         <input type="text" id="board-mat-url" placeholder="Image URL for your board background..." style="width:100%;margin-bottom:6px;">
@@ -541,6 +547,40 @@
 
         <div class="modal-close-row">
           <button class="secondary" onclick="closeSettingsModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="account-modal">
+      <div class="modal-box" style="max-width:420px;">
+        <h2>Account</h2>
+
+        <div class="mm-label" style="margin-top:0;">Avatar</div>
+        <div class="flex-row" style="align-items:center;margin-bottom:6px;">
+          <img id="account-avatar-preview" src="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;background:#2a2a30;display:none;border:2px solid #5a4423;">
+          <input type="text" id="account-avatar-url" placeholder="Avatar image URL..." oninput="previewAccountAvatar()" style="flex:1;">
+        </div>
+
+        <div class="mm-label">Default Nickname</div>
+        <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Used whenever you join a new table, instead of your username.</div>
+        <input type="text" id="account-default-name" placeholder="Default nickname..." style="width:100%;margin-bottom:6px;">
+
+        <div class="flex-row" style="margin-bottom:10px;">
+          <button onclick="saveAccountProfile()">Save Profile</button>
+        </div>
+        <div id="account-profile-status" style="font-size:12px;color:#a89a70;margin-bottom:10px;"></div>
+
+        <div class="mm-label">Change Password</div>
+        <input type="password" id="account-current-password" placeholder="Current password" style="width:100%;margin-bottom:6px;">
+        <input type="password" id="account-new-password" placeholder="New password" style="width:100%;margin-bottom:6px;">
+        <input type="password" id="account-confirm-password" placeholder="Confirm new password" style="width:100%;margin-bottom:6px;">
+        <div class="flex-row" style="margin-bottom:6px;">
+          <button class="secondary" onclick="changeAccountPassword()">Change Password</button>
+        </div>
+        <div id="account-password-status" style="font-size:12px;color:#a89a70;"></div>
+
+        <div class="modal-close-row">
+          <button class="secondary" onclick="closeAccountModal()">Close</button>
         </div>
       </div>
     </div>
@@ -840,12 +880,17 @@
     let currentStack = [];
     let currentPriority = { holderId: null, lastActorId: null };
 
+    let myAccountAvatar = null;
+    let myAccountDefaultName = null;
+
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
     socket.on("authOk", (data) => {
       document.getElementById("auth-screen").style.display = "none";
       document.getElementById("app-root").style.display = "none";
       document.getElementById("main-menu").style.display = "flex";
       renderDeckList(data.decks);
+      myAccountAvatar = data.avatar || null;
+      myAccountDefaultName = data.defaultName || null;
       const authToken = localStorage.getItem("mtgToken");
       if (authToken) {
         fetch("/api/iceServers?token=" + encodeURIComponent(authToken))
@@ -999,7 +1044,7 @@
         row.className = "player-row";
         row.dataset.playerId = id;
         row.innerHTML = `
-          <div class="player-dot" style="background:${p.color};color:${p.color};"></div>
+          ${p.avatar ? `<img class="player-avatar" src="${escapeHtml(p.avatar)}" style="border-color:${p.color};">` : `<div class="player-dot" style="background:${p.color};color:${p.color};"></div>`}
           <div class="player-info">
             <div class="player-name">${escapeHtml(p.name)}${id === myId ? '<span class="you-badge">YOU</span>' : ''}${p.disconnected ? `<span class="you-badge" style="background:#7a1f1f;">DISCONNECTED${disconnectCountdownText(p)}</span>` : ''}</div>
             <div class="player-stats"><span>❤ ${p.life}</span><span>⚔ ${p.cmdr}</span><span>☠ ${p.poison}</span>${p.mulligans ? `<span>Mull ${p.mulligans}/2</span>` : ""}${p.handKept ? "<span>✅ Ready</span>" : ""}</div>
@@ -1302,6 +1347,55 @@
     function updateName() { socket.emit("setName", document.getElementById("playerName").value || "Player"); }
     function setBoardMat() { socket.emit("setBoardMat", document.getElementById("board-mat-url").value || ""); }
     function clearBoardMat() { document.getElementById("board-mat-url").value = ""; socket.emit("setBoardMat", ""); }
+
+    function previewAccountAvatar() {
+      const url = document.getElementById("account-avatar-url").value.trim();
+      const img = document.getElementById("account-avatar-preview");
+      if (url) { img.src = url; img.style.display = ""; } else { img.style.display = "none"; }
+    }
+    function openAccountModal() {
+      document.getElementById("account-avatar-url").value = myAccountAvatar || "";
+      document.getElementById("account-default-name").value = myAccountDefaultName || "";
+      previewAccountAvatar();
+      document.getElementById("account-profile-status").innerText = "";
+      document.getElementById("account-current-password").value = "";
+      document.getElementById("account-new-password").value = "";
+      document.getElementById("account-confirm-password").value = "";
+      document.getElementById("account-password-status").innerText = "";
+      document.getElementById("account-modal").style.display = "flex";
+    }
+    function closeAccountModal() { document.getElementById("account-modal").style.display = "none"; }
+    function saveAccountProfile() {
+      const avatar = document.getElementById("account-avatar-url").value.trim();
+      const defaultName = document.getElementById("account-default-name").value.trim();
+      socket.emit("updateAccount", { avatar, defaultName });
+      myAccountAvatar = avatar || null;
+      myAccountDefaultName = defaultName || null;
+      document.getElementById("account-profile-status").innerText = "Saved.";
+    }
+    function changeAccountPassword() {
+      const currentPassword = document.getElementById("account-current-password").value;
+      const newPassword = document.getElementById("account-new-password").value;
+      const confirmPassword = document.getElementById("account-confirm-password").value;
+      const status = document.getElementById("account-password-status");
+      if (!currentPassword || !newPassword) { status.innerText = "Fill in both password fields."; return; }
+      if (newPassword !== confirmPassword) { status.innerText = "New passwords don't match."; return; }
+      const token = localStorage.getItem("mtgToken");
+      status.innerText = "Changing password...";
+      fetch("/api/changePassword", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, currentPassword, newPassword })
+      }).then((r) => r.json()).then((d) => {
+        if (d.success) {
+          status.innerText = "Password changed.";
+          document.getElementById("account-current-password").value = "";
+          document.getElementById("account-new-password").value = "";
+          document.getElementById("account-confirm-password").value = "";
+        } else {
+          status.innerText = d.error || "Failed to change password.";
+        }
+      }).catch(() => { status.innerText = "Failed to change password."; });
+    }
     function changeStat(key, val) { socket.emit("statChange", { key, val }); }
 
     function rollDice() {
