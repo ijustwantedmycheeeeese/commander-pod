@@ -217,6 +217,11 @@
       </div>
       <button onclick="openDeckEditor()">Deck Editor</button>
       <div class="mm-hint">Build or edit a deck — up to 99 cards, up to 2 commanders</div>
+      <div class="mm-section">
+        <div class="mm-label">My Decks</div>
+        <div id="deck-list"></div>
+        <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
+      </div>
       <button class="secondary" onclick="logout()">Log Out</button>
     </div>
   </div>
@@ -264,24 +269,16 @@
         <span id="spectator-badge" style="display:none;font-size:12px;color:#d4af37;border:1px solid #5a4423;border-radius:4px;padding:3px 8px;">👁 Spectating</span>
         <input type="text" id="cardSearch" placeholder="Search card to spawn..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)">
         <datalist id="cardSuggestions"></datalist>
-        <button id="spawn-face-up-btn" onclick="requestSpawn(false)">Spawn Face Up</button>
-        <button id="spawn-face-down-btn" onclick="requestSpawn(true)" class="secondary">Spawn Face Down</button>
+        <label id="spawn-face-down-label" style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="spawn-face-down-check"> Face down</label>
+        <button id="spawn-btn" onclick="requestSpawn(document.getElementById('spawn-face-down-check').checked)">Spawn</button>
         <button id="create-token-btn" onclick="openTokenModal()" class="secondary">Create Token</button>
-        <button onclick="openDeckEditor()" class="secondary">Deck Editor</button>
       </div>
       <div class="flex-row">
         <div id="zoom-row" class="flex-row">
           <span style="font-size:12px;color:#a89a70;">Zoom</span>
           <input type="range" min="50" max="150" value="100" oninput="setZoom(this.value)">
         </div>
-        <select id="diceType"><option value="20">D20</option><option value="6">D6</option><option value="2">Coin Flip</option></select>
-        <button onclick="rollDice()" style="background:linear-gradient(180deg,#5b3a8a,#3a2560);">Roll</button>
-        <button id="untap-all-btn" onclick="untapAll()" class="secondary">Untap All</button>
-        <button id="new-game-btn" onclick="triggerClear()" class="danger">New Game</button>
-        <button onclick="openHelpModal()" class="secondary">?</button>
-        <button onclick="openBugReportModal()" class="secondary" title="Copy diagnostic info to report a bug">🐛</button>
-        <button onclick="showMainMenu()" class="secondary">Leave Table</button>
-        <button onclick="logout()" class="secondary">Log Out</button>
+        <button id="settings-menu-btn" onclick="openSettingsModal()" class="secondary">⚙ Menu</button>
       </div>
     </div>
 
@@ -296,9 +293,8 @@
           <div class="stat-widget">
             <div class="stat-row"><span>Life</span><div><button class="stat-btn" onclick="changeStat('life',-1)">-</button> <strong id="lbl-life">40</strong> <button class="stat-btn" onclick="changeStat('life',1)">+</button></div></div>
             <div class="stat-row"><span>Cmdr Dmg</span><div><button class="stat-btn" onclick="changeStat('cmdr',-1)">-</button> <strong id="lbl-cmdr">0</strong> <button class="stat-btn" onclick="changeStat('cmdr',1)">+</button></div></div>
-            <div class="stat-row"><span>Poison</span><div><button class="stat-btn" onclick="changeStat('poison',-1)">-</button> <strong id="lbl-poison">0</strong> <button class="stat-btn" onclick="changeStat('poison',1)">+</button></div></div>
+            <div class="stat-row" id="poison-row" style="display:none;"><span>Poison</span><div><button class="stat-btn" onclick="changeStat('poison',-1)">-</button> <strong id="lbl-poison">0</strong> <button class="stat-btn" onclick="changeStat('poison',1)">+</button></div></div>
           </div>
-          <input type="text" id="playerName" placeholder="Set Nickname..." onchange="updateName()" style="width:100%;margin-top:8px;">
         </div>
         <div class="panel" id="mana-pool-panel">
           <h3>Mana Pool</h3>
@@ -310,32 +306,10 @@
             <button class="mini-btn" onclick="landDropBonus(-1)">-1</button>
           </div>
         </div>
-        <div class="panel" id="opening-hand-panel">
-          <h3>Opening Hand</h3>
-          <div id="opening-hand-status" style="font-size:12px;color:#a89a70;margin-bottom:6px;">Not drawn yet.</div>
-          <div class="flex-row">
-            <button class="mini-btn" onclick="drawOpeningHand()">Draw 7</button>
-            <button class="mini-btn" id="mulligan-btn" onclick="mulligan()">Mulligan</button>
-            <button class="mini-btn" id="keep-hand-btn" onclick="keepHand()">Keep Hand</button>
-          </div>
-        </div>
-        <div class="panel">
-          <h3>Voice Chat <span style="font-weight:400;font-size:10px;color:#e0a030;">(experimental)</span></h3>
-          <div class="flex-row">
-            <button class="mini-btn" id="voice-join-btn" onclick="joinVoice()">Join Voice</button>
-            <button class="mini-btn" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
-          </div>
-          <div id="voice-roster" style="font-size:11px;color:#a89a70;margin-top:6px;">No one in voice.</div>
-        </div>
         <div class="panel">
           <h3>Players</h3>
           <div id="player-list"></div>
           <div id="spectator-roster" style="font-size:11px;color:#8a7a55;margin-top:6px;"></div>
-        </div>
-        <div class="panel">
-          <h3>My Decks</h3>
-          <div id="deck-list"></div>
-          <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
         </div>
         <div id="log-chat-wrap" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:150px;">
           <div class="flex-row" style="padding:6px 12px;border-bottom:1px solid #2e2618;">
@@ -430,9 +404,9 @@
       <div class="modal-box">
         <h2>How to Play</h2>
         <ul>
-          <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named, optionally password-protected — 🔒 in the list means it needs one) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>Leave Table</strong> in the top bar returns to the menu — your seat (board, hand, library, commander, everything) is held for 60 seconds in case you rejoin the same table, shown as a countdown next to your name in the Players panel; after that it's freed up for good.</li>
+          <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named, optionally password-protected — 🔒 in the list means it needs one) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>My Decks</strong> (also on the Main Menu) is where your saved decks live — Edit opens one in the Deck Editor, Del removes it. <strong>Leave Table</strong> (⚙ Menu, in-game) returns to the menu — your seat (board, hand, library, commander, everything) is held for 60 seconds in case you rejoin the same table, shown as a countdown next to your name in the Players panel; after that it's freed up for good.</li>
           <li><strong>Spectate</strong> instead of Join to watch a table without taking a seat — you see the board and life totals like any non-owner (hands and face-down cards stay hidden), can use chat and voice, but can't touch cards or start/advance the game. Works on a game already in progress, not just a fresh table.</li>
-          <li>The <strong>Deck Editor</strong> (Main Menu or top bar) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too.</li>
+          <li>The <strong>Deck Editor</strong> (Main Menu, or ⚙ Menu once in a table) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too, and its own "Load Into Current Game" button is how you swap decks mid-game.</li>
           <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
           <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly. Dragging a permanent back into the Hand row does nothing on purpose — there's no general rule that lets you just pick a permanent back up. To represent a bounce effect, right-click the permanent and choose <strong>Return to Hand</strong> instead.</li>
           <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more). Once the game has started, lands and anything else that isn't an Instant (or doesn't have Flash) can only be played on your own turn, during a main phase — Instants and Flash cards can go anytime.</li>
@@ -440,7 +414,7 @@
           <li>Tap a <strong>basic land</strong>, or any land/rock/dork archived with exactly one fixed color, to auto-add its color to your pool. A source that can produce more than one color (Command Tower, most signets/talismans, City of Brass) prompts you to pick instead of guessing or staying fully manual. The manual +/− buttons in the Mana Pool panel are still there for anything else — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules. A land with "enters the battlefield tapped" in its unconditional text (not shocklands/checklands, which involve a real choice) now actually enters tapped.</li>
           <li><strong>Double-click</strong> your own card to tap it (using it, e.g. for mana) — this only ever taps, since there's no real rule that lets you freely untap something at will; untapping only happens automatically each Untap step, or via <strong>Untap All</strong> for effects that untap things. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
           <li>A creature has <strong>summoning sickness</strong> (shown tilted) until it's been under your control since the start of your most recent turn — it can still block, just not attack, unless it has Haste.</li>
-          <li><strong>Opening Hand</strong>: Draw 7, Mulligan up to twice, then Keep Hand.</li>
+          <li><strong>Opening Hand</strong> pops up automatically the moment a game starts: Draw 7, Mulligan up to twice, then Keep Hand — stays up until you keep a hand, then it's gone for the rest of the game.</li>
           <li><strong>Hand size</strong> is capped at 7: ending your turn (past End Step) with more than that opens a required discard prompt — pick exactly enough cards to get back to 7 before the turn actually ends. A permanent whose text says "no maximum hand size" exempts you entirely.</li>
           <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing. Any player can hit <strong>Counter</strong> on a stack item to send it straight to the graveyard, representing a counterspell that resolved elsewhere.</li>
           <li><strong>Manage Keywords</strong> (right-click a battlefield permanent) lets you grant it Flying, Haste, Indestructible, and other common keywords, representing an aura/equipment/anthem effect — shown as small icon badges on the card. Nothing is enforced automatically except Haste, which already plugs into the summoning-sickness check.</li>
@@ -452,8 +426,8 @@
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board.</li>
-          <li><strong>Chat</strong> and <strong>Voice Chat</strong> (experimental, peer-to-peer) are in the sidebar.</li>
-          <li>Hit something broken? The 🐛 button in the top bar builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
+          <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
+          <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
         </ul>
         <div class="modal-close-row"><button onclick="closeHelpModal()">Got it</button></div>
       </div>
@@ -497,6 +471,55 @@
         <p style="font-size:12px;color:#a89a70;">Something's on the stack. Cast an instant/flash spell in response, or pass — once everyone passes in a row, the top of the stack resolves.</p>
         <div class="modal-close-row" style="justify-content:center;">
           <button onclick="passPriority()">Pass</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="opening-hand-modal">
+      <div class="modal-box" style="max-width:380px;text-align:center;">
+        <h2>Opening Hand</h2>
+        <div id="opening-hand-status" style="font-size:12px;color:#a89a70;margin-bottom:10px;">Not drawn yet.</div>
+        <div class="modal-close-row" style="justify-content:center;">
+          <button class="mini-btn" onclick="drawOpeningHand()">Draw 7</button>
+          <button class="mini-btn" id="mulligan-btn" onclick="mulligan()">Mulligan</button>
+          <button class="mini-btn" id="keep-hand-btn" onclick="keepHand()">Keep Hand</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="settings-modal">
+      <div class="modal-box" style="max-width:420px;">
+        <h2>Menu</h2>
+
+        <div class="mm-label">Game</div>
+        <div class="flex-row" style="margin-bottom:6px;flex-wrap:wrap;">
+          <select id="diceType"><option value="20">D20</option><option value="6">D6</option><option value="2">Coin Flip</option></select>
+          <button onclick="rollDice()" style="background:linear-gradient(180deg,#5b3a8a,#3a2560);">Roll</button>
+          <button id="untap-all-btn" onclick="untapAll()" class="secondary">Untap All</button>
+          <button id="new-game-btn" onclick="triggerClear()" class="danger">New Game</button>
+        </div>
+
+        <div class="mm-label">Voice Chat <span style="font-weight:400;text-transform:none;font-size:10px;color:#e0a030;">(experimental)</span></div>
+        <div class="flex-row" style="margin-bottom:4px;">
+          <button class="mini-btn" id="voice-join-btn" onclick="joinVoice()">Join Voice</button>
+          <button class="mini-btn" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
+        </div>
+        <div id="voice-roster" style="font-size:11px;color:#a89a70;margin-bottom:6px;">No one in voice.</div>
+
+        <div class="mm-label">Profile</div>
+        <input type="text" id="playerName" placeholder="Set Nickname..." onchange="updateName()" style="width:100%;margin-bottom:6px;">
+
+        <div class="mm-label">Table</div>
+        <div class="flex-row" style="flex-wrap:wrap;">
+          <button class="secondary" onclick="openDeckEditor()">Deck Editor</button>
+          <button class="secondary" onclick="openHelpModal()">? Help</button>
+          <button class="secondary" onclick="openBugReportModal()" title="Copy diagnostic info to report a bug">🐛 Bug Report</button>
+          <button class="secondary" onclick="showMainMenu()">Leave Table</button>
+          <button class="secondary" onclick="logout()">Log Out</button>
+        </div>
+
+        <div class="modal-close-row">
+          <button class="secondary" onclick="closeSettingsModal()">Close</button>
         </div>
       </div>
     </div>
@@ -783,7 +806,7 @@
     // top-bar/panel controls that aren't tied to a specific card or player id.
     function applySpectatorUI() {
       document.getElementById("spectator-badge").style.display = amSpectator ? "inline-block" : "none";
-      ["spawn-face-up-btn", "spawn-face-down-btn", "create-token-btn", "untap-all-btn", "new-game-btn", "opening-hand-panel", "my-status-panel", "mana-pool-panel"].forEach((id) => {
+      ["spawn-btn", "spawn-face-down-label", "create-token-btn", "untap-all-btn", "new-game-btn", "my-status-panel", "mana-pool-panel"].forEach((id) => {
         document.getElementById(id).style.display = amSpectator ? "none" : "";
       });
     }
@@ -869,7 +892,7 @@
     socket.on("targets", (data) => { targets = data; applyAllTargetRings(); });
     socket.on("spectatorRoster", renderSpectatorRoster);
     socket.on("stackState", (data) => { currentStack = data.stack || []; currentPriority = data.priority || currentPriority; renderStackState(); renderCombatState(currentCombat); renderTurnState(currentTurn); });
-    socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); checkPendingDiscard(); });
+    socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); checkPendingDiscard(); checkOpeningHandModal(); });
     socket.on("combatState", (data) => { currentCombat = data; renderCombatState(currentCombat); });
     socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
 
@@ -878,6 +901,7 @@
       if (prev && prev.zoneType !== "stack" && card.zoneType === "stack") pendingCastPulse.add(card.id);
       allCards[card.id] = card;
       renderVisibleBoard();
+      updatePoisonVisibility();
       if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
     });
 
@@ -886,6 +910,7 @@
       delete allCards[id];
       delete targets[id];
       renderVisibleBoard();
+      updatePoisonVisibility();
       if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
     });
 
@@ -964,6 +989,28 @@
       document.getElementById("lbl-life").innerText = me.life;
       document.getElementById("lbl-cmdr").innerText = me.cmdr;
       document.getElementById("lbl-poison").innerText = me.poison;
+      updatePoisonVisibility();
+    }
+
+    // Poison only matters once infect/toxic is actually possible at the table -- checks the
+    // player's own commanders/library (visible only to them) plus every currently-visible
+    // battlefield card (public to everyone already), so the row appears the moment it becomes
+    // relevant instead of cluttering every game with a stat nobody's using. Purely a display
+    // toggle -- the server keeps tracking poison unconditionally regardless.
+    function deckHasPoisonSynergy() {
+      const isPoisonCard = (c) => {
+        if (!c) return false;
+        if (Array.isArray(c.keywords) && c.keywords.some((k) => ["infect", "toxic"].includes((k || "").toLowerCase()))) return true;
+        return (c.text || "").toLowerCase().includes("poison");
+      };
+      const me = players[myId];
+      if (me && Array.isArray(me.commanders) && me.commanders.some(isPoisonCard)) return true;
+      if (me && Array.isArray(me.library) && me.library.some(isPoisonCard)) return true;
+      return Object.values(allCards).some(isPoisonCard);
+    }
+    function updatePoisonVisibility() {
+      const row = document.getElementById("poison-row");
+      if (row) row.style.display = deckHasPoisonSynergy() ? "flex" : "none";
     }
 
     function renderManaPool() {
@@ -986,6 +1033,7 @@
     }
 
     function renderOpeningHandStatus() {
+      checkOpeningHandModal();
       const me = players[myId];
       const statusEl = document.getElementById("opening-hand-status");
       const mulliganBtn = document.getElementById("mulligan-btn");
@@ -1006,6 +1054,17 @@
       }
     }
 
+    // Opening Hand is a one-time modal, not a standing panel -- shows automatically once the
+    // game has started, for as long as this player hasn't kept a hand yet. Mirrors the existing
+    // checkPendingDiscard()/checkPriorityModal() pattern: derived fresh from server state on every
+    // relevant update, so it naturally reappears correctly on reconnect mid-decision and never
+    // shows at all for a spectator (players[myId] is undefined for them).
+    function checkOpeningHandModal() {
+      const me = players[myId];
+      const show = !!(currentTurn.started && me && !me.handKept);
+      document.getElementById("opening-hand-modal").style.display = show ? "flex" : "none";
+    }
+
     function renderDeckList(names) {
       const el = document.getElementById("deck-list");
       el.innerHTML = "";
@@ -1019,16 +1078,16 @@
         const label = document.createElement("div");
         label.style.cssText = "flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
         label.innerText = name;
-        const loadBtn = document.createElement("button");
-        loadBtn.className = "mini-btn"; loadBtn.innerText = "Load";
-        loadBtn.onclick = () => { if (confirm(`Load "${name}"? This replaces your current library (and commander slots, if the deck has any).`)) socket.emit("loadDeck", name); };
+        // "Load" (into a live game) doesn't apply from the Main Menu -- there's no game running
+        // here. Loading a different deck into an in-progress game still works from the Deck
+        // Editor's own "Load Into Current Game" button after opening a saved deck via Edit.
         const editBtn = document.createElement("button");
         editBtn.className = "mini-btn"; editBtn.innerText = "Edit";
         editBtn.onclick = () => editDeck(name);
         const delBtn = document.createElement("button");
         delBtn.className = "mini-btn"; delBtn.style.background = "#7a1f1f"; delBtn.innerText = "Del";
         delBtn.onclick = () => { if (confirm(`Delete saved deck "${name}"?`)) socket.emit("deleteDeck", name); };
-        row.appendChild(label); row.appendChild(loadBtn); row.appendChild(editBtn); row.appendChild(delBtn);
+        row.appendChild(label); row.appendChild(editBtn); row.appendChild(delBtn);
         el.appendChild(row);
       });
     }
@@ -1619,6 +1678,9 @@
 
     function openHelpModal() { document.getElementById("help-modal").style.display = "flex"; }
     function closeHelpModal() { document.getElementById("help-modal").style.display = "none"; }
+
+    function openSettingsModal() { document.getElementById("settings-modal").style.display = "flex"; }
+    function closeSettingsModal() { document.getElementById("settings-modal").style.display = "none"; }
 
     function generateBugReport() {
       const lines = [];
