@@ -896,6 +896,11 @@
       renderBoardTabs();
       renderOpeningHandStatus();
       renderManaPool();
+      // Library/graveyard/exile pile counts, among other things, live entirely on the player
+      // object rather than in lobby.cards -- milling or shuffling, for example, never fires a
+      // cardUpdate/cardRemove event at all, so without this the pile counts under Library/
+      // Graveyard/Exile silently went stale until some unrelated card event forced a redraw.
+      renderVisibleBoard();
     });
 
     socket.on("targets", (data) => { targets = data; applyAllTargetRings(); });
