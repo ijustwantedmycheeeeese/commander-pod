@@ -282,7 +282,8 @@
       <div class="flex-row">
         <div id="zoom-row" class="flex-row">
           <span style="font-size:12px;color:#a89a70;">Zoom</span>
-          <input type="range" min="50" max="150" value="100" oninput="setZoom(this.value)">
+          <input type="range" id="zoom-slider" min="25" max="200" value="100" oninput="setZoom(this.value)">
+          <button class="mini-btn secondary" onclick="fitZoomToScreen()" title="Zoom to fit the whole board in view">Fit</button>
         </div>
         <button id="settings-menu-btn" onclick="openSettingsModal()" class="secondary">⚙ Menu</button>
       </div>
@@ -433,7 +434,7 @@
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player (and tracks Commander damage if the attacker is a commander). Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
-          <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board.</li>
+          <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
           <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
         </ul>
@@ -1280,6 +1281,21 @@
 
     function untapAll() { socket.emit("untapAll"); }
     function setZoom(val) { playmat.style.transform = `scale(${val / 100})`; }
+
+    // Computes the scale that frames the whole current playmat (its actual content size, which
+    // already grows with height per computeZoneLayout) inside the visible table-wrapper viewport,
+    // instead of eyeballing the slider.
+    function fitZoomToScreen() {
+      const wrapper = document.getElementById("table-wrapper");
+      const contentW = parseFloat(playmat.style.width) || playmat.offsetWidth || 3000;
+      const contentH = parseFloat(playmat.style.height) || playmat.offsetHeight || 1260;
+      const availW = wrapper.clientWidth - 24;
+      const availH = wrapper.clientHeight - 24;
+      const scale = Math.min(availW / contentW, availH / contentH);
+      const pct = Math.max(25, Math.min(200, Math.round(scale * 100)));
+      document.getElementById("zoom-slider").value = pct;
+      setZoom(pct);
+    }
     function addMana(c) { socket.emit("addMana", c); }
     function removeMana(c) { socket.emit("removeMana", c); }
 
