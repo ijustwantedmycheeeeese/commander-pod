@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const crypto = require("crypto");
+const multer = require("multer");
 const app = express();
 const http = require("http").createServer(app);
 const io = require("socket.io")(http);
@@ -19,6 +20,13 @@ process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", 
 
 const DATA_DIR = "/app/data";
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
+
+// User-uploaded board mat/avatar images. Falls inside the same DATA_DIR the Docker volume
+// (mtg_data:/app/data) already mounts wholesale -- no separate volume declaration needed for
+// uploads to actually persist across container restarts/redeploys the same way users.json does.
+const UPLOAD_DIR = DATA_DIR + "/uploads";
+try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
+app.use("/uploads", express.static(UPLOAD_DIR));
 
 function loadJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return fallback; }
@@ -1311,6 +1319,32 @@ app.get("/api/iceServers", (req, res) => {
     servers.push({ urls: process.env.TURN_URL, username: process.env.TURN_USERNAME || undefined, credential: process.env.TURN_PASSWORD || undefined });
   }
   res.json({ iceServers: servers });
+});
+
+// Board mat / avatar image uploads, an alternative to pasting a URL (both feed the exact same
+// boardMat/avatar string fields -- this just fills that field in for you instead of replacing it).
+const UPLOAD_MIME_EXT = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" };
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: UPLOAD_DIR,
+    // Never trust the client-supplied original filename -- a random name sidesteps any path-
+    // traversal/overwrite concern entirely, same spirit as everywhere else in this app that treats
+    // client input as untrusted.
+    filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString("hex") + (UPLOAD_MIME_EXT[file.mimetype] || ""))
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB -- generous for a board mat/avatar, not for abuse
+  fileFilter: (req, file, cb) => cb(null, !!UPLOAD_MIME_EXT[file.mimetype])
+});
+app.post("/api/upload", (req, res) => {
+  // Same auth gate as /api/iceServers -- an open upload endpoint on an internet-reachable app
+  // would let anyone who finds the URL fill up disk with arbitrary files, not just pod members.
+  const token = req.query.token;
+  if (!token || !sessions[token]) return res.status(401).json({ success: false, error: "Not authenticated" });
+  upload.single("file")(req, res, (err) => {
+    if (err) return res.json({ success: false, error: err.code === "LIMIT_FILE_SIZE" ? "File too large (5MB max)." : "Upload failed." });
+    if (!req.file) return res.json({ success: false, error: "Only PNG, JPG, or WEBP images are supported." });
+    res.json({ success: true, url: "/uploads/" + req.file.filename });
+  });
 });
 
 // ---------------- Socket.IO ----------------

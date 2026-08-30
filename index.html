@@ -571,9 +571,11 @@
 
         <div class="mm-label">Board Mat</div>
         <input type="text" id="board-mat-url" placeholder="Image URL for your board background..." style="width:100%;margin-bottom:6px;">
+        <input type="file" id="board-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'board-mat-url')">
         <div class="flex-row" style="margin-bottom:6px;">
           <button class="mini-btn" onclick="setBoardMat()">Set</button>
           <button class="mini-btn secondary" onclick="clearBoardMat()">Clear</button>
+          <button class="mini-btn secondary" onclick="document.getElementById('board-mat-file').click()">Upload...</button>
         </div>
 
         <div class="mm-label">Table</div>
@@ -596,6 +598,8 @@
         <div class="flex-row" style="align-items:center;margin-bottom:6px;">
           <img id="account-avatar-preview" src="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;background:#2a2a30;display:none;border:2px solid #5a4423;">
           <input type="text" id="account-avatar-url" placeholder="Avatar image URL..." oninput="previewAccountAvatar()" style="flex:1;">
+          <input type="file" id="account-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'account-avatar-url', previewAccountAvatar)">
+          <button class="mini-btn secondary" onclick="document.getElementById('account-avatar-file').click()">Upload...</button>
         </div>
 
         <div class="mm-label">Default Nickname</div>
@@ -1403,6 +1407,32 @@
     function updateName() { socket.emit("setName", document.getElementById("playerName").value || "Player"); }
     function setBoardMat() { socket.emit("setBoardMat", document.getElementById("board-mat-url").value || ""); }
     function clearBoardMat() { document.getElementById("board-mat-url").value = ""; socket.emit("setBoardMat", ""); }
+
+    // Shared by the Board Mat and Avatar "Upload..." buttons -- an alternative to pasting a URL,
+    // not a replacement: this just fills the same text field the URL flow already writes to, so
+    // nothing downstream (setBoardMat/saveAccountProfile, renderVisibleBoard's background handling,
+    // the Players-panel avatar <img>) needs to know or care whether an image came from a URL or an
+    // upload.
+    async function uploadImageFile(fileInput, targetFieldId, afterCallback) {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const token = localStorage.getItem("mtgToken");
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const r = await fetch("/api/upload?token=" + encodeURIComponent(token), { method: "POST", body: formData });
+        const d = await r.json();
+        if (d.success) {
+          document.getElementById(targetFieldId).value = d.url;
+          if (afterCallback) afterCallback();
+        } else {
+          alert(d.error || "Upload failed.");
+        }
+      } catch (e) {
+        alert("Upload failed.");
+      }
+      fileInput.value = "";
+    }
 
     function previewAccountAvatar() {
       const url = document.getElementById("account-avatar-url").value.trim();
