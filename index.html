@@ -66,6 +66,7 @@
 
     #table-wrapper { flex: 1; position: relative; background: radial-gradient(ellipse at center, #16241a 0%, #0a120c 100%); overflow: auto; }
     #playmat { width: 3000px; height: 1260px; position: relative; background-image: radial-gradient(#1a2e1e 15%, transparent 15%); background-size: 30px 30px; transform-origin: top left; }
+    #playmat.custom-mat { background-size: cover; background-position: center; }
 
     .zone-band { position: absolute; border: 1px solid rgba(212,175,55,0.2); border-radius: 10px; }
     .zone-band.zone-creature { background: rgba(239,68,68,0.05); }
@@ -439,6 +440,7 @@
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
+          <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it.</li>
           <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
         </ul>
         <div class="modal-close-row"><button onclick="closeHelpModal()">Got it</button></div>
@@ -520,6 +522,13 @@
 
         <div class="mm-label">Profile</div>
         <input type="text" id="playerName" placeholder="Set Nickname..." onchange="updateName()" style="width:100%;margin-bottom:6px;">
+
+        <div class="mm-label">Board Mat</div>
+        <input type="text" id="board-mat-url" placeholder="Image URL for your board background..." style="width:100%;margin-bottom:6px;">
+        <div class="flex-row" style="margin-bottom:6px;">
+          <button class="mini-btn" onclick="setBoardMat()">Set</button>
+          <button class="mini-btn secondary" onclick="clearBoardMat()">Clear</button>
+        </div>
 
         <div class="mm-label">Table</div>
         <div class="flex-row" style="flex-wrap:wrap;">
@@ -874,6 +883,7 @@
       applySpectatorUI();
       renderSpectatorRoster(data.spectatorRoster || []);
       document.getElementById("playerName").value = (players[myId] && players[myId].name) || "";
+      document.getElementById("board-mat-url").value = (players[myId] && players[myId].boardMat) || "";
       renderPlayerList();
       renderCommanderDock();
       renderBoardTabs();
@@ -1290,6 +1300,8 @@
     // ---------------- stats / name / dice ----------------
 
     function updateName() { socket.emit("setName", document.getElementById("playerName").value || "Player"); }
+    function setBoardMat() { socket.emit("setBoardMat", document.getElementById("board-mat-url").value || ""); }
+    function clearBoardMat() { document.getElementById("board-mat-url").value = ""; socket.emit("setBoardMat", ""); }
     function changeStat(key, val) { socket.emit("statChange", { key, val }); }
 
     function rollDice() {
@@ -1952,6 +1964,13 @@
       const lastZone = currentZoneLayout[currentZoneLayout.length - 1];
       playmat.style.height = Math.max(1260, lastZone.y + lastZone.height + 20) + "px";
       const p = players[owner];
+      if (p && p.boardMat) {
+        playmat.classList.add("custom-mat");
+        playmat.style.backgroundImage = `url("${p.boardMat.replace(/"/g, '%22')}")`;
+      } else {
+        playmat.classList.remove("custom-mat");
+        playmat.style.backgroundImage = "";
+      }
       if (p) {
         const pilesWrap = document.createElement("div");
         pilesWrap.className = "zone-pile-wrap";

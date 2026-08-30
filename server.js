@@ -468,6 +468,7 @@ function playersView(lobby, viewerId) {
       cmdr: p.cmdr,
       cmdrDamage: p.cmdrDamage || {},
       poison: p.poison,
+      boardMat: p.boardMat || null,
       mulligans: p.mulligans,
       handKept: p.handKept,
       openingHandDrawn: !!p.openingHandDrawn,
@@ -1072,7 +1073,7 @@ io.on("connection", (socket) => {
       username,
       name: username,
       color: nextColor(),
-      life: 40, cmdr: 0, cmdrDamage: {}, poison: 0,
+      life: 40, cmdr: 0, cmdrDamage: {}, poison: 0, boardMat: null,
       library: [], graveyard: [], exile: [],
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
@@ -1187,6 +1188,13 @@ io.on("connection", (socket) => {
   socket.on("setName", (name) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
     lobby.players[socket.id].name = (name || "Player").toString().slice(0, 24);
+    broadcastPlayers(lobby);
+  });
+
+  socket.on("setBoardMat", (url) => {
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    const clean = (url || "").toString().trim().slice(0, 500);
+    lobby.players[socket.id].boardMat = clean || null;
     broadcastPlayers(lobby);
   });
 
