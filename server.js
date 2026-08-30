@@ -63,6 +63,9 @@ let colorIndex = 0;
 function nextColor() { return COLORS[colorIndex++ % COLORS.length]; }
 function randInt(n) { return Math.floor(Math.random() * n); }
 function newId() { return "c_" + Date.now() + "_" + randInt(100000); }
+// "ab_" prefix keeps a triggered-ability stack instance's id visually distinct from a real card id
+// and guarantees it can never collide with one.
+function newAbilityId() { return "ab_" + Date.now() + "_" + randInt(100000); }
 function newLobbyId() { return crypto.randomBytes(4).toString("hex"); }
 
 const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End Step"];
@@ -72,6 +75,91 @@ const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End St
 // existing summoning-sickness check in declareAttackers with zero extra code.
 const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection"];
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
+
+// ---------------- trigger/effect engine ----------------
+//
+// Hand-authored, structured automation for SELF-referential triggers only (a card's own ETB/
+// death/attack -- never "whenever another creature you control dies" or anything requiring a
+// player-chosen target). Oracle text is never parsed; each entry here is a deliberate, reviewed
+// translation of a specific card's real text into a fixed effect vocabulary. Looked up server-side
+// ONLY by card name, at the moment a trigger fires -- never trusted from client payloads, unlike
+// `cardArchive` (which round-trips through client-supplied spawn data and can't be treated as
+// server-authoritative). Grows on demand as specific cards are requested, not pre-populated.
+const CARD_ABILITIES = {
+  "elvish visionary": [{ trigger: "etb", label: "Elvish Visionary — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "mulldrifter": [{ trigger: "etb", label: "Mulldrifter — draw two cards", effects: [{ type: "drawCards", amount: 2 }] }],
+  "kitchen finks": [{ trigger: "etb", label: "Kitchen Finks — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "hornet queen": [{
+    trigger: "etb", label: "Hornet Queen — create four Insect tokens",
+    effects: [{ type: "createToken", amount: 4, name: "Insect", type: "Token Creature — Insect", power: "1", toughness: "1", colors: ["G"], keywords: ["Flying", "Deathtouch"] }]
+  }]
+};
+function getAutomatedAbilities(cardName, triggerType) {
+  const all = CARD_ABILITIES[archiveKey(cardName)] || [];
+  return all.filter((a) => a.trigger === triggerType);
+}
+
+// Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
+// targeting exists in this vocabulary on purpose -- see the CARD_ABILITIES comment above.
+function effectTargets(lobby, controllerId, target) {
+  const ids = Object.keys(lobby.players);
+  if (target === "eachOpponent") return ids.filter((id) => id !== controllerId);
+  if (target === "eachPlayer") return ids;
+  return [controllerId]; // "controller" (default)
+}
+const EFFECTS = {
+  drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
+  eachPlayerDrawsCards(lobby, ctx, params) {
+    Object.keys(lobby.players).forEach((id) => drawN(lobby, id, params.amount || 1));
+  },
+  gainLife(lobby, ctx, params) {
+    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
+      const p = lobby.players[id]; if (p) p.life += params.amount || 0;
+    });
+  },
+  loseLife(lobby, ctx, params) {
+    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
+      const p = lobby.players[id]; if (p) p.life -= params.amount || 0;
+    });
+  },
+  damageEachOpponent(lobby, ctx, params) {
+    effectTargets(lobby, ctx.controllerId, "eachOpponent").forEach((id) => {
+      const p = lobby.players[id]; if (p) p.life -= params.amount || 0;
+    });
+  },
+  millCards(lobby, ctx, params) {
+    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
+      const p = lobby.players[id]; if (!p) return;
+      for (let i = 0; i < (params.amount || 1) && p.library.length > 0; i++) {
+        p.graveyard.push(p.library.shift());
+      }
+    });
+  },
+  createToken(lobby, ctx, params) {
+    const n = params.amount || 1;
+    for (let i = 0; i < n; i++) {
+      spawnBattlefieldCard(lobby, {
+        name: params.name || "Token", type: params.type || "Token Creature", img: params.img || "",
+        power: params.power, toughness: params.toughness, colors: params.colors || [],
+        keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.type || "Token Creature")
+      });
+    }
+  },
+  // Only meaningful for an ETB trigger -- by the time a death trigger resolves, the source card is
+  // already gone. No-ops safely rather than modeling "last known information."
+  addCountersToSelf(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (card) { card.counters = (card.counters || 0) + (params.amount || 1); broadcastCard(lobby, card); }
+  }
+};
+function executeAbilityEffects(lobby, item) {
+  const ctx = { controllerId: item.owner, sourceCard: item.sourceId ? { id: item.sourceId } : null };
+  (item.effects || []).forEach((params) => {
+    const fn = EFFECTS[params.type];
+    if (fn) fn(lobby, ctx, params);
+  });
+  broadcastPlayers(lobby);
+}
 
 function createLobbyState(id, name, hostUsername, password) {
   let passwordSalt = null, passwordHash = null;
@@ -229,6 +317,12 @@ function reattachPlayer(lobby, oldId, newId) {
   for (const id in lobby.cards) {
     if (lobby.cards[id].owner === oldId) lobby.cards[id].owner = newId;
   }
+  // Triggered-ability stack instances aren't in lobby.cards (they're not real cards), so the loop
+  // above never sees them -- without this, a trigger pending on the stack when its controller
+  // reconnects would resolve against a dead socket id and silently no-op.
+  lobby.stack.forEach((item) => {
+    if (item.kind === "ability" && item.owner === oldId) item.owner = newId;
+  });
   for (const cardId in lobby.targets) {
     lobby.targets[cardId] = lobby.targets[cardId].map((pid) => (pid === oldId ? newId : pid));
   }
@@ -629,24 +723,59 @@ function pushToStack(lobby, card, casterId) {
   broadcastStack(lobby);
 }
 
-// Pops the top of the stack and resolves it: permanents go to the battlefield (identical
-// placement logic to a normal cast -- classifyType/entersTapped/controllerSince), instants and
-// sorceries go to their controller's graveyard, since they have no permanent form. What the
-// spell actually *does* is, like every other unautomated effect in this app, adjudicated
-// manually by the players.
+// Pushes a triggered ability onto the stack -- deliberately NOT added to lobby.cards, since it
+// isn't a real card (no broadcastCard/cardRemove bookkeeping needed). Shaped to satisfy the
+// client's existing stack-item template (img/name/owner) with zero new client fields required.
+// Opens a priority round the same way pushToStack does.
+function pushAbilityToStack(lobby, { sourceCard, controllerId, label, effects }) {
+  const item = {
+    id: newAbilityId(), kind: "ability", name: label || `${sourceCard.name} trigger`,
+    img: sourceCard.img, owner: controllerId, sourceId: sourceCard.id, sourceName: sourceCard.name, effects
+  };
+  lobby.stack.push(item);
+  lobby.priority.lastActorId = controllerId;
+  lobby.priority.holderId = nextInOrder(lobby.turn.order, controllerId);
+  broadcastStack(lobby);
+  return item;
+}
+
+// Fires every authored "enters the battlefield" ability for `card` (self-referential only -- see
+// the CARD_ABILITIES comment). Pregame stays trigger-free, matching this file's existing
+// "pregame is unrestricted" convention -- there's no meaningful turn.order/priority system yet.
+function fireEtbTriggers(lobby, card) {
+  if (!lobby.turn.started) return;
+  getAutomatedAbilities(card.name, "etb").forEach((ability) => {
+    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
+  });
+}
+
+// Pops the top of the stack and resolves it: a triggered ability runs its effects; a permanent
+// goes to the battlefield (identical placement logic to a normal cast --
+// classifyType/entersTapped/controllerSince) and fires its own ETB triggers; instants and
+// sorceries go to their controller's graveyard, since they have no permanent form. What a SPELL
+// actually *does* is still adjudicated manually by the players -- only the narrow, hand-authored
+// triggered abilities in CARD_ABILITIES are automated.
 function resolveStackTop(lobby) {
-  const card = lobby.stack.pop();
-  if (!card) return;
-  const owner = lobby.players[card.owner];
-  if (isInstantOrSorcery(card.type)) {
-    sendToGraveyardInternal(lobby, card);
-    if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
+  const item = lobby.stack.pop();
+  if (!item) return;
+  if (item.kind === "ability") {
+    executeAbilityEffects(lobby, item);
+    const owner = lobby.players[item.owner];
+    if (owner) pushLog(lobby, `${owner.name}'s ${item.name} resolved`);
   } else {
-    card.zoneType = classifyType(card.type);
-    card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
-    if (entersTapped(card)) card.tapped = true;
-    broadcastCard(lobby, card);
-    if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved onto the battlefield`);
+    const card = item;
+    const owner = lobby.players[card.owner];
+    if (isInstantOrSorcery(card.type)) {
+      sendToGraveyardInternal(lobby, card);
+      if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
+    } else {
+      card.zoneType = classifyType(card.type);
+      card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+      if (entersTapped(card)) card.tapped = true;
+      broadcastCard(lobby, card);
+      if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved onto the battlefield`);
+      fireEtbTriggers(lobby, card);
+    }
   }
   if (lobby.stack.length === 0) {
     lobby.priority.holderId = null;
@@ -1266,9 +1395,10 @@ io.on("connection", (socket) => {
 
   socket.on("spawnCard", (data) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
-    spawnBattlefieldCard(lobby, { ...data, owner: socket.id, zoneType: classifyType(data.type) });
+    const card = spawnBattlefieldCard(lobby, { ...data, owner: socket.id, zoneType: classifyType(data.type) });
     const who = lobby.players[socket.id].name;
     pushLog(lobby, data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
+    if (card.zoneType !== "hand") fireEtbTriggers(lobby, card);
   });
 
   socket.on("changeZone", ({ id, zoneType, x }) => {
@@ -1302,6 +1432,7 @@ io.on("connection", (socket) => {
         broadcastCard(lobby, card);
         broadcastPlayers(lobby);
         pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
+        fireEtbTriggers(lobby, card);
       } else {
         pushToStack(lobby, card, socket.id);
         pushLog(lobby, `${p.name} cast ${card.name || "a spell"}`);
@@ -1335,6 +1466,7 @@ io.on("connection", (socket) => {
       broadcastCard(lobby, card);
       broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
+      fireEtbTriggers(lobby, card);
     } else {
       pushToStack(lobby, card, socket.id);
       pushLog(lobby, `${p.name} cast ${card.name || "a spell"}`);
@@ -1360,6 +1492,7 @@ io.on("connection", (socket) => {
       if (entersTapped(card)) card.tapped = true;
       broadcastCard(lobby, card);
       pushLog(lobby, `${p.name} played ${card.name || "a card"} without paying its cost`);
+      fireEtbTriggers(lobby, card);
     } else {
       pushToStack(lobby, card, socket.id);
       pushLog(lobby, `${p.name} cast ${card.name || "a spell"} without paying its mana cost`);
@@ -1615,9 +1748,10 @@ io.on("connection", (socket) => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !p[zone] || !p[zone][index]) return;
     const entry = p[zone].splice(index, 1)[0];
-    spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
+    const card = spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} returned ${entry.name} to the battlefield`);
+    fireEtbTriggers(lobby, card);
   });
 
   socket.on("zoneToHand", ({ zone, index }) => {
@@ -1830,7 +1964,10 @@ io.on("connection", (socket) => {
     cmd.battlefieldId = card.id;
     cmd.tax += 2;
     // Pregame (no turn.order yet) stays unrestricted like every other cast -- spawnBattlefieldCard
-    // already placed it straight on the battlefield, so there's nothing more to do.
+    // already placed it straight on the battlefield, so there's nothing more to do (ETB triggers
+    // are pregame-inert anyway, same as everywhere else -- there's no turn.order yet to open a
+    // priority round with). Mid-game, the same card object fires ETB later via resolveStackTop
+    // once it actually resolves off the stack.
     if (lobby.turn.started) pushToStack(lobby, card, socket.id);
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} cast their commander: ${cmd.name} (tax now ${cmd.tax})`);
@@ -1927,7 +2064,9 @@ io.on("connection", (socket) => {
     const card = lobby.stack.splice(idx, 1)[0];
     const owner = lobby.players[card.owner];
     const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
-    sendToGraveyardInternal(lobby, card);
+    // A triggered ability isn't a real card -- sendToGraveyardInternal assumes one (would push a
+    // garbage entry into the controller's graveyard), so just remove it from the stack instead.
+    if (card.kind !== "ability") sendToGraveyardInternal(lobby, card);
     if (owner) pushLog(lobby, `${who} countered ${owner.name}'s ${card.name || "spell"}`);
     if (lobby.stack.length === 0) {
       lobby.priority.holderId = null;
