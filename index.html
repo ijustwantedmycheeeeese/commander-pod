@@ -118,6 +118,16 @@
     #preview-panel { position: fixed; top: 64px; right: 16px; width: 260px; max-height: 80vh; overflow-y: auto; z-index: 50; background: #171310; border: 1px solid #5a4423; border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); display: none; }
     #target-choice-banner { display: none; flex-direction: column; align-items: center; position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: #171310; border: 2px solid #d4af37; border-radius: 8px; padding: 10px 18px; z-index: 150; text-align: center; box-shadow: 0 4px 16px rgba(0,0,0,0.7); }
     #target-choice-banner-text { color: #d4af37; font-weight: 600; font-size: 13px; }
+
+    #combat-view-panel { display: none; position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); width: 340px; max-height: 40vh; overflow-y: auto; background: #171310; border: 2px solid #5a4423; border-radius: 8px; padding: 8px 10px; z-index: 120; box-shadow: 0 4px 16px rgba(0,0,0,0.7); }
+    #combat-view-panel .cv-header { font-family: 'Cinzel', serif; color: #d4af37; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .cv-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #241c12; font-size: 11px; }
+    .cv-row:last-child { border-bottom: none; }
+    .cv-thumb { width: 26px; height: 26px; border-radius: 4px; object-fit: cover; flex-shrink: 0; background: #241c12; }
+    .cv-vs { color: #a89a70; flex-shrink: 0; }
+    .cv-side { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+    .cv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cv-unblocked { color: #a89a70; font-style: italic; }
     #preview-panel img { width: 100%; border-radius: 6px; display: block; }
     #preview-panel .pv-name { font-size: 12px; text-align: center; margin-top: 6px; color: #ddd; }
     #preview-panel .pv-text { font-size: 11px; text-align: left; margin-top: 8px; color: #c9bc98; white-space: pre-wrap; line-height: 1.4; border-top: 1px solid #3a2e18; padding-top: 6px; }
@@ -399,6 +409,11 @@
     <div id="target-choice-banner">
       <div id="target-choice-banner-text"></div>
       <div style="font-size:11px;color:#a89a70;margin-top:2px;">Click any card on the battlefield to target it.</div>
+    </div>
+
+    <div id="combat-view-panel">
+      <div class="cv-header">⚔ Combat</div>
+      <div id="combat-view-body"></div>
     </div>
 
     <div id="context-menu">
@@ -1477,6 +1492,40 @@
       } else {
         btn.style.display = "none";
       }
+      renderCombatView(c);
+    }
+
+    // Shared combat view -- one row per attacker, visible to every player at the table (not just
+    // attacker/defender), showing what's fighting what. Purely a read model over currentCombat/allCards,
+    // no server changes needed.
+    function renderCombatView(c) {
+      const panel = document.getElementById("combat-view-panel");
+      const attackerIds = Object.keys(c.attackers || {});
+      if (c.step === "none" || attackerIds.length === 0) { panel.style.display = "none"; return; }
+      document.getElementById("combat-view-body").innerHTML = attackerIds.map((atkId) => {
+        const atk = allCards[atkId];
+        const atkName = atk && !atk.faceDown ? escapeHtml(atk.name || "") : "Face-down attacker";
+        const atkImg = atk && !atk.faceDown ? (atk.img || "") : "";
+        const atkPT = atk ? effectivePT(atk) : "0/0";
+        const blockerId = (c.blocks || {})[atkId];
+        let rightSide;
+        if (blockerId && allCards[blockerId]) {
+          const blk = allCards[blockerId];
+          const blkName = blk && !blk.faceDown ? escapeHtml(blk.name || "") : "Face-down blocker";
+          const blkImg = blk && !blk.faceDown ? (blk.img || "") : "";
+          const blkPT = effectivePT(blk);
+          rightSide = `<img src="${blkImg}" class="cv-thumb"><div class="cv-name">${blkName} (${blkPT})</div>`;
+        } else {
+          const defender = players[c.attackers[atkId]];
+          rightSide = `<div class="cv-name cv-unblocked">${defender ? escapeHtml(defender.name) : "?"} (unblocked)</div>`;
+        }
+        return `<div class="cv-row">
+          <div class="cv-side"><img src="${atkImg}" class="cv-thumb"><div class="cv-name">${atkName} (${atkPT})</div></div>
+          <span class="cv-vs">→</span>
+          <div class="cv-side">${rightSide}</div>
+        </div>`;
+      }).join("");
+      panel.style.display = "block";
     }
 
     // ---------------- stack / priority ----------------
