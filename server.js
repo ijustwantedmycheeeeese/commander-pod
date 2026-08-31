@@ -1150,14 +1150,32 @@ function extractCardFields(c) {
   };
 }
 
+// Every other user-supplied string in this file (chat text, names, deck/mat names, avatar/mat
+// URLs) gets coerced to a string and length-capped before it's trusted -- these two were the only
+// ones that weren't, despite feeding straight into shared, broadcast game state. Length isn't a
+// security boundary by itself (the client escapes on render), but it matches this app's standing
+// "never trust a client string past a sane size cap" rule and keeps one huge string from bloating
+// every other connected player's state.
+function sanitizeCardStr(s, max) {
+  return (s == null ? "" : String(s)).slice(0, max);
+}
+// img specifically also gets a scheme allowlist -- every legitimate value here is either a Scryfall
+// CDN URL or our own /uploads/ path, so requiring http(s):// or /uploads/ costs nothing real and
+// means a client that skips escaping some render path (now or in the future) still can't turn this
+// into a javascript:/data: URI.
+function sanitizeImgUrl(s) {
+  const v = sanitizeCardStr(s, 2000).trim();
+  return /^(https?:\/\/|\/uploads\/)/i.test(v) ? v : "";
+}
+
 // Shape used for cards resting in library/graveyard/exile/commander-zone —
 // same attribute set as the archive, minus battlefield-only state (tapped, counters, etc).
 function toEntry(c) {
   return {
-    name: c.name, img: c.img, type: c.type || "", manaCost: c.manaCost || "",
+    name: sanitizeCardStr(c.name, 200), img: sanitizeImgUrl(c.img), type: sanitizeCardStr(c.type || "", 100), manaCost: sanitizeCardStr(c.manaCost || "", 50),
     cmc: c.cmc || 0, colors: c.colors || [], colorIdentity: c.colorIdentity || [],
     power: c.power, toughness: c.toughness, loyalty: c.loyalty,
-    text: c.text || "", keywords: c.keywords || [], producedMana: c.producedMana || null,
+    text: sanitizeCardStr(c.text || "", 3000), keywords: c.keywords || [], producedMana: c.producedMana || null,
     // Preserve commander identity across zone changes — a commander dealing combat damage still
     // counts as commander damage even when it wasn't cast from the command zone this time.
     isCommander: !!c.isCommander
@@ -1261,10 +1279,10 @@ function spawnBattlefieldCard(lobby, data) {
   const id = newId();
   const resolvedZoneType = zoneType || classifyType(data.type);
   const card = {
-    id, name: data.name, img: data.img, type: data.type || "", manaCost: data.manaCost || "",
+    id, name: sanitizeCardStr(data.name, 200), img: sanitizeImgUrl(data.img), type: sanitizeCardStr(data.type || "", 100), manaCost: sanitizeCardStr(data.manaCost || "", 50),
     cmc: data.cmc || 0, colors: data.colors || [], colorIdentity: data.colorIdentity || [],
     power: data.power, toughness: data.toughness, loyalty: data.loyalty,
-    text: data.text || "", keywords: data.keywords || [], producedMana: data.producedMana || null,
+    text: sanitizeCardStr(data.text || "", 3000), keywords: data.keywords || [], producedMana: data.producedMana || null,
     zoneType: resolvedZoneType,
     // Only applies when actually entering the battlefield — drawing into hand (zoneType "hand")
     // goes through this same function but obviously shouldn't come in "tapped".
@@ -2304,7 +2322,7 @@ io.on("connection", (socket) => {
   socket.on("updateAccount", ({ avatar, defaultName } = {}) => {
     if (!users[username]) return;
     const oldAvatar = users[username].avatar;
-    users[username].avatar = (avatar || "").toString().trim().slice(0, 500) || null;
+    users[username].avatar = sanitizeImgUrl(avatar) || null;
     users[username].defaultName = (defaultName || "").toString().trim().slice(0, 24) || null;
     saveUsers();
     if (oldAvatar && oldAvatar !== users[username].avatar) deleteUploadIfOrphaned(oldAvatar, username);
@@ -2317,7 +2335,7 @@ io.on("connection", (socket) => {
 
   socket.on("setBoardMat", (url) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
-    const clean = (url || "").toString().trim().slice(0, 500);
+    const clean = sanitizeImgUrl(url);
     const oldMat = lobby.players[socket.id].boardMat;
     lobby.players[socket.id].boardMat = clean || null;
     broadcastPlayers(lobby);
@@ -2977,7 +2995,7 @@ io.on("connection", (socket) => {
 
   socket.on("saveMat", ({ name, url }) => {
     name = (name || "").toString().trim().slice(0, 40);
-    const clean = (url || "").toString().trim().slice(0, 500);
+    const clean = sanitizeImgUrl(url);
     if (!name || !clean) return;
     if (!mats[username]) mats[username] = {};
     mats[username][name] = clean;
