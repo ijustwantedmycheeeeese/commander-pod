@@ -301,7 +301,7 @@
             <input type="text" id="de-card-search" placeholder="Add a card by name..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)" style="flex:1;" onkeydown="if(event.key==='Enter'){deAddCardFromSearch();}">
             <button class="mini-btn" onclick="deAddCardFromSearch()">Add</button>
           </div>
-          <div class="de-library-count">Library: <strong id="de-count">0</strong> / 99</div>
+          <div class="de-library-count">Library: <strong id="de-count">0</strong> / 99 <span id="de-automation-count" style="color:#8a7a55;"></span></div>
           <div class="de-library-list" id="de-library-list"></div>
           <textarea id="de-paste" rows="5" placeholder="Or paste a decklist to bulk-add: 1 Sol Ring&#10;1 Arcane Signet&#10;...  (commanders go in the slots above, not here)"></textarea>
           <button class="mini-btn secondary" style="margin-top:6px;" onclick="deResolvePaste()">Add Pasted List</button>
@@ -987,6 +987,7 @@
     let myAccountAvatar = null;
     let myAccountDefaultName = null;
     let mySavedMats = {}; // name -> url, account-wide (distinct from the per-table active boardMat)
+    let automatedCardNames = new Set(); // lowercase card names with some automation, sent once at auth time -- see deckAutomationCoverage
 
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
     socket.on("authOk", (data) => {
@@ -997,6 +998,7 @@
       myAccountAvatar = data.avatar || null;
       myAccountDefaultName = data.defaultName || null;
       mySavedMats = data.mats || {};
+      automatedCardNames = new Set(data.automatedCardNames || []);
       renderSavedMatsList();
       renderSavedMatSelect();
       const authToken = localStorage.getItem("mtgToken");
@@ -2182,6 +2184,7 @@
     function editDeck(name) { socket.emit("getDeckData", name); }
 
     function deRenderCommanders() {
+      updateDeckAutomationCoverage();
       for (let slot = 0; slot < 2; slot++) {
         const cmd = deckEditor.commanders[slot];
         const el = document.getElementById("de-cmdr-slot-" + slot);
@@ -2214,8 +2217,21 @@
     }
     function deClearCommanderSlot(slot) { deckEditor.commanders[slot] = null; deRenderCommanders(); }
 
+    // How much of the current working deck (library + commanders) has SOME automation -- a
+    // trigger, an activated ability, or a spell effect -- computed instantly and entirely
+    // client-side from the automatedCardNames set sent once at auth time, so it updates live as
+    // cards are added/removed/pasted/imported without a server round trip per change.
+    function updateDeckAutomationCoverage() {
+      const el = document.getElementById("de-automation-count");
+      if (!el) return;
+      const cards = [...deckEditor.library, ...deckEditor.commanders.filter(Boolean)];
+      if (!cards.length) { el.innerText = ""; return; }
+      const automated = cards.filter((c) => automatedCardNames.has((c.name || "").toLowerCase().trim())).length;
+      el.innerText = `— ${automated}/${cards.length} with some automation`;
+    }
     function deRenderLibrary() {
       document.getElementById("de-count").innerText = deckEditor.library.length;
+      updateDeckAutomationCoverage();
       const list = document.getElementById("de-library-list");
       if (deckEditor.library.length === 0) {
         list.innerHTML = "<div style='color:#8a7a55;font-size:12px;padding:6px 0;'>No cards yet — add one above or paste a list below.</div>";

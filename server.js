@@ -423,6 +423,16 @@ const SPELL_ABILITIES = {
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
 }
+// Union of every card name with SOME automation -- a trigger, an activated ability, or a spell
+// effect. Sent once at auth time (see authOk) so the client can compute "how much of this deck is
+// automated" locally and instantly as a deck is built/imported, without a round trip per change.
+function getAllAutomatedCardNames() {
+  return [...new Set([...Object.keys(CARD_ABILITIES), ...Object.keys(ACTIVATED_ABILITIES), ...Object.keys(SPELL_ABILITIES)])];
+}
+function isCardAutomated(cardName) {
+  const key = archiveKey(cardName);
+  return !!(CARD_ABILITIES[key] || ACTIVATED_ABILITIES[key] || SPELL_ABILITIES[key]);
+}
 
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
 // targeting exists in this vocabulary on purpose -- see the CARD_ABILITIES comment above.
@@ -2026,7 +2036,8 @@ io.on("connection", (socket) => {
     username, decks: Object.keys(decks[username] || {}),
     mats: mats[username] || {},
     avatar: (users[username] && users[username].avatar) || null,
-    defaultName: (users[username] && users[username].defaultName) || null
+    defaultName: (users[username] && users[username].defaultName) || null,
+    automatedCardNames: getAllAutomatedCardNames()
   });
 
   // A reconnecting browser (network blip, tab refresh, server restart) resumes its seat silently
@@ -2915,8 +2926,9 @@ io.on("connection", (socket) => {
     applyCommandersToPlayer(p, deck.commanders);
     broadcastPlayers(lobby);
     const cmdCount = (deck.commanders || []).filter(Boolean).length;
+    const automatedCount = p.library.filter((c) => isCardAutomated(c.name)).length + (deck.commanders || []).filter((c) => c && isCardAutomated(c.name)).length;
     socket.emit("importResult", { success: true, requested: p.library.length, found: p.library.length });
-    pushLog(lobby, `${p.name} loaded deck "${name}" (${p.library.length} cards${cmdCount ? ` + ${cmdCount} commander${cmdCount > 1 ? "s" : ""}` : ""})`);
+    pushLog(lobby, `${p.name} loaded deck "${name}" (${p.library.length} cards${cmdCount ? ` + ${cmdCount} commander${cmdCount > 1 ? "s" : ""}` : ""} — ${automatedCount} with some automation)`);
   });
 
   // Resolves a pasted decklist to full card data for the deck editor, without touching the
@@ -3002,7 +3014,8 @@ io.on("connection", (socket) => {
     shuffle(p.library);
     applyCommandersToPlayer(p, commanders);
     broadcastPlayers(lobby);
-    pushLog(lobby, `${p.name} loaded a deck draft into the game`);
+    const automatedCount = p.library.filter((c) => isCardAutomated(c.name)).length + (commanders || []).filter((c) => c && isCardAutomated(c.name)).length;
+    pushLog(lobby, `${p.name} loaded a deck draft into the game (${automatedCount} with some automation)`);
   });
 
   // ---- commander zone ----
