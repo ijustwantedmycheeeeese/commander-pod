@@ -20,6 +20,6 @@ Still check in before doing any of these, since blanket permission doesn't cover
 
 ## Local dev / testing
 
-- `npm install && mkdir public && cp index.html public/index.html && node server.js` to run locally (matches what the Dockerfile does at build time).
+- `npm install && mkdir -p public/audio && cp index.html public/index.html && cp audio/lobby-music.mp3 public/audio/lobby-music.mp3 && node server.js` to run locally (matches what the Dockerfile does at build time).
 - No test framework in this repo — verify changes by running the real server and driving it with a scripted `socket.io-client` script and/or the browser, not just code review.
 - Server data (users, decks, card archive) persists under `/app/data` per `server.js`'s `DATA_DIR` — on Windows this resolves to `C:\app\data` outside the repo, so it's safe to freely create/delete for testing without touching real data.
