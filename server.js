@@ -153,7 +153,15 @@ const CARD_ABILITIES = {
   // narrower manually" precedent as everywhere else unautomated in this app.
   "nekrataal": [{ trigger: "etb", label: "Nekrataal — destroy target creature", requiresTarget: true, effects: [{ type: "destroyTarget" }] }],
   "ravenous chupacabra": [{ trigger: "etb", label: "Ravenous Chupacabra — destroy target creature", requiresTarget: true, effects: [{ type: "destroyTarget" }] }],
-  "man-o'-war": [{ trigger: "etb", label: "Man-o'-War — bounce target creature", requiresTarget: true, effects: [{ type: "bounceTargetToHand" }] }]
+  "man-o'-war": [{ trigger: "etb", label: "Man-o'-War — bounce target creature", requiresTarget: true, effects: [{ type: "bounceTargetToHand" }] }],
+  // First three seeded examples of the non-self-referential trigger types (see fireGlobalTrigger) --
+  // "deathYouControl"/"selfGainsLife"/"youCastSpell" fire for a permanent's controller off an event
+  // on any of their OTHER permanents/actions, not just this card's own name.
+  "zulaport cutthroat": [{ trigger: "deathYouControl", label: "Zulaport Cutthroat — drains for 1", effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }, { type: "gainLife", target: "controller", amount: 1 }] }],
+  "ajani's pridemate": [{ trigger: "selfGainsLife", label: "Ajani's Pridemate — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  // Real text has no further condition ("Whenever you cast a spell, you gain 1 life") -- no
+  // simplification needed here, unlike most other narrowed entries in this table.
+  "contemplation": [{ trigger: "youCastSpell", label: "Contemplation — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -174,9 +182,7 @@ const EFFECTS = {
     Object.keys(lobby.players).forEach((id) => drawN(lobby, id, params.amount || 1));
   },
   gainLife(lobby, ctx, params) {
-    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
-      const p = lobby.players[id]; if (p) p.life += params.amount || 0;
-    });
+    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => applyLifeGain(lobby, id, params.amount || 0));
   },
   loseLife(lobby, ctx, params) {
     effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
@@ -976,6 +982,11 @@ function pushToStack(lobby, card, casterId) {
   lobby.priority.holderId = nextInOrder(lobby.turn.order, casterId);
   broadcastCard(lobby, card);
   broadcastStack(lobby);
+  // Fires after the spell is already on the stack, so a triggered youCastSpell ability lands on
+  // TOP of it (LIFO) and resolves first -- matches real Magic's "cast trigger resolves before the
+  // spell it triggered off of" ordering. Lands never reach this function (see the doc comment
+  // above), so this can't misfire for a land drop.
+  fireGlobalTrigger(lobby, "youCastSpell", casterId);
 }
 
 // Pushes a triggered ability onto the stack -- deliberately NOT added to lobby.cards, since it
@@ -1046,6 +1057,35 @@ function fireEtbTriggers(lobby, card) {
 function fireDeathTriggers(lobby, card) {
   if (!lobby.turn.started) return;
   getAutomatedAbilities(card.name, "death").forEach((ability) => fireTrigger(lobby, card, ability));
+  fireGlobalTrigger(lobby, "deathYouControl", card.owner);
+}
+
+// The non-self-referential counterpart to fireEtbTriggers/fireDeathTriggers/fireAttackTriggers,
+// which only ever check the trigger's own source card. Aristocrats-style wording ("whenever a
+// creature you control dies", "whenever you gain life", "whenever you cast a spell") isn't about
+// the source of the event at all -- it's about every OTHER permanent belonging to whoever the event
+// happened to, so this scans the whole battlefield instead of one card. `forPlayerId` is whichever
+// player the event actually happened to (the dying creature's controller, the player who gained
+// life, the caster) -- only THEIR permanents are scanned, matching "you"/"you control" in the
+// oracle text these trigger types exist to cover.
+function fireGlobalTrigger(lobby, eventType, forPlayerId) {
+  if (!lobby.turn.started) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== forPlayerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, eventType).forEach((ability) => fireTrigger(lobby, c, ability));
+  }
+}
+
+// The one hook point for any positive life change, so selfGainsLife triggers fire regardless of
+// source (an EFFECTS.gainLife resolution, or the manual +life button in statChange) instead of two
+// divergent raw `p.life +=` sites. Only actual gains route through here -- life loss never fires
+// this, matching the real "whenever you gain life" wording these triggers exist to cover.
+function applyLifeGain(lobby, playerId, amount) {
+  const p = lobby.players[playerId];
+  if (!p || amount <= 0) return;
+  p.life += amount;
+  fireGlobalTrigger(lobby, "selfGainsLife", playerId);
 }
 
 // Fires every authored "attacks" ability for `card` (self-referential only). Called from
@@ -1758,7 +1798,8 @@ io.on("connection", (socket) => {
 
   socket.on("statChange", ({ key, val }) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id] || !["life", "cmdr", "poison"].includes(key)) return;
-    lobby.players[socket.id][key] += val;
+    if (key === "life" && val > 0) applyLifeGain(lobby, socket.id, val);
+    else lobby.players[socket.id][key] += val;
     // Manual life adjustment can trigger elimination just like combat can; the manual cmdr/poison
     // buttons only ever touch the flat aggregate/poison counters, never cmdrDamage[key] itself
     // (only resolveCombatDamage writes that), so this is really just the life <= 0 path in
