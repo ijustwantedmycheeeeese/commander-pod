@@ -302,6 +302,128 @@ function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
 }
 
+// What a cast instant/sorcery spell actually DOES, for the narrow set of real cards authored here --
+// one entry per card (unlike CARD_ABILITIES/ACTIVATED_ABILITIES, a spell only ever resolves once,
+// so there's no array of multiple abilities to pick from). Targets, when present, are chosen at
+// RESOLUTION time (once the spell reaches the top of the stack) rather than at cast time like real
+// Magic -- a deliberate simplification matching how every other target-requiring effect in this app
+// already works (see queueTargetChoice's own comment), and arguably more forgiving than the real
+// rule besides (nothing here can "fizzle" for a target that became illegal mid-stack the way real
+// Magic can). targetKind is one of "creature" (existing zoneType-based matching), "player", "any"
+// (creature, player, or planeswalker), or "spell" (anything currently on the stack, for counters).
+const SPELL_ABILITIES = {
+  // Batch-generated from data/oracle-catalog.json via tools/scan-spell-candidates.js -- same
+  // real-Scryfall-text verification as the CARD_ABILITIES/ACTIVATED_ABILITIES batches. Every entry's
+  // whole oracle text (not just one line -- a spell resolves atomically) matched one of a small set
+  // of simple, single-clause shapes; targetKind steers resolveChosenTarget's validation.
+  "lich's caress": { label: "Lich's Caress — destroy target creature, gain 3 life", effects: [{ type: "destroyTarget" }, { type: "gainLife", target: "controller", amount: 3 }], requiresTarget: true, targetKind: "creature" },
+  "drag under": { label: "Drag Under — bounce target creature, draw a card", effects: [{ type: "bounceTargetToHand" }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "creature" },
+  "hero's downfall": { label: "Hero's Downfall — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "breath of fire": { label: "Breath of Fire — deal 2 damage", effects: [{ type: "damageTarget", amount: 2 }], requiresTarget: true, targetKind: "creature" },
+  "repulsor rays": { label: "Repulsor Rays — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "creature" },
+  "resupply": { label: "Resupply — gain 6 life, draw a card", effects: [{ type: "gainLife", target: "controller", amount: 6 }, { type: "drawCards", amount: 1 }] },
+  "absorb": { label: "Absorb — counter target spell, gain 3 life", effects: [{ type: "counterTargetSpell" }, { type: "gainLife", target: "controller", amount: 3 }], requiresTarget: true, targetKind: "spell" },
+  "chaplain's blessing": { label: "Chaplain's Blessing — gain 5 life", effects: [{ type: "gainLife", target: "controller", amount: 5 }] },
+  "final death": { label: "Final Death — exile target creature", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "creature" },
+  "command the storm": { label: "Command the Storm — deal 5 damage", effects: [{ type: "damageTarget", amount: 5 }], requiresTarget: true, targetKind: "creature" },
+  "ember shot": { label: "Ember Shot — deal 3 damage, draw a card", effects: [{ type: "damageTarget", amount: 3 }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "any" },
+  "strangle": { label: "Strangle — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "playful shove": { label: "Playful Shove — deal 1 damage, draw a card", effects: [{ type: "damageTarget", amount: 1 }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "any" },
+  "sear": { label: "Sear — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
+  "hornet sting": { label: "Hornet Sting — deal 1 damage", effects: [{ type: "damageTarget", amount: 1 }], requiresTarget: true, targetKind: "any" },
+  "divination": { label: "Divination — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] },
+  "engulfing eruption": { label: "Engulfing Eruption — deal 5 damage", effects: [{ type: "damageTarget", amount: 5 }], requiresTarget: true, targetKind: "creature" },
+  "lava spike": { label: "Lava Spike — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "player" },
+  "concentrated fire": { label: "Concentrated Fire — deal 5 damage", effects: [{ type: "damageTarget", amount: 5 }], requiresTarget: true, targetKind: "creature" },
+  "sacred nectar": { label: "Sacred Nectar — gain 4 life", effects: [{ type: "gainLife", target: "controller", amount: 4 }] },
+  "lava axe": { label: "Lava Axe — deal 5 damage", effects: [{ type: "damageTarget", amount: 5 }], requiresTarget: true, targetKind: "player" },
+  "vraska's contempt": { label: "Vraska's Contempt — exile target creature, gain 2 life", effects: [{ type: "exileTarget" }, { type: "gainLife", target: "controller", amount: 2 }], requiresTarget: true, targetKind: "creature" },
+  "finishing blow": { label: "Finishing Blow — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "lightning bolt": { label: "Lightning Bolt — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "cleansing screech": { label: "Cleansing Screech — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
+  "bilbo's deadly slice": { label: "Bilbo's Deadly Slice — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "fire ambush": { label: "Fire Ambush — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "zap": { label: "Zap — deal 1 damage, draw a card", effects: [{ type: "damageTarget", amount: 1 }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "any" },
+  "flame javelin": { label: "Flame Javelin — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
+  "dosan's oldest chant": { label: "Dosan's Oldest Chant — gain 6 life, draw a card", effects: [{ type: "gainLife", target: "controller", amount: 6 }, { type: "drawCards", amount: 1 }] },
+  "fall of the gavel": { label: "Fall of the Gavel — counter target spell, gain 5 life", effects: [{ type: "counterTargetSpell" }, { type: "gainLife", target: "controller", amount: 5 }], requiresTarget: true, targetKind: "spell" },
+  "dismiss": { label: "Dismiss — counter target spell, draw a card", effects: [{ type: "counterTargetSpell" }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "spell" },
+  "explosive impact": { label: "Explosive Impact — deal 5 damage", effects: [{ type: "damageTarget", amount: 5 }], requiresTarget: true, targetKind: "any" },
+  "precision bolt": { label: "Precision Bolt — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "counsel of the soratami": { label: "Counsel of the Soratami — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] },
+  "touch of brilliance": { label: "Touch of Brilliance — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] },
+  "angel's mercy": { label: "Angel's Mercy — gain 7 life", effects: [{ type: "gainLife", target: "controller", amount: 7 }] },
+  "repulse": { label: "Repulse — bounce target creature, draw a card", effects: [{ type: "bounceTargetToHand" }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "creature" },
+  "spring of eternal peace": { label: "Spring of Eternal Peace — gain 8 life", effects: [{ type: "gainLife", target: "controller", amount: 8 }] },
+  "fugue": { label: "Fugue — target player discards 3", effects: [{ type: "targetPlayerDiscards", amount: 3 }], requiresTarget: true, targetKind: "player" },
+  "tidings": { label: "Tidings — draw 4 cards", effects: [{ type: "drawCards", amount: 4 }] },
+  "bathe in dragonfire": { label: "Bathe in Dragonfire — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "creature" },
+  "sarkhan's catharsis": { label: "Sarkhan's Catharsis — deal 5 damage", effects: [{ type: "damageTarget", amount: 5 }], requiresTarget: true, targetKind: "player" },
+  "quick study": { label: "Quick Study — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] },
+  "ritual of rejuvenation": { label: "Ritual of Rejuvenation — gain 4 life, draw a card", effects: [{ type: "gainLife", target: "controller", amount: 4 }, { type: "drawCards", amount: 1 }] },
+  "cancel": { label: "Cancel — counter target spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spell" },
+  "harmonize": { label: "Harmonize — draw 3 cards", effects: [{ type: "drawCards", amount: 3 }] },
+  "unsummon": { label: "Unsummon — bounce target creature", effects: [{ type: "bounceTargetToHand" }], requiresTarget: true, targetKind: "creature" },
+  "open fire": { label: "Open Fire — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "flame slash": { label: "Flame Slash — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "creature" },
+  "fell": { label: "Fell — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "zuko's offense": { label: "Zuko's Offense — deal 2 damage", effects: [{ type: "damageTarget", amount: 2 }], requiresTarget: true, targetKind: "any" },
+  "winter's intervention": { label: "Winter's Intervention — deal 2 damage, gain 2 life", effects: [{ type: "damageTarget", amount: 2 }, { type: "gainLife", target: "controller", amount: 2 }], requiresTarget: true, targetKind: "creature" },
+  "ragefire": { label: "Ragefire — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "creature" },
+  "lightning blast": { label: "Lightning Blast — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
+  "scorching spear": { label: "Scorching Spear — deal 1 damage", effects: [{ type: "damageTarget", amount: 1 }], requiresTarget: true, targetKind: "any" },
+  "murder": { label: "Murder — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "sephiroth's intervention": { label: "Sephiroth's Intervention — destroy target creature, gain 2 life", effects: [{ type: "destroyTarget" }, { type: "gainLife", target: "controller", amount: 2 }], requiresTarget: true, targetKind: "creature" },
+  "dark nourishment": { label: "Dark Nourishment — deal 3 damage, gain 3 life", effects: [{ type: "damageTarget", amount: 3 }, { type: "gainLife", target: "controller", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "volcanic hammer": { label: "Volcanic Hammer — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "gut shot": { label: "Gut Shot — deal 1 damage", effects: [{ type: "damageTarget", amount: 1 }], requiresTarget: true, targetKind: "any" },
+  "nourish": { label: "Nourish — gain 6 life", effects: [{ type: "gainLife", target: "controller", amount: 6 }] },
+  "drown in shapelessness": { label: "Drown in Shapelessness — bounce target creature", effects: [{ type: "bounceTargetToHand" }], requiresTarget: true, targetKind: "creature" },
+  "concentrate": { label: "Concentrate — draw 3 cards", effects: [{ type: "drawCards", amount: 3 }] },
+  "contradict": { label: "Contradict — counter target spell, draw a card", effects: [{ type: "counterTargetSpell" }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "spell" },
+  "unyaro bee sting": { label: "Unyaro Bee Sting — deal 2 damage", effects: [{ type: "damageTarget", amount: 2 }], requiresTarget: true, targetKind: "any" },
+  "dramatic rescue": { label: "Dramatic Rescue — bounce target creature, gain 2 life", effects: [{ type: "bounceTargetToHand" }, { type: "gainLife", target: "controller", amount: 2 }], requiresTarget: true, targetKind: "creature" },
+  "explosive shot": { label: "Explosive Shot — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "creature" },
+  "shock": { label: "Shock — deal 2 damage", effects: [{ type: "damageTarget", amount: 2 }], requiresTarget: true, targetKind: "any" },
+  "searing spear": { label: "Searing Spear — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "feed the serpent": { label: "Feed the Serpent — exile target creature", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "creature" },
+  "mind rot": { label: "Mind Rot — target player discards 2", effects: [{ type: "targetPlayerDiscards", amount: 2 }], requiresTarget: true, targetKind: "player" },
+  "reviving dose": { label: "Reviving Dose — gain 3 life, draw a card", effects: [{ type: "gainLife", target: "controller", amount: 3 }, { type: "drawCards", amount: 1 }] },
+  "fiery finish": { label: "Fiery Finish — deal 7 damage", effects: [{ type: "damageTarget", amount: 7 }], requiresTarget: true, targetKind: "creature" },
+  "revitalize": { label: "Revitalize — gain 3 life, draw a card", effects: [{ type: "gainLife", target: "controller", amount: 3 }, { type: "drawCards", amount: 1 }] },
+  "wander off": { label: "Wander Off — exile target creature", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "creature" },
+  "searing wind": { label: "Searing Wind — deal 10 damage", effects: [{ type: "damageTarget", amount: 10 }], requiresTarget: true, targetKind: "any" },
+  "three tragedies": { label: "Three Tragedies — target player discards 3", effects: [{ type: "targetPlayerDiscards", amount: 3 }], requiresTarget: true, targetKind: "player" },
+  "thundering rebuke": { label: "Thundering Rebuke — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
+  "bombard": { label: "Bombard — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "creature" },
+  "eviscerate": { label: "Eviscerate — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "symbol of unsummoning": { label: "Symbol of Unsummoning — bounce target creature, draw a card", effects: [{ type: "bounceTargetToHand" }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "creature" },
+  "unmake": { label: "Unmake — exile target creature", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "creature" },
+  "flame lash": { label: "Flame Lash — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
+  "cinder storm": { label: "Cinder Storm — deal 7 damage", effects: [{ type: "damageTarget", amount: 7 }], requiresTarget: true, targetKind: "any" },
+  "reach through mists": { label: "Reach Through Mists — draw a card", effects: [{ type: "drawCards", amount: 1 }] },
+  "unhinge": { label: "Unhinge — target player discards 1, draw a card", effects: [{ type: "targetPlayerDiscards", amount: 1 }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "player" },
+  "counterspell": { label: "Counterspell — counter target spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spell" },
+  "jace's ingenuity": { label: "Jace's Ingenuity — draw 3 cards", effects: [{ type: "drawCards", amount: 3 }] },
+  "pressure point": { label: "Pressure Point — tap target creature, draw a card", effects: [{ type: "tapTarget" }, { type: "drawCards", amount: 1 }], requiresTarget: true, targetKind: "creature" },
+  "dreadbore": { label: "Dreadbore — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "brilliant plan": { label: "Brilliant Plan — draw 3 cards", effects: [{ type: "drawCards", amount: 3 }] },
+  "electrify": { label: "Electrify — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "creature" },
+  "impale": { label: "Impale — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "whitesun's passage": { label: "Whitesun's Passage — gain 5 life", effects: [{ type: "gainLife", target: "controller", amount: 5 }] },
+  "scorching shot": { label: "Scorching Shot — deal 5 damage", effects: [{ type: "damageTarget", amount: 5 }], requiresTarget: true, targetKind: "creature" },
+  "final reward": { label: "Final Reward — exile target creature", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "creature" },
+  "unfriendly fire": { label: "Unfriendly Fire — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
+  "tarfire": { label: "Tarfire — deal 2 damage", effects: [{ type: "damageTarget", amount: 2 }], requiresTarget: true, targetKind: "any" },
+  "lightning strike": { label: "Lightning Strike — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
+  "waking nightmare": { label: "Waking Nightmare — target player discards 2", effects: [{ type: "targetPlayerDiscards", amount: 2 }], requiresTarget: true, targetKind: "player" },
+  "bee sting": { label: "Bee Sting — deal 2 damage", effects: [{ type: "damageTarget", amount: 2 }], requiresTarget: true, targetKind: "any" },
+  "weave fate": { label: "Weave Fate — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }
+};
+function getSpellAbility(cardName) {
+  return SPELL_ABILITIES[archiveKey(cardName)] || null;
+}
+
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
 // targeting exists in this vocabulary on purpose -- see the CARD_ABILITIES comment above.
 function effectTargets(lobby, controllerId, target) {
@@ -374,8 +496,65 @@ const EFFECTS = {
   tapTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (card) { card.tapped = true; broadcastCard(lobby, card); }
+  },
+  // For "any target"/"creature" spells that deal damage. chosenTargetId can resolve to either a
+  // player or a creature -- check players first since a player id never collides with a card id.
+  // Sub-lethal damage to a creature has no persistent effect: this app never marks/tracks damage
+  // between separate actions (combat damage is likewise computed fresh and instantaneous each time,
+  // never stored on the card), so there's nothing to represent short of destroying it outright.
+  damageTarget(lobby, ctx, params) {
+    const amount = params.amount || 0;
+    const p = lobby.players[params.chosenTargetId];
+    if (p) { p.life -= amount; return; }
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const bonus = attachedBonusFor(lobby, card);
+    const stat = staticBonusFor(lobby, card);
+    const effToughness = parsePT(card.toughness) + (card.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
+    if (amount >= effToughness) {
+      fireDeathTriggers(lobby, card);
+      sendToGraveyardInternal(lobby, card);
+    }
+  },
+  // chosenTargetId here refers to a STACK ITEM's own id (a cast spell or a triggered ability sitting
+  // on the stack), not a card in play -- validated as such by resolveChosenTarget's "spell" targetKind
+  // before this ever runs. Shares its removal logic with the manual Counter button (counterStackItem).
+  counterTargetSpell(lobby, ctx, params) {
+    const item = removeStackItem(lobby, params.chosenTargetId);
+    if (!item) return;
+    const owner = lobby.players[item.owner];
+    const caster = lobby.players[ctx.controllerId];
+    if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"}`);
+  },
+  // Reuses the exact same pendingDiscard mechanism as the existing "discard down to 7 cards" hand-
+  // size check (resolveDiscard) -- it was already fully generic (any player, any count, any time),
+  // just previously only ever set from the End Step overflow check. A second discard becoming due
+  // before this one resolves would overwrite it (single slot, not a queue) -- accepted as a rare-
+  // edge-case limitation, matching this app's existing no-queueing-of-that-particular-state precedent.
+  targetPlayerDiscards(lobby, ctx, params) {
+    const p = lobby.players[params.chosenTargetId];
+    if (!p) return;
+    const handCount = Object.values(lobby.cards).filter((c) => c.owner === params.chosenTargetId && c.zoneType === "hand").length;
+    const count = Math.min(params.amount || 1, handCount);
+    if (count <= 0) return;
+    lobby.turn.pendingDiscard = { playerId: params.chosenTargetId, count };
+    broadcastTurn(lobby);
+    pushLog(lobby, `${p.name} must discard ${count} card${count === 1 ? "" : "s"}`);
   }
 };
+// Shared by the manual Counter button (counterStackItem) and EFFECTS.counterTargetSpell -- pulls
+// one item off the stack by id and sends it to its owner's graveyard (skipped for a triggered
+// ability, which isn't a real card sendToGraveyardInternal could file away). Pure state mutation,
+// no broadcast/logging -- callers still need to update priority state before broadcasting, and want
+// different log phrasing (an ad-hoc manual counter vs. a real counterspell resolving), so both are
+// left to them.
+function removeStackItem(lobby, stackItemId) {
+  const idx = lobby.stack.findIndex((s) => s.id === stackItemId);
+  if (idx === -1) return null;
+  const item = lobby.stack.splice(idx, 1)[0];
+  if (item.kind !== "ability") sendToGraveyardInternal(lobby, item);
+  return item;
+}
 function executeAbilityEffects(lobby, item) {
   const ctx = { controllerId: item.owner, sourceCard: item.sourceId ? { id: item.sourceId } : null };
   (item.effects || []).forEach((params) => {
@@ -1174,6 +1353,61 @@ function discardPendingTargetChoices(lobby, socketId) {
     promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
   }
 }
+// Validates + resolves whatever the player clicked against what a pending choice actually wants.
+// targetKind defaults to the pre-existing "creature" (zoneType-matching) behavior for full backward
+// compatibility with every CARD_ABILITIES entry authored before spell targeting existed -- only
+// SPELL_ABILITIES entries ever set targetKind to "player"/"any"/"spell". Returns { ok, error } or
+// { ok: true }; doesn't mutate anything, just answers "is this a legal choice."
+function resolveChosenTarget(lobby, entry, targetId) {
+  const targetKind = entry.targetKind || entry.targetZoneType || "creature";
+  if (targetKind === "player") {
+    if (!lobby.players[targetId]) return { ok: false, error: "Choose a player." };
+    return { ok: true };
+  }
+  if (targetKind === "spell") {
+    if (!lobby.stack.some((s) => s.id === targetId)) return { ok: false, error: "Choose a spell or ability on the stack." };
+    return { ok: true };
+  }
+  if (targetKind === "any") {
+    if (lobby.players[targetId]) return { ok: true };
+    const c = lobby.cards[targetId];
+    if (c && (c.zoneType === "creature" || (c.type || "").toLowerCase().includes("planeswalker"))) return { ok: true };
+    return { ok: false, error: "Choose a creature, player, or planeswalker." };
+  }
+  // Existing behavior: a card whose zoneType matches (default "creature").
+  const c = lobby.cards[targetId];
+  if (!c || c.zoneType !== targetKind) return { ok: false, error: `Choose a ${targetKind === "creature" ? "creature" : targetKind}.` };
+  return { ok: true };
+}
+// Runs a spell's effects immediately (no target needed, or the target was already baked into
+// `effects` by chooseTargetFor) -- shared by resolveStackTop (no-target spells resolve instantly)
+// and chooseTargetFor's spell-completion branch (target-requiring spells, once chosen).
+function executeSpellEffectsNow(lobby, card, effects) {
+  const ctx = { controllerId: card.owner, sourceCard: { id: card.id } };
+  (effects || []).forEach((params) => {
+    const fn = EFFECTS[params.type];
+    if (fn) fn(lobby, ctx, params);
+  });
+  checkEliminations(lobby);
+  broadcastPlayers(lobby);
+}
+// The tail end of resolveStackTop (priority-round bookkeeping + the "did the stack just drain while
+// combat was waiting on it" check) -- factored out so chooseTargetFor's spell-completion branch can
+// run the exact same logic when IT is what empties the stack (a target-requiring spell that just
+// finished resolving), not just resolveStackTop itself.
+function finishStackTail(lobby) {
+  if (lobby.stack.length === 0) {
+    lobby.priority.holderId = null;
+    lobby.priority.lastActorId = null;
+    if (lobby.combat.step === "damage" && lobby.pendingTargetChoices.length === 0) resolveCombatDamage(lobby);
+  } else {
+    const activeId = lobby.turn.order[lobby.turn.activeIndex] || null;
+    lobby.priority.holderId = activeId;
+    lobby.priority.lastActorId = activeId;
+  }
+  broadcastPlayers(lobby);
+  broadcastStack(lobby);
+}
 // Shared by fireEtbTriggers/fireDeathTriggers/fireAttackTriggers: either queues for a target or
 // pushes straight to the stack, depending on the authored ability.
 function fireTrigger(lobby, card, ability) {
@@ -1255,8 +1489,19 @@ function resolveStackTop(lobby) {
     const card = item;
     const owner = lobby.players[card.owner];
     if (isInstantOrSorcery(card.type)) {
-      sendToGraveyardInternal(lobby, card);
-      if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
+      const spellAbility = getSpellAbility(card.name);
+      if (spellAbility && spellAbility.requiresTarget) {
+        // The spell is already off the stack (popped above) but not yet resolved -- it "hovers"
+        // here, resolved-but-pending, exactly like a target-requiring triggered ability does,
+        // until its controller picks a target. finishStackTail below still needs to run (the stack
+        // itself IS shorter now), which is why this falls through to it instead of returning early.
+        queueTargetChoice(lobby, { kind: "spell", controllerId: card.owner, spellCard: card, sourceCard: card, label: spellAbility.label, effects: spellAbility.effects, targetKind: spellAbility.targetKind });
+        if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} is resolving -- choosing a target`);
+      } else {
+        if (spellAbility) executeSpellEffectsNow(lobby, card, spellAbility.effects);
+        sendToGraveyardInternal(lobby, card);
+        if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
+      }
     } else {
       card.zoneType = classifyType(card.type);
       card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
@@ -1266,29 +1511,7 @@ function resolveStackTop(lobby) {
       fireEtbTriggers(lobby, card);
     }
   }
-  if (lobby.stack.length === 0) {
-    lobby.priority.holderId = null;
-    lobby.priority.lastActorId = null;
-    // An attack trigger (or anything else) drained the stack while combat was genuinely waiting
-    // on damage -- combat.step only ever becomes "damage" once declareAttackers/declareBlockers
-    // have confirmed there's nothing left to block with, and both are already gated on
-    // stack.length === 0 at entry, so this can't fire while a block decision is still legitimately
-    // owed. Resolving here (instead of at the original declare-time call site) is what makes an
-    // attack trigger's effect -- e.g. a +1/+1 counter -- actually land before damage is computed.
-    // Also guarded on pendingTargetChoices: a chained trigger (e.g. a destroyed creature's own
-    // death trigger needing a target) can queue a fresh target choice in the same tick the stack
-    // drains to empty, which must still block damage the same way an unresolved stack item would.
-    if (lobby.combat.step === "damage" && lobby.pendingTargetChoices.length === 0) resolveCombatDamage(lobby);
-  } else {
-    // Fresh lap: the active player gets first crack at what's still pending, and the round
-    // closes once priority has cycled all the way back around to them with everyone else
-    // having passed in between.
-    const activeId = lobby.turn.order[lobby.turn.activeIndex] || null;
-    lobby.priority.holderId = activeId;
-    lobby.priority.lastActorId = activeId;
-  }
-  broadcastPlayers(lobby);
-  broadcastStack(lobby);
+  finishStackTail(lobby);
 }
 
 // "You have no maximum hand size" effects come from a permanent's oracle text — check every
@@ -2389,15 +2612,23 @@ io.on("connection", (socket) => {
     if (idx === -1) return;
     const entry = lobby.pendingTargetChoices[idx];
     if (entry.controllerId !== socket.id) return; // only the controller who's actually being prompted may answer
-    const target = lobby.cards[targetId];
-    const requiredZone = entry.targetZoneType || "creature";
-    if (!target || target.zoneType !== requiredZone) {
-      socket.emit("actionError", `Choose a ${requiredZone === "creature" ? "creature" : requiredZone}.`);
-      return;
-    }
+    const resolved = resolveChosenTarget(lobby, entry, targetId);
+    if (!resolved.ok) { socket.emit("actionError", resolved.error); return; }
     lobby.pendingTargetChoices.splice(idx, 1);
     const effects = entry.effects.map((e) => ({ ...e, chosenTargetId: targetId }));
-    pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: entry.label, effects });
+    if (entry.kind === "spell") {
+      // The spell itself already left the stack back in resolveStackTop -- this is the second half
+      // of its resolution, deferred until now because it needed a target. Executes its effects then
+      // sends it to the graveyard, exactly what resolveStackTop's instant/sorcery branch would have
+      // done immediately if no target had been required.
+      executeSpellEffectsNow(lobby, entry.spellCard, effects);
+      sendToGraveyardInternal(lobby, entry.spellCard);
+      const owner = lobby.players[entry.spellCard.owner];
+      if (owner) pushLog(lobby, `${owner.name}'s ${entry.spellCard.name || "spell"} resolved`);
+      finishStackTail(lobby);
+    } else {
+      pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: entry.label, effects });
+    }
     socket.emit("targetChoiceResolved", id);
     if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
   });
@@ -2854,14 +3085,10 @@ io.on("connection", (socket) => {
   // has already been cast and resolved through the normal flow.
   socket.on("counterStackItem", (cardId) => {
     const lobby = currentLobby(); if (!lobby) return;
-    const idx = lobby.stack.findIndex((c) => c.id === cardId);
-    if (idx === -1) return;
-    const card = lobby.stack.splice(idx, 1)[0];
+    const card = removeStackItem(lobby, cardId);
+    if (!card) return;
     const owner = lobby.players[card.owner];
     const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
-    // A triggered ability isn't a real card -- sendToGraveyardInternal assumes one (would push a
-    // garbage entry into the controller's graveyard), so just remove it from the stack instead.
-    if (card.kind !== "ability") sendToGraveyardInternal(lobby, card);
     if (owner) pushLog(lobby, `${who} countered ${owner.name}'s ${card.name || "spell"}`);
     if (lobby.stack.length === 0) {
       lobby.priority.holderId = null;
