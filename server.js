@@ -359,6 +359,11 @@ function removePlayerFromLobby(lobby, socketId, verb) {
     broadcastStack(lobby);
     broadcastCombat(lobby);
     if (uname) pushLog(lobby, `${uname} ${verb} the table`);
+    // A real departure (not an elimination) can just as validly bring the table down to one
+    // remaining player -- eliminatePlayer already triggers this check, but a plain leave/
+    // disconnect never did, so the game could quietly never end even after everyone else was
+    // already eliminated and only one real departure was left to go.
+    checkGameOver(lobby);
   }
   broadcastLobbyList();
 }
@@ -407,7 +412,7 @@ function checkEliminations(lobby) {
     const p = lobby.players[id];
     if (p.eliminated) continue;
     const cmdrLethal = p.cmdrDamage && Object.values(p.cmdrDamage).some((v) => v >= 21);
-    if (p.life <= 0 || cmdrLethal) newlyEliminated.push(id);
+    if (p.life <= 0 || cmdrLethal || p.poison >= 10) newlyEliminated.push(id);
   }
   if (!newlyEliminated.length) return;
   newlyEliminated.forEach((id) => eliminatePlayer(lobby, id));
@@ -1693,6 +1698,20 @@ io.on("connection", (socket) => {
     // practice for this call site -- included anyway since checkEliminations checks both.
     checkEliminations(lobby);
     broadcastPlayers(lobby);
+  });
+
+  // A voluntary version of what checkEliminations does automatically -- reuses eliminatePlayer
+  // as-is (board stays visible/frozen, you can keep spectating, checkGameOver fires naturally if
+  // this was the last player standing), so this is just exposing the existing elimination system
+  // for a player to trigger on themselves.
+  socket.on("concede", () => {
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    eliminatePlayer(lobby, socket.id);
+    broadcastTurn(lobby);
+    broadcastStack(lobby);
+    broadcastCombat(lobby);
+    broadcastPlayers(lobby);
+    checkGameOver(lobby); // eliminatePlayer alone doesn't check this -- checkEliminations normally does, for its own callers
   });
 
   // ---- mana / land drops ----
