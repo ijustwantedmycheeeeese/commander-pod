@@ -305,6 +305,10 @@
           <div class="de-library-list" id="de-library-list"></div>
           <textarea id="de-paste" rows="5" placeholder="Or paste a decklist to bulk-add: 1 Sol Ring&#10;1 Arcane Signet&#10;...  (commanders go in the slots above, not here)"></textarea>
           <button class="mini-btn secondary" style="margin-top:6px;" onclick="deResolvePaste()">Add Pasted List</button>
+          <div class="flex-row" style="margin-top:10px;">
+            <input type="text" id="de-import-url" placeholder="Or import from a Moxfield/Archidekt deck URL..." style="flex:1;" onkeydown="if(event.key==='Enter'){deImportFromUrl();}">
+            <button class="mini-btn secondary" onclick="deImportFromUrl()" title="Best-effort — unofficial APIs, may not always work. Paste the decklist directly if it fails.">Import from URL</button>
+          </div>
         </div>
         <div id="de-status" style="font-size:12px;color:#a89a70;margin-top:10px;"></div>
       </div>
@@ -2208,6 +2212,12 @@
       if (!text.trim()) { document.getElementById("de-status").innerText = "Paste a decklist first."; return; }
       document.getElementById("de-status").innerText = "Resolving...";
       socket.emit("resolveDeckPaste", text);
+    }
+    function deImportFromUrl() {
+      const url = document.getElementById("de-import-url").value.trim();
+      if (!url) { document.getElementById("de-status").innerText = "Paste a Moxfield or Archidekt deck URL first."; return; }
+      document.getElementById("de-status").innerText = "Importing...";
+      socket.emit("importDeckFromUrl", url);
     }
     function deSaveDeck() {
       const name = document.getElementById("de-name").value.trim();

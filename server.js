@@ -2366,6 +2366,61 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Best-effort import from a Moxfield or Archidekt deck URL. Both are unofficial, undocumented
+  // endpoints that could change or break without notice -- Archidekt's has been confirmed reachable
+  // from a plain server-side fetch, but Moxfield's sits behind bot-detection that blocks non-browser
+  // clients regardless of headers (confirmed via direct testing: identical requests succeed from curl
+  // but are rejected for a Node fetch), so it will often fall through to the error message below.
+  // Feeds the resulting card names into the exact same pipeline as resolveDeckPaste above, and reuses
+  // its result event so the client needs no new handler.
+  socket.on("importDeckFromUrl", async (rawUrl) => {
+    const fallbackMsg = "Couldn't import from that URL — try pasting the decklist directly instead.";
+    try {
+      const url = new URL((rawUrl || "").trim());
+      const host = url.hostname.replace(/^www\./, "").toLowerCase();
+      const wanted = [];
+      if (host === "archidekt.com") {
+        const m = url.pathname.match(/\/decks\/(\d+)/);
+        if (!m) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
+        const r = await fetch(`https://archidekt.com/api/decks/${m[1]}/`, { headers: { "User-Agent": "CommanderVTT/8.0" } });
+        if (!r.ok) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
+        const data = await r.json();
+        (data.cards || []).forEach((entry) => {
+          const name = entry.card && entry.card.oracleCard && entry.card.oracleCard.name;
+          const qty = entry.quantity || 1;
+          if (name) for (let i = 0; i < qty; i++) wanted.push(name);
+        });
+      } else if (host === "moxfield.com") {
+        const m = url.pathname.match(/\/decks\/([A-Za-z0-9_-]+)/);
+        if (!m) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
+        const r = await fetch(`https://api2.moxfield.com/v3/decks/all/${m[1]}`, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", "Accept": "application/json" }
+        });
+        if (!r.ok) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
+        const data = await r.json();
+        const boards = data.boards || {};
+        for (const boardName of ["mainboard", "commanders"]) {
+          const cards = (boards[boardName] && boards[boardName].cards) || {};
+          for (const key in cards) {
+            const entry = cards[key];
+            const name = entry.card && entry.card.name;
+            const qty = entry.quantity || 1;
+            if (name) for (let i = 0; i < qty; i++) wanted.push(name);
+          }
+        }
+      } else {
+        socket.emit("deckPasteResult", { success: false, error: "Only Moxfield and Archidekt deck URLs are supported — try pasting the decklist directly instead." });
+        return;
+      }
+      if (wanted.length === 0) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
+      if (wanted.length > 99) wanted.length = 99;
+      const found = await resolveCardNames(wanted);
+      socket.emit("deckPasteResult", { success: true, requested: wanted.length, found });
+    } catch (e) {
+      socket.emit("deckPasteResult", { success: false, error: fallbackMsg });
+    }
+  });
+
   // Loads a deck's raw saved data into the editor (for the "Edit" button on a saved deck).
   socket.on("getDeckData", (name) => {
     const deck = decks[username] && decks[username][name];
