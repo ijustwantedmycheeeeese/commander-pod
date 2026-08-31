@@ -263,7 +263,7 @@ function createLobbyState(id, name, hostUsername, password) {
     chatLog: [],
     spectators: {}, // socket.id -> { username, name } -- watch-only, never touches lobby.players
     voiceParticipants: new Set(),
-    turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null },
+    turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null },
     combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] },
     stack: [], // cast spells awaiting resolution, top = last element
     priority: { holderId: null, lastActorId: null }, // only meaningful while stack.length > 0
@@ -314,8 +314,9 @@ function restoreLobbies() {
     // among them -- crashing on `undefined[...]` for any table that predates the field, which
     // silently broke createLobby/joinLobby/chat/disconnect for anyone still seated in one.
     if (!l.spectators) l.spectators = {};
-    if (!l.turn) l.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
+    if (!l.turn) l.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null };
     if (l.turn.pendingDiscard === undefined) l.turn.pendingDiscard = null;
+    if (l.turn.phaseStartedAt === undefined) l.turn.phaseStartedAt = null;
     if (!l.stack) l.stack = [];
     if (!l.priority) l.priority = { holderId: null, lastActorId: null };
     if (!l.pendingTargetChoices) l.pendingTargetChoices = [];
@@ -1216,6 +1217,7 @@ function advanceOnePhase(lobby) {
     turn.turnNumber++;
   }
   turn.phase = PHASES[idx];
+  turn.phaseStartedAt = Date.now(); // purely informational -- drives a passive client-side "how long has this phase been going" indicator, never used to auto-act for anyone
   const activeId = turn.order[turn.activeIndex];
   const activePlayer = lobby.players[activeId];
 
@@ -2451,6 +2453,7 @@ io.on("connection", (socket) => {
     lobby.turn.phase = "Main 1";
     lobby.turn.turnNumber = 1;
     lobby.turn.started = true;
+    lobby.turn.phaseStartedAt = Date.now();
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
     lobby.stack = [];
     lobby.priority = { holderId: null, lastActorId: null };
@@ -2679,7 +2682,7 @@ io.on("connection", (socket) => {
       p.landDropBonus = 0;
     }
     lobby.gameState.log = [];
-    lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
+    lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null };
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
     lobby.stack = [];
     lobby.priority = { holderId: null, lastActorId: null };

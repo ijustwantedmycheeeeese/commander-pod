@@ -46,6 +46,8 @@
 
     .player-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #221c12; }
     .player-row.eliminated-row { opacity: 0.5; }
+    #turn-timer { color: #a89a70; }
+    #turn-timer.turn-timer-stale { color: #eab308; }
     .player-row:last-child { border-bottom: none; }
     .player-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 6px currentColor; }
     .player-avatar { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; object-fit: cover; border: 2px solid; }
@@ -358,6 +360,9 @@
             <button class="mini-btn" id="tab-log-btn" onclick="showLogTab('log')">Game Log</button>
             <button class="mini-btn" id="tab-chat-btn" onclick="showLogTab('chat')">Chat</button>
           </div>
+          <div id="log-filter-row" style="padding:6px 12px 0;">
+            <input type="text" id="log-filter-input" placeholder="Filter log..." style="width:100%;font-size:11px;" oninput="applyLogFilter()">
+          </div>
           <div id="log-box"></div>
           <div id="chat-box" style="display:none;"></div>
           <div id="chat-input-row" class="flex-row" style="display:none;padding:8px;">
@@ -370,6 +375,7 @@
       <div id="board-column">
         <div id="turn-bar">
           <span id="turn-info">No game in progress</span>
+          <span id="turn-timer" style="display:none;font-size:11px;margin-left:6px;"></span>
           <select id="load-deck-select" style="display:none;"><option value="">Load a deck...</option></select>
           <button id="load-deck-btn" class="mini-btn secondary" onclick="loadSelectedDeck()" style="display:none;">Load Deck</button>
           <button id="start-game-btn" class="mini-btn" onclick="startGame()">Start Game</button>
@@ -605,6 +611,7 @@
           <button class="secondary" onclick="openDeckEditor()">Deck Editor</button>
           <button class="secondary" onclick="openHelpModal()">? Help</button>
           <button class="secondary" onclick="openBugReportModal()" title="Copy diagnostic info to report a bug">🐛 Bug Report</button>
+          <button class="secondary" id="sound-mute-btn" onclick="toggleSoundMute()" title="Toggle sound cues for your turn, taking combat damage, and target choices">🔊 Sound On</button>
           <button class="danger" onclick="concede()" title="Marks you eliminated -- your board stays on the table, you can keep watching, and the game continues for everyone else">Concede</button>
           <button class="secondary" onclick="showMainMenu()">Leave Table</button>
           <button class="secondary" onclick="logout()">Log Out</button>
@@ -1060,7 +1067,17 @@
     // pick up/lose the castable-now glow immediately as priority actually changes hands, instead
     // of only at the next unrelated re-render.
     socket.on("stackState", (data) => { currentStack = data.stack || []; currentPriority = data.priority || currentPriority; renderStackState(); renderCombatState(currentCombat); renderTurnState(currentTurn); renderVisibleBoard(); });
-    socket.on("turnState", (data) => { currentTurn = data; renderTurnState(currentTurn); renderCombatState(currentCombat); checkPendingDiscard(); checkOpeningHandModal(); });
+    let lastActiveIdForSound = null;
+    socket.on("turnState", (data) => {
+      currentTurn = data;
+      renderTurnState(currentTurn);
+      renderCombatState(currentCombat);
+      checkPendingDiscard();
+      checkOpeningHandModal();
+      const activeId = data.started ? data.order[data.activeIndex] : null;
+      if (activeId === myId && lastActiveIdForSound !== myId) playYourTurnCue();
+      lastActiveIdForSound = activeId;
+    });
     socket.on("combatState", (data) => { currentCombat = data; renderCombatState(currentCombat); });
     socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
 
@@ -1089,6 +1106,7 @@
       // still knows which attacker fought which blocker.
       spawnClashEffects(currentCombat.blocks);
       (events || []).forEach((e) => spawnDamageFx(e.targetId, e.amount));
+      if ((events || []).some((e) => e.targetId === myId && e.amount > 0)) playDamageCue();
     });
 
     socket.on("cleared", () => { allCards = {}; seenCardIds = new Set(); pendingCastPulse = new Set(); renderVisibleBoard(); });
@@ -1098,6 +1116,7 @@
       pendingTargetChoiceId = data.id;
       pendingTargetChoiceLabel = data.label;
       showTargetChoiceBanner();
+      playTargetNeededCue();
     });
     socket.on("targetChoiceResolved", (id) => {
       if (id !== pendingTargetChoiceId) return; // a stale/unrelated confirmation, ignore
@@ -1397,6 +1416,7 @@
         loadSelect.style.display = canLoad ? "inline-block" : "none";
         loadBtn.style.display = canLoad ? "inline-block" : "none";
         nextBtn.style.display = "none";
+        document.getElementById("turn-timer").style.display = "none";
         return;
       }
       startBtn.style.display = "none";
@@ -1406,7 +1426,26 @@
       const activeName = (players[activeId] && players[activeId].name) || "?";
       info.innerText = `Turn ${t.turnNumber} — ${activeName}'s turn — ${t.phase}`;
       nextBtn.style.display = (activeId === myId && currentStack.length === 0) ? "inline-block" : "none";
+      tickTurnTimer();
     }
+
+    // Purely informational -- never auto-passes or acts for anyone, just a passive "how long has
+    // this phase been going" indicator next to the active player's name, driven off the server's
+    // turn.phaseStartedAt timestamp (reset once, in advanceOnePhase/startGame) rather than any
+    // per-action tracking. Ticks locally every second instead of needing a server push per second.
+    const TURN_TIMER_STALE_MS = 2 * 60 * 1000;
+    function tickTurnTimer() {
+      const el = document.getElementById("turn-timer");
+      if (!currentTurn.started || !currentTurn.phaseStartedAt) { el.style.display = "none"; return; }
+      const elapsedMs = Date.now() - currentTurn.phaseStartedAt;
+      const totalSec = Math.max(0, Math.floor(elapsedMs / 1000));
+      const mm = Math.floor(totalSec / 60);
+      const ss = totalSec % 60;
+      el.innerText = `(${mm}:${ss.toString().padStart(2, "0")} on this phase)`;
+      el.classList.toggle("turn-timer-stale", elapsedMs >= TURN_TIMER_STALE_MS);
+      el.style.display = "";
+    }
+    setInterval(() => { if (currentTurn.started) tickTurnTimer(); }, 1000);
 
     // Loading a deck into your seat -- discoverable right next to Start Game instead of buried in
     // the Deck Editor, since picking your deck is naturally part of getting ready to start.
@@ -2154,7 +2193,10 @@
       lines.push(clientErrorLog.length ? clientErrorLog.join("\n") : "(none captured)");
       lines.push("");
       lines.push("--- Recent game log ---");
-      const logLines = Array.from(logBox.children).slice(-40).map((el) => el.innerText);
+      // textContent, not innerText -- innerText returns "" for display:none elements, and the log
+      // filter (see applyLogFilter) hides non-matching lines that way, which would otherwise silently
+      // drop them from this diagnostic dump.
+      const logLines = Array.from(logBox.children).slice(-40).map((el) => el.textContent);
       lines.push(logLines.length ? logLines.join("\n") : "(empty)");
       return lines.join("\n");
     }
@@ -2191,8 +2233,16 @@
       const div = document.createElement("div");
       const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       div.innerText = `[${t}] ${msg}`;
+      const filter = (document.getElementById("log-filter-input").value || "").trim().toLowerCase();
+      if (filter && !div.innerText.toLowerCase().includes(filter)) div.style.display = "none";
       logBox.appendChild(div);
       logBox.scrollTop = logBox.scrollHeight;
+    }
+    function applyLogFilter() {
+      const filter = (document.getElementById("log-filter-input").value || "").trim().toLowerCase();
+      Array.from(logBox.children).forEach((el) => {
+        el.style.display = !filter || el.innerText.toLowerCase().includes(filter) ? "" : "none";
+      });
     }
     function appendChat(msg) {
       const div = document.createElement("div");
@@ -2520,6 +2570,37 @@
       playmat.appendChild(div);
       cardEls[card.id] = div;
       applyTargetRing(card.id);
+    }
+
+    // ---------------- sound cues ----------------
+    // Short synthesized tones (Web Audio API) -- no binary assets, keeps this a single self-contained file.
+    let soundMuted = localStorage.getItem("mtgSoundMuted") === "true";
+    let audioCtx = null;
+    { const btn = document.getElementById("sound-mute-btn"); if (btn) btn.innerText = soundMuted ? "🔇 Sound Off" : "🔊 Sound On"; }
+    function playTone(freq, duration, type) {
+      if (soundMuted) return;
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type || "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) {}
+    }
+    function playYourTurnCue() { playTone(660, 0.15); setTimeout(() => playTone(880, 0.2), 150); }
+    function playDamageCue() { playTone(180, 0.2, "sawtooth"); }
+    function playTargetNeededCue() { playTone(520, 0.1); setTimeout(() => playTone(520, 0.12), 180); }
+    function toggleSoundMute() {
+      soundMuted = !soundMuted;
+      localStorage.setItem("mtgSoundMuted", soundMuted ? "true" : "false");
+      const btn = document.getElementById("sound-mute-btn");
+      if (btn) btn.innerText = soundMuted ? "🔇 Sound Off" : "🔊 Sound On";
     }
 
     // Cloned into #fx-layer (never touched by renderVisibleBoard's wipe-and-rebuild) so the
