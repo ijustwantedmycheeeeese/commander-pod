@@ -1687,54 +1687,125 @@ function advanceOnePhase(lobby) {
   if (activePlayer) pushLog(lobby, `${activePlayer.name} — ${turn.phase}${turn.phase === "Untap" ? ` (Turn ${turn.turnNumber})` : ""}`);
 }
 
+// Combat damage in two sub-steps (first strike/double strike, then everyone else) so first strike
+// actually does what it's for -- a first-strike creature that kills its blocker in the first
+// sub-step never takes damage back, since the blocker is already dead before the normal sub-step
+// runs. `marked` accumulates damage across both sub-steps per card (this function's own local
+// state, not stored on the card -- matches this app's existing "damage is computed fresh each
+// combat, never persisted" model) so a first-strike hit correctly counts toward lethal/trample math
+// for a creature that then also takes normal-step damage (e.g. from a double-striker on either side).
 function resolveCombatDamage(lobby) {
   const combat = lobby.combat;
-  const deaths = [];
   const dmgEvents = []; // purely for client-side damage-number animation, no gameplay effect
-  for (const [attackerId, defenderId] of Object.entries(combat.attackers)) {
-    const attacker = lobby.cards[attackerId];
-    if (!attacker) continue;
-    const atkBonus = attachedBonusFor(lobby, attacker);
-    const atkStatic = staticBonusFor(lobby, attacker);
-    const atkPower = parsePT(attacker.power) + (attacker.counters || 0) + atkBonus.powerBonus + atkStatic.powerBonus;
-    const atkTough = parsePT(attacker.toughness) + (attacker.counters || 0) + atkBonus.toughnessBonus + atkStatic.toughnessBonus;
-    const blockerId = combat.blocks[attackerId];
-    if (blockerId && lobby.cards[blockerId]) {
-      const blocker = lobby.cards[blockerId];
-      const defBonus = attachedBonusFor(lobby, blocker);
-      const defStatic = staticBonusFor(lobby, blocker);
-      const defPower = parsePT(blocker.power) + (blocker.counters || 0) + defBonus.powerBonus + defStatic.powerBonus;
-      const defTough = parsePT(blocker.toughness) + (blocker.counters || 0) + defBonus.toughnessBonus + defStatic.toughnessBonus;
-      pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkPower}/${atkTough}) fights ${blocker.name || "a face-down creature"} (${defPower}/${defTough})`);
-      if (atkPower >= defTough) deaths.push(blocker);
-      if (defPower >= atkTough) deaths.push(attacker);
-      if (atkPower > 0) dmgEvents.push({ targetId: blockerId, amount: atkPower });
-      if (defPower > 0) dmgEvents.push({ targetId: attackerId, amount: defPower });
-    } else {
-      const defender = lobby.players[defenderId];
-      if (defender) {
-        defender.life -= atkPower;
-        if (attacker.isCommander) {
-          defender.cmdr = (defender.cmdr || 0) + atkPower; // kept as the quick-glance total
-          const key = commanderSlotKey(lobby, attacker);
-          if (key) {
-            if (!defender.cmdrDamage) defender.cmdrDamage = {};
-            defender.cmdrDamage[key] = (defender.cmdrDamage[key] || 0) + atkPower;
+  const marked = {}; // cardId -> cumulative damage marked this combat
+  const deathtouchHit = new Set(); // cardIds that have taken ANY damage from a deathtouch source this combat
+
+  function hasKw(card, kw) {
+    return effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === kw);
+  }
+  function effPT(card) {
+    const bonus = attachedBonusFor(lobby, card);
+    const stat = staticBonusFor(lobby, card);
+    return {
+      power: parsePT(card.power) + (card.counters || 0) + bonus.powerBonus + stat.powerBonus,
+      toughness: parsePT(card.toughness) + (card.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus
+    };
+  }
+  // How much MORE damage `card` needs to be considered lethally damaged, from here. Deathtouch
+  // (either already-marked from an earlier sub-step, or being dealt right now) makes any nonzero
+  // amount enough -- CR 702.2c, "even a single point of damage is enough."
+  function remainingToKill(card, dealingDeathtouch) {
+    const already = marked[card.id] || 0;
+    if (dealingDeathtouch || deathtouchHit.has(card.id)) return already > 0 ? 0 : 1;
+    return Math.max(0, effPT(card).toughness - already);
+  }
+  function markDamage(card, amount, isDeathtouch) {
+    if (amount <= 0) return;
+    marked[card.id] = (marked[card.id] || 0) + amount;
+    if (isDeathtouch) deathtouchHit.add(card.id);
+    dmgEvents.push({ targetId: card.id, amount });
+  }
+  function dealtLethal(card, dealtByDeathtouch) {
+    if (dealtByDeathtouch || deathtouchHit.has(card.id)) return (marked[card.id] || 0) > 0;
+    return (marked[card.id] || 0) >= effPT(card).toughness;
+  }
+  function processDeaths() {
+    for (const id in marked) {
+      const card = lobby.cards[id];
+      if (card && dealtLethal(card, false)) { fireDeathTriggers(lobby, card); sendToGraveyardInternal(lobby, card); }
+    }
+  }
+
+  const pairs = Object.entries(combat.attackers)
+    .map(([attackerId, defenderId]) => ({ attackerId, defenderId, blockerId: combat.blocks[attackerId] }))
+    .filter((p) => lobby.cards[p.attackerId]);
+
+  function dealStepDamage(isFirstStrikeStep) {
+    for (const { attackerId, defenderId, blockerId } of pairs) {
+      const attacker = lobby.cards[attackerId];
+      if (!attacker) continue; // died in an earlier sub-step
+      const atkFS = hasKw(attacker, "first strike"), atkDS = hasKw(attacker, "double strike");
+      const attackerActs = isFirstStrikeStep ? (atkFS || atkDS) : (!atkFS || atkDS);
+      const blocker = blockerId ? lobby.cards[blockerId] : null;
+
+      if (blocker) {
+        if (attackerActs) {
+          const { power: atkPower } = effPT(attacker);
+          const atkDeathtouch = hasKw(attacker, "deathtouch");
+          const atkTrample = hasKw(attacker, "trample");
+          if (atkPower > 0) {
+            let toBlocker = atkPower, toPlayer = 0;
+            if (atkTrample) {
+              const need = remainingToKill(blocker, atkDeathtouch);
+              toBlocker = Math.min(atkPower, need);
+              toPlayer = atkPower - toBlocker;
+            }
+            markDamage(blocker, toBlocker, atkDeathtouch);
+            if (toPlayer > 0) {
+              const defender = lobby.players[defenderId];
+              if (defender) {
+                defender.life -= toPlayer;
+                dmgEvents.push({ targetId: defenderId, amount: toPlayer });
+                pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}`);
+              }
+            }
           }
         }
-        pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
-        if (atkPower > 0) dmgEvents.push({ targetId: defenderId, amount: atkPower });
+        const blkFS = hasKw(blocker, "first strike"), blkDS = hasKw(blocker, "double strike");
+        const blockerActs = isFirstStrikeStep ? (blkFS || blkDS) : (!blkFS || blkDS);
+        if (blockerActs && lobby.cards[blocker.id]) {
+          const { power: defPower } = effPT(blocker);
+          markDamage(attacker, defPower, hasKw(blocker, "deathtouch"));
+        }
+        if (attackerActs || blockerActs) {
+          const atkAfter = effPT(attacker), defAfter = effPT(blocker);
+          pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkAfter.power}/${atkAfter.toughness}) fights ${blocker.name || "a face-down creature"} (${defAfter.power}/${defAfter.toughness})`);
+        }
+      } else if (attackerActs) {
+        const { power: atkPower } = effPT(attacker);
+        const defender = lobby.players[defenderId];
+        if (defender && atkPower > 0) {
+          defender.life -= atkPower;
+          if (attacker.isCommander) {
+            defender.cmdr = (defender.cmdr || 0) + atkPower; // kept as the quick-glance total
+            const key = commanderSlotKey(lobby, attacker);
+            if (key) {
+              if (!defender.cmdrDamage) defender.cmdrDamage = {};
+              defender.cmdrDamage[key] = (defender.cmdrDamage[key] || 0) + atkPower;
+            }
+          }
+          pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
+          dmgEvents.push({ targetId: defenderId, amount: atkPower });
+        }
       }
     }
   }
-  const seen = new Set();
-  deaths.forEach((c) => {
-    if (!seen.has(c.id) && lobby.cards[c.id]) {
-      seen.add(c.id);
-      fireDeathTriggers(lobby, c);
-      sendToGraveyardInternal(lobby, c);
-    }
-  });
+
+  dealStepDamage(true); // first strike / double strike
+  processDeaths(); // a creature killed in the first-strike step never deals its normal-step damage
+  dealStepDamage(false); // everyone else (and double strikers again)
+  processDeaths();
+
   lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
   if (dmgEvents.length) io.to(lobby.id).emit("combatDamage", dmgEvents);
   broadcastCombat(lobby);
