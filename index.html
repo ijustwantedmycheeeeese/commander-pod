@@ -267,7 +267,10 @@
       <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;">
         <div></div>
         <h2 class="mtg-title" style="margin:0;text-align:center;">Archon</h2>
-        <button class="secondary" id="music-mute-btn" onclick="toggleMusicMute()" title="Toggle lobby music" style="justify-self:end;">🎵 Music On</button>
+        <div style="justify-self:end;display:flex;align-items:center;gap:4px;" title="Lobby music volume">
+          <span style="font-size:14px;">🎵</span>
+          <input type="range" id="music-volume-slider" min="0" max="100" value="50" style="width:70px;" oninput="setMusicVolume(this.value)">
+        </div>
       </div>
       <div class="mm-section">
         <div class="flex-row">
@@ -644,12 +647,30 @@
           <button class="mini-btn secondary" onclick="applySavedMat()">Apply</button>
         </div>
 
+        <div class="mm-label">Audio</div>
+        <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;margin-bottom:6px;font-size:12px;">
+          <span title="Lobby music -- only audible on the Main Menu">🎵 Music</span>
+          <input type="range" id="settings-music-volume-slider" min="0" max="100" value="50" oninput="setMusicVolume(this.value)">
+          <span id="settings-music-volume-label" style="width:28px;text-align:right;color:#a89a70;">50%</span>
+
+          <span title="Plays when it becomes your turn">🔔 Your Turn</span>
+          <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('turn', this.value)">
+          <span id="sfx-volume-turn-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
+
+          <span title="Plays when you take combat damage">⚔ Combat Damage</span>
+          <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('damage', this.value)">
+          <span id="sfx-volume-damage-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
+
+          <span title="Plays when a triggered ability needs you to choose a target">🎯 Target Needed</span>
+          <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('target', this.value)">
+          <span id="sfx-volume-target-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
+        </div>
+
         <div class="mm-label">Table</div>
         <div class="flex-row" style="flex-wrap:wrap;">
           <button class="secondary" onclick="openDeckEditor()">Deck Editor</button>
           <button class="secondary" onclick="openHelpModal()">? Help</button>
           <button class="secondary" onclick="openBugReportModal()" title="Copy diagnostic info to report a bug">🐛 Bug Report</button>
-          <button class="secondary" id="sound-mute-btn" onclick="toggleSoundMute()" title="Toggle sound cues for your turn, taking combat damage, and target choices">🔊 Sound On</button>
           <button class="danger" onclick="concede()" title="Marks you eliminated -- your board stays on the table, you can keep watching, and the game continues for everyone else">Concede</button>
           <button class="secondary" onclick="showMainMenu()">Leave Table</button>
           <button class="secondary" onclick="logout()">Log Out</button>
@@ -2756,18 +2777,28 @@
 
     // ---------------- sound cues ----------------
     // Short synthesized tones (Web Audio API) -- no binary assets, keeps this a single self-contained file.
-    let soundMuted = localStorage.getItem("mtgSoundMuted") === "true";
+    // Each cue category has its own independently-persisted volume (0-1) rather than one shared mute,
+    // so e.g. combat-damage pings can be turned down without losing the your-turn cue too.
     let audioCtx = null;
-    { const btn = document.getElementById("sound-mute-btn"); if (btn) btn.innerText = soundMuted ? "🔇 Sound Off" : "🔊 Sound On"; }
-    function playTone(freq, duration, type) {
-      if (soundMuted) return;
+    const SFX_VOLUME_DEFAULT = 0.7;
+    let sfxVolumeTurn = loadVolumePref("mtgSfxVolumeTurn", SFX_VOLUME_DEFAULT);
+    let sfxVolumeDamage = loadVolumePref("mtgSfxVolumeDamage", SFX_VOLUME_DEFAULT);
+    let sfxVolumeTarget = loadVolumePref("mtgSfxVolumeTarget", SFX_VOLUME_DEFAULT);
+    function loadVolumePref(key, fallback0to1) {
+      const raw = localStorage.getItem(key);
+      if (raw === null) return fallback0to1;
+      const n = parseInt(raw, 10);
+      return isNaN(n) ? fallback0to1 : Math.max(0, Math.min(100, n)) / 100;
+    }
+    function playTone(freq, duration, type, vol) {
+      if (!vol) return;
       try {
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.type = type || "sine";
         osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gain.gain.setValueAtTime(vol * 0.2, audioCtx.currentTime); // 0.2 -- the old fixed 0.15 was tuned at ~70% of this scale
         gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
@@ -2775,15 +2806,33 @@
         osc.stop(audioCtx.currentTime + duration);
       } catch (e) {}
     }
-    function playYourTurnCue() { playTone(660, 0.15); setTimeout(() => playTone(880, 0.2), 150); }
-    function playDamageCue() { playTone(180, 0.2, "sawtooth"); }
-    function playTargetNeededCue() { playTone(520, 0.1); setTimeout(() => playTone(520, 0.12), 180); }
-    function toggleSoundMute() {
-      soundMuted = !soundMuted;
-      localStorage.setItem("mtgSoundMuted", soundMuted ? "true" : "false");
-      const btn = document.getElementById("sound-mute-btn");
-      if (btn) btn.innerText = soundMuted ? "🔇 Sound Off" : "🔊 Sound On";
+    function playYourTurnCue() { playTone(660, 0.15, "sine", sfxVolumeTurn); setTimeout(() => playTone(880, 0.2, "sine", sfxVolumeTurn), 150); }
+    function playDamageCue() { playTone(180, 0.2, "sawtooth", sfxVolumeDamage); }
+    function playTargetNeededCue() { playTone(520, 0.1, "sine", sfxVolumeTarget); setTimeout(() => playTone(520, 0.12, "sine", sfxVolumeTarget), 180); }
+    function setSfxVolume(kind, val) {
+      const v0to100 = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+      const v = v0to100 / 100;
+      if (kind === "turn") sfxVolumeTurn = v;
+      else if (kind === "damage") sfxVolumeDamage = v;
+      else if (kind === "target") sfxVolumeTarget = v;
+      localStorage.setItem("mtgSfxVolume" + kind.charAt(0).toUpperCase() + kind.slice(1), String(v0to100));
+      const label = document.getElementById("sfx-volume-" + kind + "-label");
+      if (label) label.innerText = v0to100 + "%";
+      // A quick preview so a dragged slider gives immediate feedback on what it now sounds like.
+      if (kind === "turn") playTone(660, 0.12, "sine", v);
+      else if (kind === "damage") playTone(180, 0.15, "sawtooth", v);
+      else playTone(520, 0.1, "sine", v);
     }
+    function initSfxVolumeSliders() {
+      [["turn", sfxVolumeTurn], ["damage", sfxVolumeDamage], ["target", sfxVolumeTarget]].forEach(([kind, v]) => {
+        const pct = Math.round(v * 100);
+        const slider = document.querySelector(`input[oninput^="setSfxVolume('${kind}'"]`);
+        if (slider) slider.value = pct;
+        const label = document.getElementById("sfx-volume-" + kind + "-label");
+        if (label) label.innerText = pct + "%";
+      });
+    }
+    initSfxVolumeSliders();
 
     // ---------------- lobby music ----------------
     // Generative "slightly intense medieval" background music (Web Audio API, same self-contained-
@@ -2796,13 +2845,12 @@
     // on a proper lookahead scheduler (checking a few hundred ms ahead on a tight setInterval,
     // scheduling exact Web Audio start times) rather than nested setTimeout, since a rhythmic piece
     // drifting out of time would sound sloppy in a way the old purely-ambient version never risked.
-    let musicMuted = localStorage.getItem("mtgMusicMuted") === "true";
+    let musicVolume = loadVolumePref("mtgMusicVolume", 0.5);
     let musicSchedulerId = null;
     let musicNextBeatTime = 0;
     let musicBeatIndex = 0;
     let musicMelodyIdx = 7;
     let musicDrone = null;
-    { const btn = document.getElementById("music-mute-btn"); if (btn) btn.innerText = musicMuted ? "🎵 Music Off" : "🎵 Music On"; }
     const MUSIC_BPM = 108;
     const MUSIC_BEAT_SEC = 60 / MUSIC_BPM;
     const MUSIC_DRONE_FREQS = [73.42, 110.00]; // D2 + A2 -- root and fifth
@@ -2817,7 +2865,7 @@
       try {
         const ctx = ensureAudioCtx();
         const master = ctx.createGain();
-        master.gain.value = 0.045;
+        master.gain.value = 0.09 * musicVolume;
         master.connect(ctx.destination);
         const oscs = MUSIC_DRONE_FREQS.map((f) => {
           const osc = ctx.createOscillator();
@@ -2844,7 +2892,7 @@
         osc.type = "triangle";
         osc.frequency.setValueAtTime(accent ? 130 : 100, when);
         osc.frequency.exponentialRampToValueAtTime(40, when + 0.15);
-        gain.gain.setValueAtTime(accent ? 0.32 : 0.2, when);
+        gain.gain.setValueAtTime((accent ? 0.32 : 0.2) * musicVolume, when);
         gain.gain.exponentialRampToValueAtTime(0.001, when + 0.22);
         osc.connect(gain);
         gain.connect(ctx.destination);
@@ -2861,7 +2909,7 @@
         noiseFilter.type = "lowpass";
         noiseFilter.frequency.value = 1200;
         const noiseGain = ctx.createGain();
-        noiseGain.gain.value = accent ? 0.12 : 0.07;
+        noiseGain.gain.value = (accent ? 0.12 : 0.07) * musicVolume;
         noise.connect(noiseFilter);
         noiseFilter.connect(noiseGain);
         noiseGain.connect(ctx.destination);
@@ -2879,7 +2927,7 @@
         filter.type = "lowpass";
         filter.frequency.value = 1800;
         gain.gain.setValueAtTime(0, when);
-        gain.gain.linearRampToValueAtTime(0.09, when + 0.02);
+        gain.gain.linearRampToValueAtTime(0.18 * musicVolume, when + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.001, when + duration);
         osc.connect(filter);
         filter.connect(gain);
@@ -2904,7 +2952,7 @@
       }
     }
     function musicSchedulerTick() {
-      if (musicMuted) return;
+      if (musicVolume <= 0) return;
       const ctx = ensureAudioCtx();
       while (musicNextBeatTime < ctx.currentTime + 0.1) {
         scheduleMusicBeat(musicNextBeatTime, musicBeatIndex);
@@ -2917,21 +2965,41 @@
       const ctx = ensureAudioCtx();
       musicNextBeatTime = ctx.currentTime + 0.1;
       musicBeatIndex = 0;
-      if (!musicMuted) startMusicDrone();
+      if (musicVolume > 0) startMusicDrone();
       musicSchedulerId = setInterval(musicSchedulerTick, 25);
     }
     function stopLobbyMusic() {
       if (musicSchedulerId) { clearInterval(musicSchedulerId); musicSchedulerId = null; }
       stopMusicDrone();
     }
-    function toggleMusicMute() {
-      musicMuted = !musicMuted;
-      localStorage.setItem("mtgMusicMuted", musicMuted ? "true" : "false");
-      const btn = document.getElementById("music-mute-btn");
-      if (btn) btn.innerText = musicMuted ? "🎵 Music Off" : "🎵 Music On";
-      if (musicMuted) stopMusicDrone();
-      else if (musicSchedulerId) startMusicDrone();
+    function setMusicVolume(val) {
+      const v0to100 = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+      musicVolume = v0to100 / 100;
+      localStorage.setItem("mtgMusicVolume", String(v0to100));
+      ["music-volume-slider", "settings-music-volume-slider"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el && el.value != v0to100) el.value = v0to100;
+      });
+      const label = document.getElementById("settings-music-volume-label");
+      if (label) label.innerText = v0to100 + "%";
+      if (musicDrone) {
+        // Live-update the currently-playing drone rather than waiting for the next note.
+        musicDrone.master.gain.setTargetAtTime(0.09 * musicVolume, ensureAudioCtx().currentTime, 0.05);
+        if (musicVolume <= 0) stopMusicDrone();
+      } else if (musicVolume > 0 && musicSchedulerId) {
+        startMusicDrone();
+      }
     }
+    function initMusicVolumeSliders() {
+      const pct = Math.round(musicVolume * 100);
+      ["music-volume-slider", "settings-music-volume-slider"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = pct;
+      });
+      const label = document.getElementById("settings-music-volume-label");
+      if (label) label.innerText = pct + "%";
+    }
+    initMusicVolumeSliders();
 
     // Cloned into #fx-layer (never touched by renderVisibleBoard's wipe-and-rebuild) so the
     // fade-out animation gets to actually finish instead of being yanked mid-flight by the very
