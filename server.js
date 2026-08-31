@@ -1168,6 +1168,17 @@ function sanitizeImgUrl(s) {
   return /^(https?:\/\/|\/uploads\/)/i.test(v) ? v : "";
 }
 
+// A handful of places turn a free-text, client-supplied string directly into an object key on a
+// plain JS object (usernames on `users`, deck/mat names on `decks[username]`/`mats[username]`).
+// "__proto__" as a key doesn't add an own property -- it reassigns that object's prototype, and
+// "constructor"/"prototype" can shadow things real code relies on. None of this reaches the
+// globally-shared Object.prototype here (every one of these is a single-level key on an object
+// that's never itself reachable as `X.__proto__`), so it can't cross-contaminate other accounts --
+// but it's cheap to reject outright rather than rely on that containment, particularly since the
+// username case currently only fails by accident (the pre-existing "already taken" check happens to
+// read as truthy for these names) rather than by a real, obvious guard.
+const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 // Shape used for cards resting in library/graveyard/exile/commander-zone —
 // same attribute set as the archive, minus battlefield-only state (tapped, counters, etc).
 function toEntry(c) {
@@ -1272,6 +1283,13 @@ function pushLog(lobby, msg) {
   if (lobby.gameState.log.length > 150) lobby.gameState.log.shift();
   io.to(lobby.id).emit("log", msg);
 }
+
+// Every legitimate way cards enter a lobby other than spawnCard/copyCard is naturally bounded (a
+// deck is capped at 99 library entries, an opening hand is 7, commanders are at most 2) -- those
+// two are the only genuinely unbounded paths, since either can be called in a tight client-side
+// loop to manufacture cards from nothing. Gated at the call sites below, not in here, so this stays
+// the one shared choke point every OTHER (already-bounded) caller keeps using without a check.
+const MAX_CARDS_PER_LOBBY = 600;
 
 function spawnBattlefieldCard(lobby, data) {
   const { owner, faceDown, zoneType, isCommander } = data;
@@ -1984,6 +2002,7 @@ app.post("/api/register", (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.json({ success: false, error: "Username and password required." });
   if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) return res.json({ success: false, error: "Username must be 3-20 letters, numbers, or underscores." });
+  if (UNSAFE_OBJECT_KEYS.has(username)) return res.json({ success: false, error: "That username isn't allowed." });
   if (password.length < 4) return res.json({ success: false, error: "Password must be at least 4 characters." });
   // Fresh from disk, not the long-lived in-memory copy -- the separate admin panel writes directly
   // to users.json (see admin-server.js), so a username an admin just deleted needs to read as
@@ -2395,6 +2414,7 @@ io.on("connection", (socket) => {
 
   socket.on("spawnCard", (data) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    if (Object.keys(lobby.cards).length >= MAX_CARDS_PER_LOBBY) { socket.emit("actionError", "This table has hit its card limit — clean up unused tokens before spawning more."); return; }
     const card = spawnBattlefieldCard(lobby, { ...data, owner: socket.id, zoneType: classifyType(data.type) });
     const who = lobby.players[socket.id].name;
     pushLog(lobby, data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
@@ -2715,6 +2735,7 @@ io.on("connection", (socket) => {
     const original = lobby && lobby.cards[id];
     if (!p || !original || original.zoneType === "hand" || original.zoneType === "stack") return;
     if (original.faceDown && original.owner !== socket.id) return;
+    if (Object.keys(lobby.cards).length >= MAX_CARDS_PER_LOBBY) { socket.emit("actionError", "This table has hit its card limit — clean up unused tokens before copying more."); return; }
     const copy = spawnBattlefieldCard(lobby, {
       name: original.name, img: original.img, type: original.type, manaCost: original.manaCost,
       cmc: original.cmc, colors: original.colors, colorIdentity: original.colorIdentity,
@@ -2971,7 +2992,7 @@ io.on("connection", (socket) => {
 
   socket.on("saveDeck", ({ name, commanders, library }) => {
     name = (name || "").toString().trim().slice(0, 40);
-    if (!name) return;
+    if (!name || UNSAFE_OBJECT_KEYS.has(name)) return;
     const cmds = Array.isArray(commanders) ? commanders.slice(0, 2).map((c) => (c ? toEntry(c) : null)) : [];
     while (cmds.length < 2) cmds.push(null);
     const lib = Array.isArray(library) ? library.slice(0, 99).map((c) => toEntry(c)) : [];
@@ -2996,7 +3017,7 @@ io.on("connection", (socket) => {
   socket.on("saveMat", ({ name, url }) => {
     name = (name || "").toString().trim().slice(0, 40);
     const clean = sanitizeImgUrl(url);
-    if (!name || !clean) return;
+    if (!name || !clean || UNSAFE_OBJECT_KEYS.has(name)) return;
     if (!mats[username]) mats[username] = {};
     mats[username][name] = clean;
     saveMats();
