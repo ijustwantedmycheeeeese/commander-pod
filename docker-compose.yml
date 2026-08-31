@@ -14,6 +14,26 @@ services:
       - TURN_PASSWORD=${TURN_PASSWORD:?set a password for the TURN relay — used by voice chat only}
     restart: unless-stopped
 
+  # Deliberately NOT reachable from the internet, or even the LAN -- "127.0.0.1:9091:9091" binds
+  # this port to the Docker HOST's own loopback interface only, unlike mtg-table's "8087:8087"
+  # above (which binds 0.0.0.0, i.e. every interface). To actually reach this from your own devices,
+  # expose the loopback port over your private Tailscale network with `tailscale serve`, e.g.:
+  #   tailscale serve --bg --https=8443 http://127.0.0.1:9091
+  # (NOT `tailscale funnel`, which would expose it to the public internet -- the whole point here is
+  # that this panel can approve/delete accounts, so it needs to stay off any public-facing surface.)
+  admin-panel:
+    build: .
+    container_name: mtg_admin_panel
+    command: ["node", "admin-server.js"]
+    volumes:
+      - mtg_data:/app/data
+    ports:
+      - "127.0.0.1:9091:9091"
+    environment:
+      - ADMIN_USERNAME=${ADMIN_USERNAME:?set a username for the admin panel}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set a password for the admin panel}
+    restart: unless-stopped
+
   # Relays voice chat between players who aren't on the same network — without this, WebRTC can
   # only connect two players directly, which fails whenever a home router's NAT gets in the way
   # (this is why voice chat doesn't work for people outside your own network). Runs with host
