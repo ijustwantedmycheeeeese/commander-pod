@@ -16,6 +16,11 @@
     body { margin: 0; background: radial-gradient(ellipse at top, #1c1611 0%, #0a0806 100%); color: #e8dfc8; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; height: 100vh; }
     .mtg-title { font-family: 'Cinzel', serif; letter-spacing: 0.04em; color: #d4af37; }
     input, button, select, textarea { padding: 6px 10px; background: #241c12; border: 1px solid #5a4423; color: #e8dfc8; border-radius: 6px; font-size: 13px; font-family: inherit; }
+    /* The generic rule above (padding/border/background) also matches type=range -- browsers don't
+       expect padding on a range input, so it squeezes the native track/thumb into a smaller box than
+       the element itself, making the thumb only traverse a fraction of the visible control. Reset it
+       back to a plain native slider. */
+    input[type=range] { padding: 0; background: none; border: none; }
     button { cursor: pointer; background: linear-gradient(180deg, #4a3820, #2e2210); border: 1px solid #6b4f27; font-weight: 600; transition: background 0.15s; color: #e8d9b0; }
     button:hover { background: linear-gradient(180deg, #5c4628, #3a2a15); }
     button:disabled { opacity: 0.4; cursor: default; }
@@ -2790,6 +2795,13 @@
       const n = parseInt(raw, 10);
       return isNaN(n) ? fallback0to1 : Math.max(0, Math.min(100, n)) / 100;
     }
+    // Sliders move linearly (0-1), but perceived loudness doesn't -- human hearing is roughly
+    // logarithmic, so a direct linear mapping makes the bottom half of any volume slider barely
+    // change anything while the top half swings wildly. Squaring the linear fraction is the standard,
+    // simple approximation of a proper audio taper: quiet and fine-grained through the lower half of
+    // the slider, ramping up faster near the top. Always apply this at the point audio is actually
+    // played -- the raw linear value is still what's stored/persisted/shown on the slider itself.
+    function volumeCurve(linear0to1) { return linear0to1 * linear0to1; }
     function playTone(freq, duration, type, vol) {
       if (!vol) return;
       try {
@@ -2798,7 +2810,7 @@
         const gain = audioCtx.createGain();
         osc.type = type || "sine";
         osc.frequency.value = freq;
-        gain.gain.setValueAtTime(vol * 0.2, audioCtx.currentTime); // 0.2 -- the old fixed 0.15 was tuned at ~70% of this scale
+        gain.gain.setValueAtTime(volumeCurve(vol) * 0.2, audioCtx.currentTime); // 0.2 -- the old fixed 0.15 was tuned at ~70% of this scale
         gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
         osc.connect(gain);
         gain.connect(audioCtx.destination);
@@ -2846,7 +2858,7 @@
       if (!lobbyMusicEl) {
         lobbyMusicEl = new Audio("/audio/lobby-music.mp3");
         lobbyMusicEl.loop = true;
-        lobbyMusicEl.volume = musicVolume;
+        lobbyMusicEl.volume = volumeCurve(musicVolume);
       }
       return lobbyMusicEl;
     }
@@ -2857,7 +2869,7 @@
     }
     function startLobbyMusic() {
       const el = ensureLobbyMusicEl();
-      el.volume = musicVolume;
+      el.volume = volumeCurve(musicVolume);
       // .play() on an already-paused (not reset) element resumes from where it left off, so leaving
       // and returning to the Main Menu doesn't restart the track from the beginning every time.
       el.play().catch(() => {}); // blocked by autoplay policy in rare cases -- fails silently, not fatal
@@ -2875,7 +2887,7 @@
       });
       const label = document.getElementById("settings-music-volume-label");
       if (label) label.innerText = v0to100 + "%";
-      if (lobbyMusicEl) lobbyMusicEl.volume = musicVolume;
+      if (lobbyMusicEl) lobbyMusicEl.volume = volumeCurve(musicVolume);
     }
     function initMusicVolumeSliders() {
       const pct = Math.round(musicVolume * 100);
