@@ -666,6 +666,35 @@ function effectiveKeywords(lobby, card) {
   return [...new Set([...(card.keywords || []), ...bonus.keywords])];
 }
 
+// Parses a permanent's own oracle text for the single most common untyped anthem/lord pattern --
+// "Other creatures you control get +X/+Y". Deliberately not attempting color/creature-type-restricted
+// anthems ("Elves you control get...", "Angels you control get..."), which stay manual via the
+// existing Manage Keywords tool -- same narrowing precedent as equipEffectsFromText above.
+function anthemEffectsFromText(text) {
+  const t = text || "";
+  let powerBonus = 0, toughnessBonus = 0;
+  const m = t.match(/other creatures you control get ([+-]\d+)\/([+-]\d+)/i);
+  if (m) { powerBonus = parseInt(m[1], 10) || 0; toughnessBonus = parseInt(m[2], 10) || 0; }
+  return { powerBonus, toughnessBonus };
+}
+// Live-computed like attachedBonusFor -- scans every OTHER permanent the same controller controls
+// (source can be a creature "lord", artifact, or enchantment; classifyType buckets all three under
+// zoneType "artifact" except creatures, so this only excludes hand/stack, not by type) for an anthem
+// on its own text. "Other" is enforced structurally by skipping card.id, not by parsing the word.
+function staticBonusFor(lobby, card) {
+  let powerBonus = 0, toughnessBonus = 0;
+  if (card.zoneType !== "creature") return { powerBonus, toughnessBonus };
+  for (const id in lobby.cards) {
+    if (id === card.id) continue;
+    const c = lobby.cards[id];
+    if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    const eff = anthemEffectsFromText(c.text);
+    powerBonus += eff.powerBonus;
+    toughnessBonus += eff.toughnessBonus;
+  }
+  return { powerBonus, toughnessBonus };
+}
+
 function parseManaCost(costStr) {
   const cost = { generic: 0, W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, hybrid: [], x: false };
   if (!costStr) return cost;
@@ -1262,14 +1291,16 @@ function resolveCombatDamage(lobby) {
     const attacker = lobby.cards[attackerId];
     if (!attacker) continue;
     const atkBonus = attachedBonusFor(lobby, attacker);
-    const atkPower = parsePT(attacker.power) + (attacker.counters || 0) + atkBonus.powerBonus;
-    const atkTough = parsePT(attacker.toughness) + (attacker.counters || 0) + atkBonus.toughnessBonus;
+    const atkStatic = staticBonusFor(lobby, attacker);
+    const atkPower = parsePT(attacker.power) + (attacker.counters || 0) + atkBonus.powerBonus + atkStatic.powerBonus;
+    const atkTough = parsePT(attacker.toughness) + (attacker.counters || 0) + atkBonus.toughnessBonus + atkStatic.toughnessBonus;
     const blockerId = combat.blocks[attackerId];
     if (blockerId && lobby.cards[blockerId]) {
       const blocker = lobby.cards[blockerId];
       const defBonus = attachedBonusFor(lobby, blocker);
-      const defPower = parsePT(blocker.power) + (blocker.counters || 0) + defBonus.powerBonus;
-      const defTough = parsePT(blocker.toughness) + (blocker.counters || 0) + defBonus.toughnessBonus;
+      const defStatic = staticBonusFor(lobby, blocker);
+      const defPower = parsePT(blocker.power) + (blocker.counters || 0) + defBonus.powerBonus + defStatic.powerBonus;
+      const defTough = parsePT(blocker.toughness) + (blocker.counters || 0) + defBonus.toughnessBonus + defStatic.toughnessBonus;
       pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkPower}/${atkTough}) fights ${blocker.name || "a face-down creature"} (${defPower}/${defTough})`);
       if (atkPower >= defTough) deaths.push(blocker);
       if (defPower >= atkTough) deaths.push(attacker);

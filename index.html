@@ -1905,13 +1905,37 @@
       if (!bonus.keywords.length) return card.keywords || [];
       return [...new Set([...(card.keywords || []), ...bonus.keywords])];
     }
+    // Mirrors server.js's anthemEffectsFromText/staticBonusFor exactly -- same single untyped
+    // "Other creatures you control get +X/+Y" pattern, same "other" enforced by skipping card.id.
+    function anthemEffectsFromText(text) {
+      const t = text || "";
+      let powerBonus = 0, toughnessBonus = 0;
+      const m = t.match(/other creatures you control get ([+-]\d+)\/([+-]\d+)/i);
+      if (m) { powerBonus = parseInt(m[1], 10) || 0; toughnessBonus = parseInt(m[2], 10) || 0; }
+      return { powerBonus, toughnessBonus };
+    }
+    function staticBonusFor(card) {
+      let powerBonus = 0, toughnessBonus = 0;
+      if (card.zoneType !== "creature") return { powerBonus, toughnessBonus };
+      Object.values(allCards).forEach((c) => {
+        if (c.id === card.id) return;
+        if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") return;
+        const eff = anthemEffectsFromText(c.text);
+        powerBonus += eff.powerBonus;
+        toughnessBonus += eff.toughnessBonus;
+      });
+      return { powerBonus, toughnessBonus };
+    }
     // "7/6" -> "9/8" style effective-P/T string, or just the raw P/T if there's no bonus --
     // shared by every place a card's power/toughness gets shown as text.
     function effectivePT(card) {
       const bonus = attachedBonusFor(card);
-      if (!bonus.powerBonus && !bonus.toughnessBonus) return `${card.power || 0}/${card.toughness || 0}`;
-      const p = (parseInt(card.power, 10) || 0) + bonus.powerBonus;
-      const t = (parseInt(card.toughness, 10) || 0) + bonus.toughnessBonus;
+      const stat = staticBonusFor(card);
+      const totalP = bonus.powerBonus + stat.powerBonus;
+      const totalT = bonus.toughnessBonus + stat.toughnessBonus;
+      if (!totalP && !totalT) return `${card.power || 0}/${card.toughness || 0}`;
+      const p = (parseInt(card.power, 10) || 0) + totalP;
+      const t = (parseInt(card.toughness, 10) || 0) + totalT;
       return `${p}/${t}`;
     }
 
