@@ -427,6 +427,7 @@
       <button data-action="tap">Tap</button>
       <button data-action="flip">Flip Face Up/Down</button>
       <button data-action="target">Target / Untarget</button>
+      <div id="context-menu-abilities"></div>
       <hr>
       <button data-action="counterUp">+1 Counter</button>
       <button data-action="counterDown">-1 Counter</button>
@@ -2861,6 +2862,19 @@
         // hidden card, since the copy would materialize with its real name/text/image).
         if (action === "copyCard") { el.style.display = (card.zoneType !== "hand" && card.zoneType !== "stack" && (!card.faceDown || isMine)) ? "block" : "none"; return; }
         el.style.display = isMine ? "block" : "none";
+      });
+      // Activated abilities are dynamic per-card (0, 1, or more, each with its own label) --
+      // built fresh each time the menu opens instead of toggling fixed buttons like everything
+      // above. Only ever populated from card.activatedAbilities, which the server only attaches
+      // once a real ability actually exists (see maskCard) -- no button that just errors on click.
+      const abilitiesEl = document.getElementById("context-menu-abilities");
+      const abilities = (isMine && card.zoneType !== "hand" && card.zoneType !== "stack" && Array.isArray(card.activatedAbilities)) ? card.activatedAbilities : [];
+      abilitiesEl.innerHTML = abilities.map((a) => `<button>${escapeHtml(a.label)}</button>`).join("");
+      Array.from(abilitiesEl.children).forEach((btn, i) => {
+        btn.onclick = () => {
+          socket.emit("activateAbility", { cardId: card.id, abilityIndex: abilities[i].index });
+          contextMenu.style.display = "none";
+        };
       });
     }
 
