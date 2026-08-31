@@ -1649,7 +1649,7 @@
           // counter, separate from the always-available manual Counter button below.
           const targetableStyle = pendingTargetChoiceId ? "cursor:pointer;outline:2px solid #d4af37;" : "";
           const targetableClick = pendingTargetChoiceId ? `chooseTargetFor('${c.id}')` : "";
-          return `<div class="stack-item${i === 0 ? " stack-top" : ""}" style="${targetableStyle}" onclick="${targetableClick}" title="${pendingTargetChoiceId ? "Click to target this" : ""}">
+          return `<div class="stack-item${i === 0 ? " stack-top" : ""}" style="${targetableStyle}" onclick="${targetableClick}" onmouseenter="showStackItemPreview('${c.id}')" onmouseleave="hidePreview()" title="${pendingTargetChoiceId ? "Click to target this" : ""}">
             <img src="${escapeHtml(c.img || '')}" class="zone-card-thumb" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')" title="Click to see the full card">
             <div class="zone-card-name" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
             <button class="mini-btn" style="background:#7a1f1f;" onclick="event.stopPropagation();counterStackItem('${c.id}')" title="${counterTitle}">Counter</button>
@@ -2194,6 +2194,8 @@
               <button class="mini-btn" onclick="zoneToHand('${zoneName}',${idx})">To Hand</button>`;
           }
           row.innerHTML = `<img src="${escapeHtml(entry.img || "")}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
+          row.onmouseenter = () => showPreviewFor(entry);
+          row.onmouseleave = hidePreview;
           body.appendChild(row);
         });
       }
@@ -3018,13 +3020,28 @@
       if (!el || !el._cardData) return;
       const card = el._cardData;
       const isMasked = card.faceDown && card.owner !== myId;
-      if (isMasked || !card.img) return;
+      if (isMasked) return;
+      showPreviewFor(card);
+    }
+    // Same preview panel, but for a card-shaped object that isn't a tracked battlefield card element
+    // (a graveyard/exile/library entry, or a stack item) -- those never carry a faceDown/masking
+    // concern the way a live battlefield card can, so this skips straight to rendering.
+    function showPreviewFor(card) {
+      if (!card || !card.img) return;
       document.getElementById("preview-img").src = card.img;
       document.getElementById("preview-name").innerHTML = buildCardPreviewHtml(card);
       previewPanel.style.display = "block";
     }
     function hidePreview() { previewPanel.style.display = "none"; }
 
+    // Hover preview for a stack item -- same card-shape resolution as openStackItemDetail below
+    // (a real spell already IS a full card; a triggered ability only carries its source's name/img).
+    function showStackItemPreview(stackItemId) {
+      const item = currentStack.find((s) => s.id === stackItemId);
+      if (!item) return;
+      const card = item.kind === "ability" ? { name: item.sourceName, img: item.img } : item;
+      showPreviewFor(card);
+    }
     // Click-to-open detail view for a stack item -- works for a real spell (full card data already
     // on the item) or a triggered ability (shows its SOURCE card's details via the sourceName/img
     // already carried on the ability item; oracle text isn't stored on an ability item itself, so
