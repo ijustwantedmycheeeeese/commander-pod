@@ -168,6 +168,20 @@ function getAutomatedAbilities(cardName, triggerType) {
   return all.filter((a) => a.trigger === triggerType);
 }
 
+// Player-initiated abilities, separate from CARD_ABILITIES since these are activated, not
+// automatic triggers -- see the activateAbility handler. cost.sacrifice is scoped to "sacrifice
+// THIS permanent" only for v1, the single most common activated-sacrifice pattern; "sacrifice
+// another creature" would need its own target-choice-shaped flow, same precedent as everywhere
+// else this vocabulary narrows to the common case.
+const ACTIVATED_ABILITIES = {
+  "archivist": [{ cost: { tap: true }, label: "Archivist — {T}: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "alchemist's apprentice": [{ cost: { sacrifice: true }, label: "Alchemist's Apprentice — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }]
+};
+function getActivatedAbilities(cardName) {
+  return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
+}
+
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
 // targeting exists in this vocabulary on purpose -- see the CARD_ABILITIES comment above.
 function effectTargets(lobby, controllerId, target) {
@@ -796,7 +810,14 @@ function maskCard(card, viewerId) {
       cmc: null, colors: null, colorIdentity: null, loyalty: null, text: null, keywords: null, producedMana: null
     };
   }
-  return card;
+  // Live-computed, never stored on the card itself -- lets the client show a real, correctly-labeled
+  // "Activate: ..." context-menu entry only when one actually exists. Safe to send: nothing secret,
+  // and only attached once a name is actually visible to this viewer (the face-down branch above
+  // never reaches here) and the card is somewhere an ability could be activated from.
+  if (card.zoneType === "hand" || card.zoneType === "stack") return card;
+  const abilities = getActivatedAbilities(card.name);
+  if (!abilities.length) return card;
+  return { ...card, activatedAbilities: abilities.map((a, index) => ({ index, label: a.label })) };
 }
 
 function broadcastCard(lobby, card) {
@@ -2024,6 +2045,51 @@ io.on("connection", (socket) => {
     if (!card || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
     card.counters = (card.counters || 0) + delta;
     broadcastCard(lobby, card);
+  });
+
+  // Activates a player-initiated ability from ACTIVATED_ABILITIES (see its comment for scope).
+  // Checks affordability of ALL costs before paying ANY of them -- no partial payment on a failed
+  // check partway through. Once costs are validated, pays them, then hands off to fireTrigger --
+  // the exact same requiresTarget-or-straight-to-stack branch CARD_ABILITIES entries already use,
+  // so resolveStackTop needs zero changes regardless of how an item reached the stack.
+  socket.on("activateAbility", ({ cardId, abilityIndex }) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[cardId];
+    const p = lobby.players[socket.id];
+    if (!p || !card || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
+    // Pregame has no turn.order, so nextInOrder(pushAbilityToStack's priority handoff) would return
+    // null and this would get stuck on the stack forever with no one able to pass priority to
+    // resolve it -- same "pregame stays trigger-free" rule fireEtbTriggers/fireDeathTriggers/
+    // fireAttackTriggers already follow, just enforced with a real error here since this is a
+    // player-initiated action, not a silent automatic trigger.
+    if (!lobby.turn.started) { socket.emit("actionError", "You can't activate abilities before the game starts."); return; }
+    const ability = getActivatedAbilities(card.name)[abilityIndex];
+    if (!ability) return;
+    const cost = ability.cost || {};
+
+    if (cost.tap) {
+      if (card.tapped) { socket.emit("actionError", `${card.name} is already tapped.`); return; }
+      const hasHaste = effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "haste");
+      if (card.controllerSince === lobby.turn.turnNumber && !hasHaste) { socket.emit("actionError", `${card.name} has summoning sickness.`); return; }
+    }
+    let remainingMana = null;
+    if (cost.mana) {
+      remainingMana = canAffordAndPay(p.mana, parseManaCost(cost.mana), 0);
+      if (!remainingMana) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s ability.`); return; }
+    }
+    // cost.sacrifice has nothing to validate -- you already own it and it's on the battlefield.
+
+    if (cost.tap) { card.tapped = true; broadcastCard(lobby, card); }
+    if (cost.mana) { p.mana = remainingMana; broadcastPlayers(lobby); }
+    pushLog(lobby, `${p.name} activated: ${ability.label}`);
+    if (cost.sacrifice) {
+      // Paid as part of the cost, immediately -- same as real Magic (costs are paid on activation,
+      // not on resolution). The card object itself stays valid for fireTrigger below even after
+      // this: sendToGraveyardInternal only removes it from lobby.cards, it doesn't mutate the object.
+      fireDeathTriggers(lobby, card);
+      sendToGraveyardInternal(lobby, card);
+    }
+    fireTrigger(lobby, card, ability);
   });
 
   // Manually granted keywords -- represents an aura/equipment/anthem/etc. effect, since none of
