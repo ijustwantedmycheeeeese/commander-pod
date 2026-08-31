@@ -481,7 +481,7 @@
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
-          <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it.</li>
+          <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it. Save one under a name in the <strong>Account</strong> modal to reuse it on any table later instead of pasting the URL every time — pick it from the dropdown next to Set/Clear and hit Apply.</li>
           <li><strong>Account</strong> (Main Menu, or ⚙ Menu → Profile → Account Settings) is where account-wide preferences live, separate from the per-table nickname field: an avatar (by image URL, shown next to your color dot in the Players panel), a default nickname used every time you join a new table, and a change-password form. These persist across every table, unlike the per-table nickname override.</li>
           <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
         </ul>
@@ -595,6 +595,10 @@
           <button class="mini-btn secondary" onclick="clearBoardMat()">Clear</button>
           <button class="mini-btn secondary" onclick="document.getElementById('board-mat-file').click()">Upload...</button>
         </div>
+        <div class="flex-row" style="margin-bottom:6px;">
+          <select id="saved-mat-select"><option value="">-- saved mats --</option></select>
+          <button class="mini-btn secondary" onclick="applySavedMat()">Apply</button>
+        </div>
 
         <div class="mm-label">Table</div>
         <div class="flex-row" style="flex-wrap:wrap;">
@@ -629,6 +633,18 @@
           <button onclick="saveAccountProfile()">Save Profile</button>
         </div>
         <div id="account-profile-status" style="font-size:12px;color:#a89a70;margin-bottom:10px;"></div>
+
+        <div class="mm-label">Saved Board Mats</div>
+        <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Save a mat once, then pick it from any table's Board Mat menu instead of pasting the URL again.</div>
+        <div class="flex-row" style="align-items:center;margin-bottom:6px;">
+          <input type="text" id="new-mat-url" placeholder="Mat image URL..." style="flex:1;">
+          <input type="file" id="new-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'new-mat-url')">
+          <button class="mini-btn secondary" onclick="document.getElementById('new-mat-file').click()">Upload...</button>
+        </div>
+        <div class="flex-row" style="margin-bottom:10px;">
+          <button class="mini-btn" onclick="saveNewMat()">Save As...</button>
+        </div>
+        <div id="saved-mats-list" style="margin-bottom:10px;"></div>
 
         <div class="mm-label">Change Password</div>
         <input type="password" id="account-current-password" placeholder="Current password" style="width:100%;margin-bottom:6px;">
@@ -943,6 +959,7 @@
 
     let myAccountAvatar = null;
     let myAccountDefaultName = null;
+    let mySavedMats = {}; // name -> url, account-wide (distinct from the per-table active boardMat)
 
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
     socket.on("authOk", (data) => {
@@ -952,6 +969,9 @@
       renderDeckList(data.decks);
       myAccountAvatar = data.avatar || null;
       myAccountDefaultName = data.defaultName || null;
+      mySavedMats = data.mats || {};
+      renderSavedMatsList();
+      renderSavedMatSelect();
       const authToken = localStorage.getItem("mtgToken");
       if (authToken) {
         fetch("/api/iceServers?token=" + encodeURIComponent(authToken))
@@ -1122,6 +1142,7 @@
 
     socket.on("deckSaved", () => { document.getElementById("deck-status").innerText = "Deck saved!"; });
     socket.on("deckList", (names) => renderDeckList(names));
+    socket.on("matList", (m) => { mySavedMats = m || {}; renderSavedMatsList(); renderSavedMatSelect(); });
 
     socket.on("deckPasteResult", (res) => {
       const status = document.getElementById("de-status");
@@ -1468,6 +1489,50 @@
     function updateName() { socket.emit("setName", document.getElementById("playerName").value || "Player"); }
     function setBoardMat() { socket.emit("setBoardMat", document.getElementById("board-mat-url").value || ""); }
     function clearBoardMat() { document.getElementById("board-mat-url").value = ""; socket.emit("setBoardMat", ""); }
+
+    // ---------------- saved board mats (account-wide) ----------------
+    function saveNewMat() {
+      const url = document.getElementById("new-mat-url").value.trim();
+      if (!url) return;
+      const name = prompt("Name this board mat:");
+      if (!name || !name.trim()) return;
+      socket.emit("saveMat", { name: name.trim(), url });
+      document.getElementById("new-mat-url").value = "";
+    }
+    function deleteSavedMat(name) {
+      if (!confirm(`Delete saved mat "${name}"?`)) return;
+      socket.emit("deleteMat", name);
+    }
+    function renderSavedMatsList() {
+      const el = document.getElementById("saved-mats-list");
+      if (!el) return;
+      const names = Object.keys(mySavedMats);
+      if (!names.length) { el.innerHTML = "<div style='color:#8a7a55;font-size:12px;'>No saved mats yet.</div>"; return; }
+      el.innerHTML = "";
+      names.forEach((name) => {
+        const row = document.createElement("div");
+        row.className = "player-row";
+        row.innerHTML = `
+          <img src="${escapeHtml(mySavedMats[name])}" style="width:32px;height:32px;object-fit:cover;border-radius:4px;flex-shrink:0;">
+          <div style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(name)}</div>
+          <button class="mini-btn" style="background:#7a1f1f;" onclick="deleteSavedMat('${escapeHtml(name).replace(/'/g, "\\'")}')">Del</button>`;
+        el.appendChild(row);
+      });
+    }
+    function renderSavedMatSelect() {
+      const sel = document.getElementById("saved-mat-select");
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = '<option value="">-- saved mats --</option>' +
+        Object.keys(mySavedMats).map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+      if (Object.keys(mySavedMats).includes(current)) sel.value = current;
+    }
+    function applySavedMat() {
+      const name = document.getElementById("saved-mat-select").value;
+      if (!name || !mySavedMats[name]) return;
+      document.getElementById("board-mat-url").value = mySavedMats[name];
+      setBoardMat();
+    }
 
     // Shared by the Board Mat and Avatar "Upload..." buttons -- an alternative to pasting a URL,
     // not a replacement: this just fills the same text field the URL flow already writes to, so

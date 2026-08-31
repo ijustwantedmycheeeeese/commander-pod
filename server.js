@@ -1,5 +1,6 @@
 const express = require("express");
 const fs = require("fs");
+const path = require("path");
 const crypto = require("crypto");
 const multer = require("multer");
 const app = express();
@@ -28,6 +29,31 @@ const UPLOAD_DIR = DATA_DIR + "/uploads";
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
 app.use("/uploads", express.static(UPLOAD_DIR));
 
+// Deletes an old uploaded file when it's being replaced/cleared -- UNLESS it's still referenced
+// by an entry in that user's saved-mats library, in which case it has to survive. Scoped to the
+// common case (repeatedly changing your own avatar/active mat shouldn't pile up files forever),
+// not a full reference-counting system across every lobby/account -- a known, accepted limitation
+// for a small trusted pod, not a silent partial fix.
+function deleteUploadIfOrphaned(oldUrl, forUsername) {
+  if (!oldUrl || !oldUrl.startsWith("/uploads/")) return;
+  const savedMats = mats[forUsername] || {};
+  if (Object.values(savedMats).includes(oldUrl)) return; // still referenced, keep it
+  if (users[forUsername] && users[forUsername].avatar === oldUrl) return; // still the account avatar
+  // The same account could have this same URL set as the ACTIVE mat on a different table (e.g.
+  // applied a saved mat on two tables, then changed it on one) -- don't delete out from under it.
+  for (const id in lobbies) {
+    for (const sid in lobbies[id].players) {
+      const p = lobbies[id].players[sid];
+      if (p.username === forUsername && p.boardMat === oldUrl) return;
+    }
+  }
+  const filename = oldUrl.slice("/uploads/".length);
+  // Filenames this app generates are always a flat hex string -- refuse anything else rather
+  // than trust a stored value that could (however unlikely) contain a path separator.
+  if (!/^[0-9a-f]+(\.[a-z0-9]+)?$/i.test(filename)) return;
+  fs.unlink(path.join(UPLOAD_DIR, filename), () => {}); // best-effort, fire-and-forget
+}
+
 function loadJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return fallback; }
 }
@@ -36,12 +62,15 @@ function saveJSON(file, data) {
 }
 const USERS_FILE = DATA_DIR + "/users.json";
 const DECKS_FILE = DATA_DIR + "/decks.json";
+const MATS_FILE = DATA_DIR + "/mats.json";
 const CARD_ARCHIVE_FILE = DATA_DIR + "/card_archive.json";
 let users = loadJSON(USERS_FILE, {});
 let decks = loadJSON(DECKS_FILE, {});
+let mats = loadJSON(MATS_FILE, {}); // username -> { matName: url } -- account-wide, unlike the per-table active boardMat
 let cardArchive = loadJSON(CARD_ARCHIVE_FILE, {}); // lowercase card name -> full extracted card data
 function saveUsers() { saveJSON(USERS_FILE, users); }
 function saveDecks() { saveJSON(DECKS_FILE, decks); }
+function saveMats() { saveJSON(MATS_FILE, mats); }
 function saveCardArchive() { saveJSON(CARD_ARCHIVE_FILE, cardArchive); }
 function archiveKey(name) { return (name || "").toLowerCase().trim(); }
 function archiveCard(fields) {
@@ -1487,6 +1516,7 @@ io.on("connection", (socket) => {
   // lobby, both rejoining and creating a new table would silently no-op — a total softlock.
   socket.emit("authOk", {
     username, decks: Object.keys(decks[username] || {}),
+    mats: mats[username] || {},
     avatar: (users[username] && users[username].avatar) || null,
     defaultName: (users[username] && users[username].defaultName) || null
   });
@@ -1672,9 +1702,11 @@ io.on("connection", (socket) => {
 
   socket.on("updateAccount", ({ avatar, defaultName } = {}) => {
     if (!users[username]) return;
+    const oldAvatar = users[username].avatar;
     users[username].avatar = (avatar || "").toString().trim().slice(0, 500) || null;
     users[username].defaultName = (defaultName || "").toString().trim().slice(0, 24) || null;
     saveUsers();
+    if (oldAvatar && oldAvatar !== users[username].avatar) deleteUploadIfOrphaned(oldAvatar, username);
     const lobby = currentLobby();
     if (lobby && lobby.players[socket.id]) {
       lobby.players[socket.id].name = users[username].defaultName || username;
@@ -1685,8 +1717,10 @@ io.on("connection", (socket) => {
   socket.on("setBoardMat", (url) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
     const clean = (url || "").toString().trim().slice(0, 500);
+    const oldMat = lobby.players[socket.id].boardMat;
     lobby.players[socket.id].boardMat = clean || null;
     broadcastPlayers(lobby);
+    if (oldMat && oldMat !== lobby.players[socket.id].boardMat) deleteUploadIfOrphaned(oldMat, username);
   });
 
   socket.on("statChange", ({ key, val }) => {
@@ -2274,6 +2308,28 @@ io.on("connection", (socket) => {
     delete decks[username][name];
     saveDecks();
     socket.emit("deckList", Object.keys(decks[username]));
+  });
+
+  // ---- saved board mats (account-scoped, like decks -- distinct from the per-table active
+  // boardMat on lobby.players, which is unaffected by any of this) ----
+
+  socket.on("saveMat", ({ name, url }) => {
+    name = (name || "").toString().trim().slice(0, 40);
+    const clean = (url || "").toString().trim().slice(0, 500);
+    if (!name || !clean) return;
+    if (!mats[username]) mats[username] = {};
+    mats[username][name] = clean;
+    saveMats();
+    socket.emit("matList", mats[username]);
+  });
+
+  socket.on("deleteMat", (name) => {
+    if (!mats[username]) return;
+    const url = mats[username][name];
+    delete mats[username][name];
+    saveMats();
+    socket.emit("matList", mats[username]);
+    if (url) deleteUploadIfOrphaned(url, username);
   });
 
   socket.on("loadDeck", (name) => {
