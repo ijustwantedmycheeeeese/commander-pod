@@ -966,14 +966,21 @@ function isInstantOrSorcery(type) {
   return t.includes("instant") || t.includes("sorcery");
 }
 
+// A shockland ("Land -- Plains Swamp") carries TWO basic land types in its own type line -- real
+// Magic rules, needed so fetchlands can find it -- so checking these one at a time and returning on
+// the first match (the old bug) silently forced White on a Godless Shrine and never even looked for
+// Swamp. Collect every basic type actually present and only treat it as unambiguous if there's
+// exactly one; a genuine dual (or worse) type line falls through to producedMana's chooseMana
+// prompt instead, same as any other multi-color source.
 function basicLandColor(type) {
   if (!type) return null;
-  if (type.includes("Plains")) return "W";
-  if (type.includes("Island")) return "U";
-  if (type.includes("Swamp")) return "B";
-  if (type.includes("Mountain")) return "R";
-  if (type.includes("Forest")) return "G";
-  return null;
+  const basics = [];
+  if (type.includes("Plains")) basics.push("W");
+  if (type.includes("Island")) basics.push("U");
+  if (type.includes("Swamp")) basics.push("B");
+  if (type.includes("Mountain")) basics.push("R");
+  if (type.includes("Forest")) basics.push("G");
+  return basics.length === 1 ? basics[0] : null;
 }
 
 // Cards that unconditionally enter tapped ("~ enters the battlefield tapped.") should actually
