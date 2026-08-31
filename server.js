@@ -78,6 +78,20 @@ function archiveCard(fields) {
   cardArchive[archiveKey(fields.name)] = fields;
 }
 
+// Optional: set NTFY_TOPIC to get a push notification (via https://ntfy.sh, or a self-hosted
+// ntfy server via NTFY_SERVER) whenever a new account registers and needs admin approval.
+// Silently does nothing if NTFY_TOPIC isn't set -- this is a nice-to-have, not required config.
+const NTFY_TOPIC = process.env.NTFY_TOPIC || "";
+const NTFY_SERVER = process.env.NTFY_SERVER || "https://ntfy.sh";
+function notifyNewAccountPending(username) {
+  if (!NTFY_TOPIC) return;
+  fetch(NTFY_SERVER.replace(/\/$/, "") + "/" + NTFY_TOPIC, {
+    method: "POST",
+    headers: { "Title": "Commander Pod", "Tags": "bust_in_silhouette" },
+    body: `New account waiting on approval: ${username}`,
+  }).catch((e) => console.error("ntfy notification failed:", e.message));
+}
+
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString("hex");
 }
@@ -1963,6 +1977,7 @@ app.post("/api/register", (req, res) => {
   // (see /api/login below). No session token is issued here anymore; there's nothing to log into yet.
   users[username] = { salt, hash: hashPassword(password, salt), approved: false, sessionVersion: 0, createdAt: Date.now() };
   saveUsers();
+  notifyNewAccountPending(username);
   res.json({ success: true, pending: true, message: "Account created. An admin needs to approve it before you can log in." });
 });
 

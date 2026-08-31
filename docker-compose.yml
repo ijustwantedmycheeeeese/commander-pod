@@ -12,6 +12,10 @@ services:
       - TURN_URL=turn:${TURN_EXTERNAL_IP:?set this to your server's public IP or hostname}:3478
       - TURN_USERNAME=${TURN_USERNAME:-commanderpod}
       - TURN_PASSWORD=${TURN_PASSWORD:?set a password for the TURN relay — used by voice chat only}
+      # Optional -- leave unset to disable. Set NTFY_TOPIC to get a push notification (via the
+      # ntfy app) whenever someone registers and needs admin approval. See the README for setup.
+      - NTFY_TOPIC=${NTFY_TOPIC:-}
+      - NTFY_SERVER=${NTFY_SERVER:-https://ntfy.sh}
     restart: unless-stopped
 
   # Deliberately NOT reachable from the internet, or even the LAN -- "127.0.0.1:9091:9091" binds

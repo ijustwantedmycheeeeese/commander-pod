@@ -40,6 +40,17 @@ Then visit `https://<your-machine>.<your-tailnet>.ts.net:8443` from any device o
 
 Existing accounts from before this feature was added are auto-approved on first startup, so upgrading an existing deployment won't lock anyone out.
 
+### Push notification when someone registers
+
+Optional, off by default. Set `NTFY_TOPIC` on the `mtg-table` service and it'll send a push notification (via [ntfy](https://ntfy.sh)) every time someone registers and needs approval — this reaches you over the regular internet, so it works even when you're not on your tailnet; only actually approving the account needs you to reach the admin panel above.
+
+1. Install the ntfy app ([iOS](https://apps.apple.com/us/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)), or just use a browser at `https://ntfy.sh/<your-topic>`.
+2. Pick a topic name that's hard to guess (e.g. `commanderpod-approvals-x7q2m`) — anyone who knows it can also read or post to it, since ntfy topics aren't otherwise access-controlled.
+3. Subscribe to that topic name in the app.
+4. Set `NTFY_TOPIC` to that same name as an environment variable on the `mtg-table` service (Portainer will prompt for it like the other variables above, but it's optional — leave it blank to disable).
+
+If you're self-hosting your own ntfy server instead of using the public `ntfy.sh`, also set `NTFY_SERVER` to its URL.
+
 ## Local development
 
 ```
