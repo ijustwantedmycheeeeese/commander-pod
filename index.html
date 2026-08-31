@@ -2835,142 +2835,35 @@
     initSfxVolumeSliders();
 
     // ---------------- lobby music ----------------
-    // Generative "slightly intense medieval" background music (Web Audio API, same self-contained-
-    // file constraint as the sound cues above -- no music file to source/license) that plays only on
-    // the Main Menu, not during an actual game (where the sound cues are the relevant audio). Three
-    // layers: a low root+fifth drone (like a hurdy-gurdy or bagpipe), a synthesized war-drum pulse
-    // that accents the downbeat of every bar, and a wandering melodic line in D Dorian -- all seven
-    // natural notes from D to D, no sharps/flats. Dorian's raised 6th vs. natural minor is exactly
-    // what gives it that folk/medieval color instead of sounding like a generic minor-key pad. Runs
-    // on a proper lookahead scheduler (checking a few hundred ms ahead on a tight setInterval,
-    // scheduling exact Web Audio start times) rather than nested setTimeout, since a rhythmic piece
-    // drifting out of time would sound sloppy in a way the old purely-ambient version never risked.
+    // A real audio track (/audio/lobby-music.mp3 -- see the Dockerfile/README for how it gets there
+    // and licensing notes) looped on the Main Menu only, not during an actual game (where the sound
+    // cues above are the relevant audio). Superseded the earlier generative Web Audio version once a
+    // properly-licensed track was available -- plain <audio> looping is simpler and better-mixed than
+    // synthesizing an approximation of the same idea.
     let musicVolume = loadVolumePref("mtgMusicVolume", 0.5);
-    let musicSchedulerId = null;
-    let musicNextBeatTime = 0;
-    let musicBeatIndex = 0;
-    let musicMelodyIdx = 7;
-    let musicDrone = null;
-    const MUSIC_BPM = 108;
-    const MUSIC_BEAT_SEC = 60 / MUSIC_BPM;
-    const MUSIC_DRONE_FREQS = [73.42, 110.00]; // D2 + A2 -- root and fifth
-    const MUSIC_SCALE = [146.83, 164.81, 174.61, 196.00, 220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25, 587.33]; // D Dorian, D3..D5
+    let lobbyMusicEl = null;
+    function ensureLobbyMusicEl() {
+      if (!lobbyMusicEl) {
+        lobbyMusicEl = new Audio("/audio/lobby-music.mp3");
+        lobbyMusicEl.loop = true;
+        lobbyMusicEl.volume = musicVolume;
+      }
+      return lobbyMusicEl;
+    }
     function ensureAudioCtx() {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
       return audioCtx;
     }
-    function startMusicDrone() {
-      if (musicDrone) return;
-      try {
-        const ctx = ensureAudioCtx();
-        const master = ctx.createGain();
-        master.gain.value = 0.09 * musicVolume;
-        master.connect(ctx.destination);
-        const oscs = MUSIC_DRONE_FREQS.map((f) => {
-          const osc = ctx.createOscillator();
-          osc.type = "sawtooth";
-          osc.frequency.value = f;
-          osc.connect(master);
-          osc.start();
-          return osc;
-        });
-        musicDrone = { master, oscs };
-      } catch (e) {}
-    }
-    function stopMusicDrone() {
-      if (!musicDrone) return;
-      try { musicDrone.oscs.forEach((o) => o.stop()); musicDrone.master.disconnect(); } catch (e) {}
-      musicDrone = null;
-    }
-    function playDrumHit(when, accent) {
-      try {
-        const ctx = ensureAudioCtx();
-        // Pitched thump -- a fast downward pitch sweep, the standard synthesized-kick-drum trick.
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "triangle";
-        osc.frequency.setValueAtTime(accent ? 130 : 100, when);
-        osc.frequency.exponentialRampToValueAtTime(40, when + 0.15);
-        gain.gain.setValueAtTime((accent ? 0.32 : 0.2) * musicVolume, when);
-        gain.gain.exponentialRampToValueAtTime(0.001, when + 0.22);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(when);
-        osc.stop(when + 0.25);
-        // Short filtered noise burst layered on top, for the percussive attack a pure tone can't give.
-        const bufferSize = Math.floor(ctx.sampleRate * 0.06);
-        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
-        const noise = ctx.createBufferSource();
-        noise.buffer = buffer;
-        const noiseFilter = ctx.createBiquadFilter();
-        noiseFilter.type = "lowpass";
-        noiseFilter.frequency.value = 1200;
-        const noiseGain = ctx.createGain();
-        noiseGain.gain.value = (accent ? 0.12 : 0.07) * musicVolume;
-        noise.connect(noiseFilter);
-        noiseFilter.connect(noiseGain);
-        noiseGain.connect(ctx.destination);
-        noise.start(when);
-      } catch (e) {}
-    }
-    function playMelodyNote(freq, when, duration) {
-      try {
-        const ctx = ensureAudioCtx();
-        const osc = ctx.createOscillator();
-        const filter = ctx.createBiquadFilter();
-        const gain = ctx.createGain();
-        osc.type = "sawtooth"; // reedier, more "medieval wind instrument" than a pure sine
-        osc.frequency.value = freq;
-        filter.type = "lowpass";
-        filter.frequency.value = 1800;
-        gain.gain.setValueAtTime(0, when);
-        gain.gain.linearRampToValueAtTime(0.18 * musicVolume, when + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, when + duration);
-        osc.connect(filter);
-        filter.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(when);
-        osc.stop(when + duration + 0.05);
-      } catch (e) {}
-    }
-    function scheduleMusicBeat(when, beatIndex) {
-      // Drum: a strong hit on beat 1 of every 4-beat bar, a lighter one on beat 3 -- a steady,
-      // driving march feel rather than a soft ambient pulse.
-      const beatInBar = beatIndex % 4;
-      if (beatInBar === 0) playDrumHit(when, true);
-      else if (beatInBar === 2) playDrumHit(when, false);
-      // Melody: mostly stepwise motion so it reads as a composed line, not random noodling, with an
-      // occasional bigger leap for interest -- and it skips a beat sometimes so it can breathe rather
-      // than being a relentless wall of 8th notes.
-      if (Math.random() < 0.8) {
-        const step = Math.random() < 0.7 ? (Math.random() < 0.5 ? 1 : -1) : (Math.random() < 0.5 ? 2 : -2);
-        musicMelodyIdx = Math.max(0, Math.min(MUSIC_SCALE.length - 1, musicMelodyIdx + step));
-        playMelodyNote(MUSIC_SCALE[musicMelodyIdx], when, MUSIC_BEAT_SEC * 0.9);
-      }
-    }
-    function musicSchedulerTick() {
-      if (musicVolume <= 0) return;
-      const ctx = ensureAudioCtx();
-      while (musicNextBeatTime < ctx.currentTime + 0.1) {
-        scheduleMusicBeat(musicNextBeatTime, musicBeatIndex);
-        musicNextBeatTime += MUSIC_BEAT_SEC;
-        musicBeatIndex++;
-      }
-    }
     function startLobbyMusic() {
-      if (musicSchedulerId) return; // already running
-      const ctx = ensureAudioCtx();
-      musicNextBeatTime = ctx.currentTime + 0.1;
-      musicBeatIndex = 0;
-      if (musicVolume > 0) startMusicDrone();
-      musicSchedulerId = setInterval(musicSchedulerTick, 25);
+      const el = ensureLobbyMusicEl();
+      el.volume = musicVolume;
+      // .play() on an already-paused (not reset) element resumes from where it left off, so leaving
+      // and returning to the Main Menu doesn't restart the track from the beginning every time.
+      el.play().catch(() => {}); // blocked by autoplay policy in rare cases -- fails silently, not fatal
     }
     function stopLobbyMusic() {
-      if (musicSchedulerId) { clearInterval(musicSchedulerId); musicSchedulerId = null; }
-      stopMusicDrone();
+      if (lobbyMusicEl) lobbyMusicEl.pause();
     }
     function setMusicVolume(val) {
       const v0to100 = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
@@ -2982,13 +2875,7 @@
       });
       const label = document.getElementById("settings-music-volume-label");
       if (label) label.innerText = v0to100 + "%";
-      if (musicDrone) {
-        // Live-update the currently-playing drone rather than waiting for the next note.
-        musicDrone.master.gain.setTargetAtTime(0.09 * musicVolume, ensureAudioCtx().currentTime, 0.05);
-        if (musicVolume <= 0) stopMusicDrone();
-      } else if (musicVolume > 0 && musicSchedulerId) {
-        startMusicDrone();
-      }
+      if (lobbyMusicEl) lobbyMusicEl.volume = musicVolume;
     }
     function initMusicVolumeSliders() {
       const pct = Math.round(musicVolume * 100);

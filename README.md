@@ -51,14 +51,18 @@ Optional, off by default. Set `NTFY_TOPIC` on the `mtg-table` service and it'll 
 
 If you're self-hosting your own ntfy server instead of using the public `ntfy.sh`, also set `NTFY_SERVER` to its URL.
 
+## Lobby music
+
+The Main Menu plays a looping background track (`audio/lobby-music.mp3`), with its own volume slider on the Main Menu and mirrored in the in-game Settings modal. It's a royalty-free track supplied by the project owner — swap `audio/lobby-music.mp3` for a different file (same filename) if you'd rather use something else; nothing else needs to change.
+
 ## Local development
 
 ```
 npm install
-mkdir public && cp index.html public/index.html
+mkdir -p public/audio && cp index.html public/index.html && cp audio/lobby-music.mp3 public/audio/lobby-music.mp3
 node server.js
 ```
 
-The `mkdir`/`cp` step matches what the `Dockerfile` does at build time — `server.js` serves static files from `./public`, so without it `index.html` won't be found and the app will 404 at `/`.
+The `mkdir`/`cp` steps match what the `Dockerfile` does at build time — `server.js` serves static files from `./public`, so without them `index.html` and the lobby music won't be found (404 at `/` and no music, respectively).
 
 Serves on port 8087.
