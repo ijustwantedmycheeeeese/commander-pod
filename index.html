@@ -1221,6 +1221,11 @@
         row.className = "player-row";
         row.dataset.playerId = id;
         row.classList.toggle("eliminated-row", !!p.eliminated);
+        // Same "click whatever's pending" pattern as a battlefield card (see renderCard) -- a
+        // player-targeting spell (damage/discard/"any target") needs a player to be clickable too,
+        // not just cards. The server is the real gate on whether a player is actually a legal
+        // choice for the pending prompt; this is just wiring the click through.
+        if (pendingTargetChoiceId) { row.style.cursor = "pointer"; row.onclick = () => chooseTargetFor(id); }
         row.innerHTML = `
           ${p.avatar ? `<img class="player-avatar" src="${escapeHtml(p.avatar)}" style="border-color:${p.color};">` : `<div class="player-dot" style="background:${p.color};color:${p.color};"></div>`}
           <div class="player-info">
@@ -1548,10 +1553,15 @@
           const caster = (players[c.owner] && players[c.owner].name) || "?";
           const subtitle = isAbility ? `⚡ Triggered ability — ${escapeHtml(caster)}'s ${escapeHtml(c.sourceName || "")}` : `cast by ${escapeHtml(caster)}`;
           const counterTitle = isAbility ? "Represents a response that removes this triggered ability from the stack without it resolving" : "Represents a counterspell resolving against this -- sends it straight to the graveyard";
-          return `<div class="stack-item${i === 0 ? " stack-top" : ""}">
-            <img src="${c.img || ''}" class="zone-card-thumb" style="cursor:pointer;" onclick="openStackItemDetail('${c.id}')" title="Click to see the full card">
-            <div class="zone-card-name" style="cursor:pointer;" onclick="openStackItemDetail('${c.id}')">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
-            <button class="mini-btn" style="background:#7a1f1f;" onclick="counterStackItem('${c.id}')" title="${counterTitle}">Counter</button>
+          // Same "click whatever's pending" pattern as a battlefield card/player row -- a real
+          // Counterspell-shaped card resolving needs to let its controller pick WHICH stack item to
+          // counter, separate from the always-available manual Counter button below.
+          const targetableStyle = pendingTargetChoiceId ? "cursor:pointer;outline:2px solid #d4af37;" : "";
+          const targetableClick = pendingTargetChoiceId ? `chooseTargetFor('${c.id}')` : "";
+          return `<div class="stack-item${i === 0 ? " stack-top" : ""}" style="${targetableStyle}" onclick="${targetableClick}" title="${pendingTargetChoiceId ? "Click to target this" : ""}">
+            <img src="${c.img || ''}" class="zone-card-thumb" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')" title="Click to see the full card">
+            <div class="zone-card-name" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
+            <button class="mini-btn" style="background:#7a1f1f;" onclick="event.stopPropagation();counterStackItem('${c.id}')" title="${counterTitle}">Counter</button>
           </div>`;
         }).join("");
       }
