@@ -2636,6 +2636,14 @@ io.on("connection", (socket) => {
 
   socket.on("startGame", () => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    // Everyone needs an actual deck to draw from before the game can begin -- reject the whole
+    // start (not just silently proceed) and name whoever's missing one, so the table knows who
+    // to wait on instead of starting into a game where someone has nothing to draw.
+    const noDeck = Object.values(lobby.players).filter((p) => p.library.length === 0);
+    if (noDeck.length > 0) {
+      socket.emit("actionError", `Everyone needs a deck loaded before starting — still waiting on: ${noDeck.map((p) => p.name).join(", ")}.`);
+      return;
+    }
     // Pregame dice roll decides turn order — everyone rolls a d20, highest goes first, ties
     // broken randomly, and the log shows every roll so it's not just a silent shuffle.
     const rolls = Object.keys(lobby.players).map((sid) => ({ sid, roll: randInt(20) + 1, tiebreak: Math.random() }));
