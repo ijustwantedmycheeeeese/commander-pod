@@ -24,6 +24,22 @@ Voice chat is peer-to-peer WebRTC. With just public STUN (the default), two play
 
 If those aren't set, voice chat still works fine for players on the same network, and silently falls back to same-network-only otherwise (no error, it just won't connect).
 
+## Account approval & the admin panel
+
+New accounts need to be approved before they can log in — when someone registers they see a "waiting on admin approval" message instead of getting straight in. Approving, rejecting, and deleting accounts happens through a separate `admin-panel` service in the stack, not through the main app.
+
+This panel is deliberately kept off the public internet: `docker-compose.yml` binds it to `127.0.0.1:9091` on the host (unlike `mtg-table`'s `8087:8087`, which binds every interface), so it's unreachable even from your LAN by default. To actually reach it, use [Tailscale](https://tailscale.com/) and serve the loopback port privately over your tailnet:
+
+```
+tailscale serve --bg --https=8443 http://127.0.0.1:9091
+```
+
+Then visit `https://<your-machine>.<your-tailnet>.ts.net:8443` from any device on your tailnet. Do **not** use `tailscale funnel` for this — funnel exposes the port to the public internet, which defeats the entire point of keeping account moderation off the public-facing container.
+
+**Required environment variables** for the `admin-panel` service (Portainer will prompt for these, same as the TURN variables above): `ADMIN_USERNAME` and `ADMIN_PASSWORD` — a separate credential from any player account, used only to log into this panel.
+
+Existing accounts from before this feature was added are auto-approved on first startup, so upgrading an existing deployment won't lock anyone out.
+
 ## Local development
 
 ```
