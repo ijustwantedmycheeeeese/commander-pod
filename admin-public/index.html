@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Commander Pod — Admin</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(ellipse at top, #1c1611 0%, #0a0806 100%); color: #e8dfc8; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+    h1 { font-family: Georgia, serif; letter-spacing: 0.04em; color: #d4af37; font-size: 22px; }
+    input, button { padding: 8px 12px; background: #241c12; border: 1px solid #5a4423; color: #e8dfc8; border-radius: 6px; font-size: 14px; font-family: inherit; }
+    button { cursor: pointer; background: linear-gradient(180deg, #4a3820, #2e2210); border: 1px solid #6b4f27; font-weight: 600; }
+    button:hover { background: linear-gradient(180deg, #5c4628, #3a2a15); }
+    button.danger { background: linear-gradient(180deg, #7a1f1f, #4a1010); border-color: #9a3030; }
+    button.danger:hover { background: linear-gradient(180deg, #8f2626, #5c1414); }
+    button.approve { background: linear-gradient(180deg, #1f6a2f, #103a18); border-color: #2f8a44; }
+    button.approve:hover { background: linear-gradient(180deg, #268038, #14481f); }
+
+    #login-box { max-width: 320px; margin: 100px auto; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 24px; }
+    #login-box input { width: 100%; margin-bottom: 8px; }
+    #login-error { color: #f87171; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+
+    #admin-root { display: none; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+    .section { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+    .section h2 { margin: 0 0 12px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: #c9a860; font-family: Georgia, serif; }
+    .user-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #241c12; }
+    .user-row:last-child { border-bottom: none; }
+    .user-name { flex: 1; font-weight: 600; }
+    .user-meta { font-size: 11px; color: #a89a70; }
+    .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+    .badge.pending { background: #7a5a1f; color: #fff3d0; }
+    .badge.approved { background: #2e5a2e; color: #d0ffd0; }
+    #empty-note { color: #8a7a55; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="login-box">
+    <h1>Admin Login</h1>
+    <input type="text" id="admin-username" placeholder="Admin username">
+    <input type="password" id="admin-password" placeholder="Admin password" onkeydown="if(event.key==='Enter')adminLogin();">
+    <div id="login-error"></div>
+    <button onclick="adminLogin()" style="width:100%;">Log In</button>
+  </div>
+
+  <div id="admin-root">
+    <h1>Commander Pod — Admin</h1>
+    <div class="section">
+      <h2>Pending Approval</h2>
+      <div id="pending-list"></div>
+    </div>
+    <div class="section">
+      <h2>All Accounts</h2>
+      <div id="all-list"></div>
+    </div>
+  </div>
+
+  <script>
+    let adminToken = localStorage.getItem("cpAdminToken") || null;
+
+    async function adminLogin() {
+      const username = document.getElementById("admin-username").value;
+      const password = document.getElementById("admin-password").value;
+      const res = await fetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+      const data = await res.json();
+      if (!data.success) { document.getElementById("login-error").innerText = data.error || "Login failed."; return; }
+      adminToken = data.token;
+      localStorage.setItem("cpAdminToken", adminToken);
+      showAdminRoot();
+    }
+
+    function showAdminRoot() {
+      document.getElementById("login-box").style.display = "none";
+      document.getElementById("admin-root").style.display = "block";
+      loadUsers();
+    }
+
+    async function adminFetch(url, options) {
+      options = options || {};
+      options.headers = Object.assign({}, options.headers, { "X-Admin-Token": adminToken, "Content-Type": "application/json" });
+      const res = await fetch(url, options);
+      if (res.status === 401) {
+        adminToken = null;
+        localStorage.removeItem("cpAdminToken");
+        document.getElementById("admin-root").style.display = "none";
+        document.getElementById("login-box").style.display = "block";
+        document.getElementById("login-error").innerText = "Session expired — please log in again.";
+        throw new Error("unauthorized");
+      }
+      return res.json();
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.innerText = s == null ? "" : s;
+      return d.innerHTML;
+    }
+
+    async function loadUsers() {
+      let data;
+      try { data = await adminFetch("/api/admin/users"); } catch (e) { return; }
+      if (!data.success) return;
+      const pending = data.users.filter((u) => !u.approved);
+      const all = data.users;
+
+      const pendingEl = document.getElementById("pending-list");
+      pendingEl.innerHTML = pending.length ? pending.map((u) => `
+        <div class="user-row">
+          <span class="user-name">${escapeHtml(u.username)}</span>
+          <span class="user-meta">${u.createdAt ? new Date(u.createdAt).toLocaleString() : ""}</span>
+          <button class="approve" onclick="approveUser('${escapeHtml(u.username)}')">Approve</button>
+          <button class="danger" onclick="deleteUser('${escapeHtml(u.username)}')">Reject</button>
+        </div>`).join("") : `<div id="empty-note">No accounts waiting on approval.</div>`;
+
+      const allEl = document.getElementById("all-list");
+      allEl.innerHTML = all.map((u) => `
+        <div class="user-row">
+          <span class="user-name">${escapeHtml(u.username)}</span>
+          <span class="badge ${u.approved ? "approved" : "pending"}">${u.approved ? "approved" : "pending"}</span>
+          <span class="user-meta">${u.createdAt ? new Date(u.createdAt).toLocaleString() : ""}</span>
+          <button class="danger" onclick="deleteUser('${escapeHtml(u.username)}')">Delete</button>
+        </div>`).join("");
+    }
+
+    async function approveUser(username) {
+      await adminFetch("/api/admin/approve", { method: "POST", body: JSON.stringify({ username }) });
+      loadUsers();
+    }
+    async function deleteUser(username) {
+      if (!confirm(`Delete account "${username}"? This can't be undone.`)) return;
+      await adminFetch("/api/admin/delete", { method: "POST", body: JSON.stringify({ username }) });
+      loadUsers();
+    }
+
+    if (adminToken) showAdminRoot();
+  </script>
+</body>
+</html>

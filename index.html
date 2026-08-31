@@ -778,10 +778,16 @@
       try {
         const res = await fetch("/api/" + mode, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
         const data = await res.json();
-        if (data.success) {
+        if (data.success && data.pending) {
+          // Registered, but there's no session token -- new accounts wait for admin approval
+          // before they can actually log in (see /api/register). Nothing to connect to yet.
+          errEl.style.color = "#4ade80";
+          errEl.innerText = data.message || "Account created — waiting on admin approval.";
+        } else if (data.success) {
           localStorage.setItem("mtgToken", data.token);
           connectWithToken(data.token);
         } else {
+          errEl.style.color = "";
           errEl.innerText = data.error || "Something went wrong.";
         }
       } catch (e) {
@@ -1704,7 +1710,11 @@
         body: JSON.stringify({ token, currentPassword, newPassword })
       }).then((r) => r.json()).then((d) => {
         if (d.success) {
-          status.innerText = "Password changed.";
+          // Changing your password invalidates every session token issued before now, including
+          // any other device/browser signed in as this account -- but NOT this current tab's live
+          // socket connection, which only ever gets checked at initial connect, not per-message. No
+          // forced disconnect mid-game; this tab keeps working until its next reconnect/HTTP call.
+          status.innerText = "Password changed. Other devices signed in as you have been logged out.";
           document.getElementById("account-current-password").value = "";
           document.getElementById("account-new-password").value = "";
           document.getElementById("account-confirm-password").value = "";

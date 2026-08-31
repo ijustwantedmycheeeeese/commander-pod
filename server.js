@@ -88,7 +88,61 @@ function verifyPassword(password, salt, hash) {
   return crypto.timingSafeEqual(test, stored);
 }
 
-let sessions = {}; // token -> username
+// A user record predating this feature has neither field -- backfill both once at startup rather
+// than treating "field missing" as a special case at every read site. approved:true for anyone
+// already registered (the approval gate only ever applies to NEW registrations from here on);
+// sessionVersion starts at 0 and increments on password change, invalidating every session issued
+// before that point (see sessionUsername below) -- the one piece of "known limitation" this file
+// used to call out explicitly.
+for (const uname in users) {
+  if (users[uname].approved === undefined) users[uname].approved = true;
+  if (users[uname].sessionVersion === undefined) users[uname].sessionVersion = 0;
+}
+saveUsers();
+
+let sessions = {}; // token -> { username, version, createdAt }
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days -- generous on purpose, this is a casual small-pod app, not logging people out mid-week
+// Single choke point for "is this token still good" -- expiry AND version-invalidation (a password
+// change bumps sessionVersion, which silently invalidates every token issued before that, including
+// ones from other devices/browsers that never get an explicit sign-out). Every session-token lookup
+// in this file goes through this instead of a raw `sessions[token]` read.
+function sessionUsername(token) {
+  const s = token && sessions[token];
+  if (!s) return null;
+  if (Date.now() - s.createdAt > SESSION_MAX_AGE_MS) { delete sessions[token]; return null; }
+  const u = users[s.username];
+  if (!u || u.sessionVersion !== s.version) { delete sessions[token]; return null; }
+  return s.username;
+}
+function issueSession(username) {
+  const token = crypto.randomBytes(24).toString("hex");
+  sessions[token] = { username, version: users[username].sessionVersion, createdAt: Date.now() };
+  return token;
+}
+
+// Basic brute-force throttling on login -- in-memory only (resets on restart), matching this app's
+// existing "small trusted pod, not a public service" threat model rather than building out anything
+// persistent/IP-based. Keyed by username since that's what an attacker would be guessing passwords
+// against; a genuine user mistyping their own password a few times in a row is the expected/accepted
+// cost of this.
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+let loginAttempts = {}; // username -> { count, firstAttemptAt }
+function isLockedOut(username) {
+  const a = loginAttempts[username];
+  if (!a) return false;
+  if (Date.now() - a.firstAttemptAt > LOGIN_LOCKOUT_MS) { delete loginAttempts[username]; return false; }
+  return a.count >= LOGIN_MAX_ATTEMPTS;
+}
+function recordFailedLogin(username) {
+  const a = loginAttempts[username];
+  if (!a || Date.now() - a.firstAttemptAt > LOGIN_LOCKOUT_MS) {
+    loginAttempts[username] = { count: 1, firstAttemptAt: Date.now() };
+  } else {
+    a.count++;
+  }
+}
+function clearFailedLogins(username) { delete loginAttempts[username]; }
 
 // ---------------- lobbies ----------------
 // Each lobby holds its own fully-isolated copy of what used to be single global game state
@@ -1899,31 +1953,40 @@ app.post("/api/register", (req, res) => {
   if (!username || !password) return res.json({ success: false, error: "Username and password required." });
   if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) return res.json({ success: false, error: "Username must be 3-20 letters, numbers, or underscores." });
   if (password.length < 4) return res.json({ success: false, error: "Password must be at least 4 characters." });
+  // Fresh from disk, not the long-lived in-memory copy -- the separate admin panel writes directly
+  // to users.json (see admin-server.js), so a username an admin just deleted needs to read as
+  // available again without waiting for this process to restart.
+  users = loadJSON(USERS_FILE, users);
   if (users[username]) return res.json({ success: false, error: "That username is already taken." });
   const salt = crypto.randomBytes(16).toString("hex");
-  users[username] = { salt, hash: hashPassword(password, salt) };
+  // approved:false -- brand new accounts wait for admin approval before they can actually log in
+  // (see /api/login below). No session token is issued here anymore; there's nothing to log into yet.
+  users[username] = { salt, hash: hashPassword(password, salt), approved: false, sessionVersion: 0, createdAt: Date.now() };
   saveUsers();
-  const token = crypto.randomBytes(24).toString("hex");
-  sessions[token] = username;
-  res.json({ success: true, token, username });
+  res.json({ success: true, pending: true, message: "Account created. An admin needs to approve it before you can log in." });
 });
 
 app.post("/api/login", (req, res) => {
   const { username, password } = req.body || {};
+  if (!username) return res.json({ success: false, error: "Incorrect username or password." });
+  if (isLockedOut(username)) return res.json({ success: false, error: "Too many failed attempts. Try again in a few minutes." });
+  // Fresh from disk -- same cross-process-freshness reasoning as /api/register above, but here it's
+  // specifically so an admin's just-clicked Approve is honored on the very next login attempt,
+  // not whenever this process happens to restart.
+  users = loadJSON(USERS_FILE, users);
   const u = users[username];
   if (!u || !verifyPassword(password || "", u.salt, u.hash)) {
+    recordFailedLogin(username);
     return res.json({ success: false, error: "Incorrect username or password." });
   }
-  const token = crypto.randomBytes(24).toString("hex");
-  sessions[token] = username;
-  res.json({ success: true, token, username });
+  if (!u.approved) return res.json({ success: false, error: "Your account is still waiting on admin approval." });
+  clearFailedLogins(username);
+  res.json({ success: true, token: issueSession(username), username });
 });
 
-// Known limitation: existing sessions aren't invalidated on password change -- `sessions` has no
-// per-user reverse index to support that cleanly. Fine for a small trusted pod, not silently glossed over.
 app.post("/api/changePassword", (req, res) => {
   const { token, currentPassword, newPassword } = req.body || {};
-  const username = token && sessions[token];
+  const username = sessionUsername(token);
   if (!username) return res.json({ success: false, error: "Not authenticated." });
   const u = users[username];
   if (!u || !verifyPassword(currentPassword || "", u.salt, u.hash)) {
@@ -1933,8 +1996,12 @@ app.post("/api/changePassword", (req, res) => {
   const salt = crypto.randomBytes(16).toString("hex");
   u.salt = salt;
   u.hash = hashPassword(newPassword, salt);
+  // Bumping this invalidates every session issued before now -- including this very request's own
+  // token, and any other device/browser logged in as this account. A fresh login is required
+  // afterward, same as changing your password anywhere else usually behaves.
+  u.sessionVersion = (u.sessionVersion || 0) + 1;
   saveUsers();
-  res.json({ success: true });
+  res.json({ success: true, reauthRequired: true });
 });
 
 app.post("/api/spawn", async (req, res) => {
@@ -1977,7 +2044,7 @@ app.get("/api/iceServers", (req, res) => {
   // endpoint here would let anyone who finds the URL harvest a relay credential without ever
   // logging in, not just members of this pod.
   const token = req.query.token;
-  if (!token || !sessions[token]) return res.status(401).json({ error: "Not authenticated" });
+  if (!sessionUsername(token)) return res.status(401).json({ error: "Not authenticated" });
   const servers = [{ urls: "stun:stun.l.google.com:19302" }];
   if (process.env.TURN_URL) {
     servers.push({ urls: process.env.TURN_URL, username: process.env.TURN_USERNAME || undefined, credential: process.env.TURN_PASSWORD || undefined });
@@ -2003,7 +2070,7 @@ app.post("/api/upload", (req, res) => {
   // Same auth gate as /api/iceServers -- an open upload endpoint on an internet-reachable app
   // would let anyone who finds the URL fill up disk with arbitrary files, not just pod members.
   const token = req.query.token;
-  if (!token || !sessions[token]) return res.status(401).json({ success: false, error: "Not authenticated" });
+  if (!sessionUsername(token)) return res.status(401).json({ success: false, error: "Not authenticated" });
   upload.single("file")(req, res, (err) => {
     if (err) return res.json({ success: false, error: err.code === "LIMIT_FILE_SIZE" ? "File too large (5MB max)." : "Upload failed." });
     if (!req.file) return res.json({ success: false, error: "Only PNG, JPG, or WEBP images are supported." });
@@ -2015,7 +2082,7 @@ app.post("/api/upload", (req, res) => {
 
 io.on("connection", (socket) => {
   const token = socket.handshake.auth && socket.handshake.auth.token;
-  const username = sessions[token];
+  const username = sessionUsername(token);
   if (!username) {
     socket.emit("authError", "Session expired — please log in again.");
     socket.disconnect(true);

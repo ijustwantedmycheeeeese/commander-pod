@@ -7,7 +7,10 @@ RUN npm install --production
 
 COPY server.js ./
 COPY index.html ./public/index.html
+COPY admin-server.js ./
+COPY admin-public ./admin-public
 
 EXPOSE 8087
+EXPOSE 9091
 
 CMD ["node", "server.js"]
