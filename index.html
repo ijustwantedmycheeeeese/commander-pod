@@ -473,7 +473,7 @@
           <li><strong>Attach To...</strong> (right-click, on equipment/auras or anything else) links a card to another permanent — shown as a small "⚭ Host Name" label on the attached card, and "🔗 Name" on the host listing what's attached to it. If the card's text has a real Equip cost, it's paid automatically from your mana pool; anything else (like an aura, whose cost was already paid casting it) attaches for free. A simple, common pattern of oracle text — "Equipped/Enchanted creature gets +X/+Y" and/or "...has [keyword]" — is automated: the bonus and any granted keyword actually apply to combat math and summoning-sickness checks (shown as a small blue +X/+Y badge and a keyword icon on the card), for as long as the attachment lasts. Anything more conditional than that plain wording isn't picked up and still needs a manual <strong>Manage Keywords</strong> grant. If the host leaves the battlefield, an attached Aura goes to the graveyard with it; anything else just becomes unattached. <strong>Detach</strong> is always free, for manual correction.</li>
           <li><strong>Take Control</strong> (right-click any permanent that isn't already yours) represents an effect like Control Magic — the card moves to your board and you can play it as your own; it's marked "stolen from X" and treated as freshly under your control (summoning sick again, like real Magic). <strong>Return Control</strong> hands it back to its real owner whenever the effect should end — nothing tracks that duration automatically, same as everything else this app doesn't automate.</li>
           <li><strong>Create Copy</strong> (right-click any permanent) represents an effect like Clone — makes you a fresh token sharing that card's current printed name/type/P-T/text/keywords, not its counters, attachments, or any equipment bonus (matching how a real copy effect works). Fires that card's own "enters the battlefield" trigger if it has one, same as any other new permanent. Blocked on an opponent's face-down card, so it can't be used to peek at something hidden.</li>
-          <li>Life at 0 or below, or 21+ combat damage from a single commander, <strong>eliminates</strong> a player — their board stays on the table (frozen, not removed) and they're taken out of the turn order for the rest of the game, but they can keep watching by switching board tabs. Once only one player is left standing, the game ends and everyone sees a win screen (a simultaneous knockout of everyone remaining ends in a draw instead).</li>
+          <li>Life at 0 or below, 21+ combat damage from a single commander, or 10+ poison, <strong>eliminates</strong> a player — their board stays on the table (frozen, not removed) and they're taken out of the turn order for the rest of the game, but they can keep watching by switching board tabs. Once only one player is left standing, the game ends and everyone sees a win screen (a simultaneous knockout of everyone remaining ends in a draw instead) — leaving the table counts toward that too, not just elimination. <strong>Concede</strong> (⚙ Menu) does the same thing voluntarily, for when you know you're out and don't want to wait for it to happen — different from <strong>Leave Table</strong>, which actually removes your seat instead of just marking you eliminated.</li>
           <li>Cards get a brief glow/pop-in when they enter the battlefield and fade out when they leave, attacking/blocking creatures pulse red/blue during combat, damage shows as a floating number (or a red flash on a player's row when it's life loss), and casting a spell gives it a quick golden pulse.</li>
           <li><strong>Free Cast (no cost)</strong> (right-click a hand card) represents an effect like Cascade or Through the Breach — casts it without paying its mana cost or checking whose turn it is, straight onto the stack like any other cast. A manual tool for whatever already-resolved effect earned it; nothing verifies you actually earned it.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
@@ -601,6 +601,7 @@
           <button class="secondary" onclick="openDeckEditor()">Deck Editor</button>
           <button class="secondary" onclick="openHelpModal()">? Help</button>
           <button class="secondary" onclick="openBugReportModal()" title="Copy diagnostic info to report a bug">🐛 Bug Report</button>
+          <button class="danger" onclick="concede()" title="Marks you eliminated -- your board stays on the table, you can keep watching, and the game continues for everyone else">Concede</button>
           <button class="secondary" onclick="showMainMenu()">Leave Table</button>
           <button class="secondary" onclick="logout()">Log Out</button>
         </div>
@@ -2113,6 +2114,10 @@
 
     function triggerClear() {
       if (confirm("Start a new game? This reshuffles everything back into libraries and resets life, mana, tax, and turn order.")) socket.emit("clearBoard");
+    }
+
+    function concede() {
+      if (confirm("Concede? Your board stays on the table and you can keep watching, but you're out of the turn order for the rest of this game.")) socket.emit("concede");
     }
 
     // ---------------- log / chat ----------------
