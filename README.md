@@ -1,4 +1,4 @@
-# Commander Pod
+# Archon
 
 A self-hosted multiplayer Commander/EDH table: accounts, persistent decks, zone-based board with auto-layout, turn structure, mana tracking, basic combat, chat, and experimental peer-to-peer voice.
 
@@ -19,7 +19,7 @@ Game/account data (users, saved decks, and an archive of every card looked up �
 
 Voice chat is peer-to-peer WebRTC. With just public STUN (the default), two players can only connect directly, which fails whenever a router's NAT gets in the way — this is why voice chat doesn't work for anyone outside your own network. The stack includes a self-hosted `coturn` relay to fix that, but it needs two things set before it'll actually work:
 
-1. **Environment variables** on the stack (Portainer will prompt for these since they're required, no defaults): `TURN_EXTERNAL_IP` (your server's public IP or a hostname that resolves to it) and `TURN_PASSWORD` (anything — it's just for the relay, not a user account). `TURN_USERNAME` defaults to `commanderpod` if you don't set it.
+1. **Environment variables** on the stack (Portainer will prompt for these since they're required, no defaults): `TURN_EXTERNAL_IP` (your server's public IP or a hostname that resolves to it) and `TURN_PASSWORD` (anything — it's just for the relay, not a user account). `TURN_USERNAME` defaults to `archon` if you don't set it.
 2. **Port forwarding on your router**, forwarded to whatever machine runs the stack: **UDP/TCP 3478** (the TURN server itself) and **UDP 49160–49200** (the relay's dynamically-allocated media ports). This is a real caveat if you're using a Cloudflare Tunnel to expose the app itself: a plain Cloudflare Tunnel proxies HTTP(S), not arbitrary UDP, so TURN traffic needs to reach your network directly through your router — it can't ride along through the tunnel the way the web app does.
 
 If those aren't set, voice chat still works fine for players on the same network, and silently falls back to same-network-only otherwise (no error, it just won't connect).
@@ -45,7 +45,7 @@ Existing accounts from before this feature was added are auto-approved on first 
 Optional, off by default. Set `NTFY_TOPIC` on the `mtg-table` service and it'll send a push notification (via [ntfy](https://ntfy.sh)) every time someone registers and needs approval — this reaches you over the regular internet, so it works even when you're not on your tailnet; only actually approving the account needs you to reach the admin panel above.
 
 1. Install the ntfy app ([iOS](https://apps.apple.com/us/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)), or just use a browser at `https://ntfy.sh/<your-topic>`.
-2. Pick a topic name that's hard to guess (e.g. `commanderpod-approvals-x7q2m`) — anyone who knows it can also read or post to it, since ntfy topics aren't otherwise access-controlled.
+2. Pick a topic name that's hard to guess (e.g. `archon-approvals-x7q2m`) — anyone who knows it can also read or post to it, since ntfy topics aren't otherwise access-controlled.
 3. Subscribe to that topic name in the app.
 4. Set `NTFY_TOPIC` to that same name as an environment variable on the `mtg-table` service (Portainer will prompt for it like the other variables above, but it's optional — leave it blank to disable).
 
