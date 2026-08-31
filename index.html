@@ -27,10 +27,10 @@
     button.mini-btn:hover, .mini-btn:hover { background: #45403a; }
     .flex-row { display: flex; gap: 8px; align-items: center; }
 
-    #auth-screen { position: fixed; inset: 0; background: #0a0806; display: flex; align-items: center; justify-content: center; z-index: 500; }
-    #auth-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 24px; width: 320px; box-shadow: 0 0 40px rgba(212,175,55,0.08); }
-    #auth-box input { width: 100%; margin-bottom: 8px; }
-    #auth-error { color: #f87171; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+    #auth-screen, #register-screen { position: fixed; inset: 0; background: #0a0806; display: flex; align-items: center; justify-content: center; z-index: 500; }
+    #auth-box, #register-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 24px; width: 320px; box-shadow: 0 0 40px rgba(212,175,55,0.08); }
+    #auth-box input, #register-box input { width: 100%; margin-bottom: 8px; }
+    #auth-error, #register-error { color: #f87171; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
 
     #app-root { display: none; flex-direction: column; height: 100vh; }
 
@@ -241,10 +241,24 @@
       <input type="password" id="auth-password" placeholder="Password">
       <div id="auth-error"></div>
       <div class="flex-row">
-        <button onclick="submitAuth('login')" style="flex:1;">Log In</button>
-        <button onclick="submitAuth('register')" class="secondary" style="flex:1;">Register</button>
+        <button onclick="submitAuth()" style="flex:1;">Log In</button>
+        <button onclick="showRegisterScreen()" class="secondary" style="flex:1;">Register</button>
       </div>
-      <p style="font-size:11px;color:#8a7a55;margin-top:12px;">New here? Pick a username and password and hit Register.</p>
+      <p style="font-size:11px;color:#8a7a55;margin-top:12px;">New here? Hit Register to create an account.</p>
+    </div>
+  </div>
+
+  <div id="register-screen" style="display:none;">
+    <div id="register-box">
+      <h2 class="mtg-title" style="margin-top:0;">Create Account</h2>
+      <input type="text" id="register-username" placeholder="Username">
+      <input type="password" id="register-password" placeholder="Password">
+      <div id="register-error"></div>
+      <div class="flex-row">
+        <button onclick="submitRegister()" style="flex:1;">Create Account</button>
+        <button onclick="showLoginScreen()" class="secondary" style="flex:1;">Back to Login</button>
+      </div>
+      <p style="font-size:11px;color:#8a7a55;margin-top:12px;">Already have an account? Go back and log in.</p>
     </div>
   </div>
 
@@ -769,25 +783,60 @@
       socket.connect();
     }
 
-    async function submitAuth(mode) {
+    async function submitAuth() {
       const username = document.getElementById("auth-username").value.trim();
       const password = document.getElementById("auth-password").value;
       const errEl = document.getElementById("auth-error");
+      errEl.style.color = "";
       errEl.innerText = "";
       if (!username || !password) { errEl.innerText = "Enter a username and password."; return; }
       try {
-        const res = await fetch("/api/" + mode, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+        const res = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
         const data = await res.json();
-        if (data.success && data.pending) {
-          // Registered, but there's no session token -- new accounts wait for admin approval
-          // before they can actually log in (see /api/register). Nothing to connect to yet.
-          errEl.style.color = "#4ade80";
-          errEl.innerText = data.message || "Account created — waiting on admin approval.";
-        } else if (data.success) {
+        if (data.success) {
           localStorage.setItem("mtgToken", data.token);
           connectWithToken(data.token);
         } else {
-          errEl.style.color = "";
+          errEl.innerText = data.error || "Something went wrong.";
+        }
+      } catch (e) {
+        errEl.innerText = "Could not reach server.";
+      }
+    }
+
+    function showRegisterScreen() {
+      document.getElementById("auth-screen").style.display = "none";
+      document.getElementById("register-screen").style.display = "flex";
+      document.getElementById("register-username").value = "";
+      document.getElementById("register-password").value = "";
+      const errEl = document.getElementById("register-error");
+      errEl.style.color = "";
+      errEl.innerText = "";
+      document.getElementById("register-username").focus();
+    }
+
+    function showLoginScreen() {
+      document.getElementById("register-screen").style.display = "none";
+      document.getElementById("auth-screen").style.display = "flex";
+    }
+
+    async function submitRegister() {
+      const username = document.getElementById("register-username").value.trim();
+      const password = document.getElementById("register-password").value;
+      const errEl = document.getElementById("register-error");
+      errEl.style.color = "";
+      errEl.innerText = "";
+      if (!username || !password) { errEl.innerText = "Enter a username and password."; return; }
+      try {
+        const res = await fetch("/api/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+        const data = await res.json();
+        if (data.success && data.pending) {
+          // No session token -- new accounts wait for admin approval before they can log in
+          // (see /api/register). Prefill the login screen so trying to log in now is one click away.
+          errEl.style.color = "#4ade80";
+          errEl.innerText = data.message || "Account created — waiting on admin approval.";
+          document.getElementById("auth-username").value = username;
+        } else {
           errEl.innerText = data.error || "Something went wrong.";
         }
       } catch (e) {
