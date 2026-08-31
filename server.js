@@ -1423,6 +1423,32 @@ function pushToStack(lobby, card, casterId) {
   fireGlobalTrigger(lobby, "youCastSpell", casterId);
 }
 
+// The single choke point for "a card in hand is being cast." A target-requiring instant/sorcery
+// (SPELL_ABILITIES with requiresTarget) gets its target locked in as PART OF casting -- exactly
+// like real Magic, and exactly like this file's existing pattern for triggered abilities (see
+// fireTrigger just below) -- rather than being pushed to the stack immediately and only prompted
+// for a target once it resolves (the bug this replaces: a cast instant would sit on the stack with
+// no visible sign it needed a target at all, since the prompt didn't fire until resolution, which
+// could be turns later or never come up before the game moved on). The card stays in hand until a
+// target is chosen; only then does it actually go on the stack, with its target already resolved.
+// Everything else (untargeted spells, permanents, lands never reach this at all) is unaffected.
+function castSpell(lobby, card, casterId, logSuffix) {
+  if (isInstantOrSorcery(card.type)) {
+    const spellAbility = getSpellAbility(card.name);
+    if (spellAbility && spellAbility.requiresTarget) {
+      queueTargetChoice(lobby, {
+        kind: "castSpell", controllerId: casterId, spellCard: card, sourceCard: card,
+        label: spellAbility.label, effects: spellAbility.effects, targetKind: spellAbility.targetKind,
+        logSuffix: logSuffix || ""
+      });
+      return;
+    }
+  }
+  pushToStack(lobby, card, casterId);
+  const p = lobby.players[casterId];
+  if (p) pushLog(lobby, `${p.name} cast ${card.name || "a spell"}${logSuffix || ""}`);
+}
+
 // Pushes a triggered ability onto the stack -- deliberately NOT added to lobby.cards, since it
 // isn't a real card (no broadcastCard/cardRemove bookkeeping needed). Shaped to satisfy the
 // client's existing stack-item template (img/name/owner) with zero new client fields required.
@@ -1603,19 +1629,13 @@ function resolveStackTop(lobby) {
     const card = item;
     const owner = lobby.players[card.owner];
     if (isInstantOrSorcery(card.type)) {
-      const spellAbility = getSpellAbility(card.name);
-      if (spellAbility && spellAbility.requiresTarget) {
-        // The spell is already off the stack (popped above) but not yet resolved -- it "hovers"
-        // here, resolved-but-pending, exactly like a target-requiring triggered ability does,
-        // until its controller picks a target. finishStackTail below still needs to run (the stack
-        // itself IS shorter now), which is why this falls through to it instead of returning early.
-        queueTargetChoice(lobby, { kind: "spell", controllerId: card.owner, spellCard: card, sourceCard: card, label: spellAbility.label, effects: spellAbility.effects, targetKind: spellAbility.targetKind });
-        if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} is resolving -- choosing a target`);
-      } else {
-        if (spellAbility) executeSpellEffectsNow(lobby, card, spellAbility.effects);
-        sendToGraveyardInternal(lobby, card);
-        if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
-      }
+      // A target-requiring spell already had its target locked in at CAST time (see castSpell) --
+      // the chosen target is baked into card._resolvedSpellEffects, so there's nothing left to
+      // prompt for here. Falls back to the plain SPELL_ABILITIES effects for an untargeted spell.
+      const effects = card._resolvedSpellEffects || (getSpellAbility(card.name) || {}).effects;
+      if (effects) executeSpellEffectsNow(lobby, card, effects);
+      sendToGraveyardInternal(lobby, card);
+      if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
     } else {
       card.zoneType = classifyType(card.type);
       card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
@@ -2454,8 +2474,7 @@ io.on("connection", (socket) => {
         pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
         fireEtbTriggers(lobby, card);
       } else {
-        pushToStack(lobby, card, socket.id);
-        pushLog(lobby, `${p.name} cast ${card.name || "a spell"}`);
+        castSpell(lobby, card, socket.id);
       }
       return;
     }
@@ -2488,8 +2507,7 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
       fireEtbTriggers(lobby, card);
     } else {
-      pushToStack(lobby, card, socket.id);
-      pushLog(lobby, `${p.name} cast ${card.name || "a spell"}`);
+      castSpell(lobby, card, socket.id);
     }
   });
 
@@ -2514,8 +2532,7 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} played ${card.name || "a card"} without paying its cost`);
       fireEtbTriggers(lobby, card);
     } else {
-      pushToStack(lobby, card, socket.id);
-      pushLog(lobby, `${p.name} cast ${card.name || "a spell"} without paying its mana cost`);
+      castSpell(lobby, card, socket.id, " without paying its mana cost");
     }
   });
 
@@ -2819,16 +2836,15 @@ io.on("connection", (socket) => {
     if (!resolved.ok) { socket.emit("actionError", resolved.error); return; }
     lobby.pendingTargetChoices.splice(idx, 1);
     const effects = entry.effects.map((e) => ({ ...e, chosenTargetId: targetId }));
-    if (entry.kind === "spell") {
-      // The spell itself already left the stack back in resolveStackTop -- this is the second half
-      // of its resolution, deferred until now because it needed a target. Executes its effects then
-      // sends it to the graveyard, exactly what resolveStackTop's instant/sorcery branch would have
-      // done immediately if no target had been required.
-      executeSpellEffectsNow(lobby, entry.spellCard, effects);
-      sendToGraveyardInternal(lobby, entry.spellCard);
-      const owner = lobby.players[entry.spellCard.owner];
-      if (owner) pushLog(lobby, `${owner.name}'s ${entry.spellCard.name || "spell"} resolved`);
-      finishStackTail(lobby);
+    if (entry.kind === "castSpell") {
+      // Target chosen as part of casting (matches real Magic, and fixes the actual bug -- the
+      // prompt now fires immediately when the spell is cast, not whenever it happens to resolve).
+      // The spell now actually goes on the stack, with its chosen target baked into
+      // _resolvedSpellEffects so resolveStackTop just runs them directly later, no second prompt.
+      entry.spellCard._resolvedSpellEffects = effects;
+      pushToStack(lobby, entry.spellCard, entry.controllerId);
+      const owner = lobby.players[entry.controllerId];
+      if (owner) pushLog(lobby, `${owner.name} cast ${entry.spellCard.name || "a spell"}${entry.logSuffix || ""}`);
     } else {
       pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: entry.label, effects });
     }
