@@ -161,7 +161,29 @@ const CARD_ABILITIES = {
   "ajani's pridemate": [{ trigger: "selfGainsLife", label: "Ajani's Pridemate — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
   // Real text has no further condition ("Whenever you cast a spell, you gain 1 life") -- no
   // simplification needed here, unlike most other narrowed entries in this table.
-  "contemplation": [{ trigger: "youCastSpell", label: "Contemplation — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }]
+  "contemplation": [{ trigger: "youCastSpell", label: "Contemplation — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  // Batch-generated from data/oracle-catalog.json via tools/scan-trigger-candidates.js -- each
+  // entry matched one of the exact simple phrasings above (single-clause draw/gain-life/+1-1-counter/
+  // destroy-exile-bounce-tap-target triggers) against real, verified Scryfall oracle text, so no
+  // hand-verification of individual card text was needed the way the earlier hand-picked examples
+  // required. Regenerate/extend this batch by re-running that script as the card pool grows.
+  "proft's eidetic memory": [{ trigger: "etb", label: "Proft's Eidetic Memory — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "the lion-turtle": [{ trigger: "etb", label: "The Lion-Turtle — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  "venerated stormsinger": [{ trigger: "deathYouControl", label: "Venerated Stormsinger — each opponent loses 1 life, gain 1 life", effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }, { type: "gainLife", target: "controller", amount: 1 }] }],
+  "voice of the blessed": [{ trigger: "selfGainsLife", label: "Voice of the Blessed — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "essence channeler": [{ trigger: "selfGainsLife", label: "Essence Channeler — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "wall of limbs": [{ trigger: "selfGainsLife", label: "Wall of Limbs — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "exemplar of light": [{ trigger: "selfGainsLife", label: "Exemplar of Light — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "bloodbond vampire": [{ trigger: "selfGainsLife", label: "Bloodbond Vampire — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "blood researcher": [{ trigger: "selfGainsLife", label: "Blood Researcher — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "bloodthirsty aerialist": [{ trigger: "selfGainsLife", label: "Bloodthirsty Aerialist — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "fiendish panda": [{ trigger: "selfGainsLife", label: "Fiendish Panda — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "pest mascot": [{ trigger: "selfGainsLife", label: "Pest Mascot — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "celestial unicorn": [{ trigger: "selfGainsLife", label: "Celestial Unicorn — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "elenda's hierophant": [{ trigger: "selfGainsLife", label: "Elenda's Hierophant — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "scion of the swarm": [{ trigger: "selfGainsLife", label: "Scion of the Swarm — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "twinblade paladin": [{ trigger: "selfGainsLife", label: "Twinblade Paladin — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "aerith gainsborough": [{ trigger: "selfGainsLife", label: "Aerith Gainsborough — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -176,7 +198,105 @@ function getAutomatedAbilities(cardName, triggerType) {
 const ACTIVATED_ABILITIES = {
   "archivist": [{ cost: { tap: true }, label: "Archivist — {T}: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "alchemist's apprentice": [{ cost: { sacrifice: true }, label: "Alchemist's Apprentice — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
-  "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }]
+  "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  // Batch-generated from data/oracle-catalog.json via tools/scan-trigger-candidates.js -- see the
+  // matching comment above CARD_ABILITIES's generated block for how these were produced/verified.
+  "campfire": [{ cost: { mana: "{1}", tap: true }, label: "Campfire — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "marketback walker": [{ cost: { mana: "{4}" }, label: "Marketback Walker — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "zarichi tiger": [{ cost: { mana: "{1}{W}", tap: true }, label: "Zarichi Tiger — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "league guildmage": [{ cost: { mana: "{3}{U}", tap: true }, label: "League Guildmage — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "fire sages": [{ cost: { mana: "{1}{R}{R}" }, label: "Fire Sages — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "phantom nantuko": [{ cost: { tap: true }, label: "Phantom Nantuko — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "benalish heralds": [{ cost: { mana: "{3}{U}", tap: true }, label: "Benalish Heralds — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "brass secretary": [{ cost: { mana: "{2}", sacrifice: true }, label: "Brass Secretary — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "gingerbrute": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Gingerbrute — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  "swarm guildmage": [{ cost: { mana: "{1}{G}", tap: true }, label: "Swarm Guildmage — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "sledding otter-penguin": [{ cost: { mana: "{3}" }, label: "Sledding Otter-Penguin — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "brindle boar": [{ cost: { sacrifice: true }, label: "Brindle Boar — gain 4 life", effects: [{ type: "gainLife", target: "controller", amount: 4 }] }],
+  "tangletrove kelp": [{ cost: { mana: "{2}", sacrifice: true }, label: "Tangletrove Kelp — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "qala, ajani's pridemate": [{ cost: { mana: "{3}{W}" }, label: "Qala, Ajani's Pridemate — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "zacama, primal calamity": [{ cost: { mana: "{2}{W}" }, label: "Zacama, Primal Calamity — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  "marble chalice": [{ cost: { tap: true }, label: "Marble Chalice — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "cryptic trilobite": [{ cost: { mana: "{1}", tap: true }, label: "Cryptic Trilobite — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "jungle delver": [{ cost: { mana: "{3}{G}" }, label: "Jungle Delver — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "big bertha": [{ cost: { mana: "{1}{G}", tap: true }, label: "Big Bertha — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "clockwork dragon": [{ cost: { mana: "{3}" }, label: "Clockwork Dragon — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "jayemdae tome": [{ cost: { mana: "{4}", tap: true }, label: "Jayemdae Tome — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "treasure trove": [{ cost: { mana: "{2}{U}{U}" }, label: "Treasure Trove — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "ezzaroot channeler": [{ cost: { tap: true }, label: "Ezzaroot Channeler — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "soulmender": [{ cost: { tap: true }, label: "Soulmender — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "unholy officiant": [{ cost: { mana: "{4}{W}" }, label: "Unholy Officiant — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "mercurial chemister": [{ cost: { mana: "{U}", tap: true }, label: "Mercurial Chemister — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
+  "marker beetles": [{ cost: { mana: "{2}", sacrifice: true }, label: "Marker Beetles — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "walking ballista": [{ cost: { mana: "{4}" }, label: "Walking Ballista — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "starlight invoker": [{ cost: { mana: "{7}{W}" }, label: "Starlight Invoker — gain 5 life", effects: [{ type: "gainLife", target: "controller", amount: 5 }] }],
+  "oscorp research team": [{ cost: { mana: "{6}{U}" }, label: "Oscorp Research Team — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
+  "silent attendant": [{ cost: { tap: true }, label: "Silent Attendant — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "bottle gnomes": [{ cost: { sacrifice: true }, label: "Bottle Gnomes — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  "combat courier": [{ cost: { mana: "{2}", sacrifice: true }, label: "Combat Courier — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "crystalline crawler": [{ cost: { tap: true }, label: "Crystalline Crawler — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "third path savant": [{ cost: { mana: "{7}" }, label: "Third Path Savant — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
+  "chronomaton": [{ cost: { mana: "{1}", tap: true }, label: "Chronomaton — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "oath of lim-dûl": [{ cost: { mana: "{B}{B}" }, label: "Oath of Lim-Dûl — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "eidolon of philosophy": [{ cost: { mana: "{6}{U}", sacrifice: true }, label: "Eidolon of Philosophy — draw 3 cards", effects: [{ type: "drawCards", amount: 3 }] }],
+  "silversmote ghoul": [{ cost: { mana: "{1}{B}", sacrifice: true }, label: "Silversmote Ghoul — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "the great mound": [{ cost: { mana: "{6}", tap: true }, label: "The Great Mound — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "clockwork hydra": [{ cost: { tap: true }, label: "Clockwork Hydra — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "energizer": [{ cost: { mana: "{2}", tap: true }, label: "Energizer — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "tender wildguide": [{ cost: { tap: true }, label: "Tender Wildguide — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "tower of eons": [{ cost: { mana: "{8}", tap: true }, label: "Tower of Eons — gain 10 life", effects: [{ type: "gainLife", target: "controller", amount: 10 }] }],
+  "obelisk of alara": [{ cost: { mana: "{1}{W}", tap: true }, label: "Obelisk of Alara — gain 5 life", effects: [{ type: "gainLife", target: "controller", amount: 5 }] }],
+  "senate guildmage": [{ cost: { mana: "{W}", tap: true }, label: "Senate Guildmage — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "toadstool admirer": [{ cost: { mana: "{3}{G}" }, label: "Toadstool Admirer — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "yavimaya elder": [{ cost: { mana: "{2}", sacrifice: true }, label: "Yavimaya Elder — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "overgrown arch": [{ cost: { tap: true }, label: "Overgrown Arch — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "slinking skirge": [{ cost: { mana: "{2}", sacrifice: true }, label: "Slinking Skirge — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "tanglebloom": [{ cost: { mana: "{1}", tap: true }, label: "Tanglebloom — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "tough cookie": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Tough Cookie — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  "arcanis the omnipotent": [{ cost: { tap: true }, label: "Arcanis the Omnipotent — draw 3 cards", effects: [{ type: "drawCards", amount: 3 }] }],
+  "hungry megasloth": [{ cost: { mana: "{2}", tap: true }, label: "Hungry Megasloth — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "scorn-blade berserker": [{ cost: { mana: "{1}", sacrifice: true }, label: "Scorn-Blade Berserker — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "juju bubble": [{ cost: { mana: "{2}" }, label: "Juju Bubble — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "niv-mizzet, the firemind": [{ cost: { tap: true }, label: "Niv-Mizzet, the Firemind — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "shore keeper": [{ cost: { mana: "{7}{U}", tap: true, sacrifice: true }, label: "Shore Keeper — draw 3 cards", effects: [{ type: "drawCards", amount: 3 }] }],
+  "five hundred year diary": [{ cost: { mana: "{2}", sacrifice: true }, label: "Five Hundred Year Diary — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "grave-shell scarab": [{ cost: { mana: "{1}", sacrifice: true }, label: "Grave-Shell Scarab — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "parcel myr": [{ cost: { mana: "{2}", sacrifice: true }, label: "Parcel Myr — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "plague dogs": [{ cost: { mana: "{2}", sacrifice: true }, label: "Plague Dogs — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "spectral sailor": [{ cost: { mana: "{3}{U}" }, label: "Spectral Sailor — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "urza's blueprints": [{ cost: { tap: true }, label: "Urza's Blueprints — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "eriette's tempting apple": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Eriette's Tempting Apple — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  "skullmead cauldron": [{ cost: { tap: true }, label: "Skullmead Cauldron — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "ghost-lit redeemer": [{ cost: { mana: "{W}", tap: true }, label: "Ghost-Lit Redeemer — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "mystic archaeologist": [{ cost: { mana: "{3}{U}{U}" }, label: "Mystic Archaeologist — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
+  "fountain of youth": [{ cost: { mana: "{2}", tap: true }, label: "Fountain of Youth — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "heart warden": [{ cost: { mana: "{2}", sacrifice: true }, label: "Heart Warden — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "azure mage": [{ cost: { mana: "{3}{U}" }, label: "Azure Mage — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "enclave cryptologist": [{ cost: { tap: true }, label: "Enclave Cryptologist — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "rejuvenation chamber": [{ cost: { tap: true }, label: "Rejuvenation Chamber — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "dedicated martyr": [{ cost: { mana: "{W}", sacrifice: true }, label: "Dedicated Martyr — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  "molten hydra": [{ cost: { mana: "{1}{R}{R}" }, label: "Molten Hydra — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "verdant automaton": [{ cost: { mana: "{3}{G}" }, label: "Verdant Automaton — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "braidwood cup": [{ cost: { tap: true }, label: "Braidwood Cup — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "werefox bodyguard": [{ cost: { mana: "{1}{W}", sacrifice: true }, label: "Werefox Bodyguard — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  "illvoi galeblade": [{ cost: { mana: "{2}", sacrifice: true }, label: "Illvoi Galeblade — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "staff of domination": [{ cost: { mana: "{2}", tap: true }, label: "Staff of Domination — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "aether syphon": [{ cost: { mana: "{2}", tap: true }, label: "Aether Syphon — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "arcane encyclopedia": [{ cost: { mana: "{3}", tap: true }, label: "Arcane Encyclopedia — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "ruins recluse": [{ cost: { mana: "{3}{G}" }, label: "Ruins Recluse — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "endbringer": [{ cost: { mana: "{C}{C}", tap: true }, label: "Endbringer — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "hangarback walker": [{ cost: { mana: "{1}", tap: true }, label: "Hangarback Walker — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "tower of fortunes": [{ cost: { mana: "{8}", tap: true }, label: "Tower of Fortunes — draw 4 cards", effects: [{ type: "drawCards", amount: 4 }] }],
+  "clockwork vorrac": [{ cost: { tap: true }, label: "Clockwork Vorrac — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "scepter of insight": [{ cost: { mana: "{3}{U}", tap: true }, label: "Scepter of Insight — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "walking archive": [{ cost: { mana: "{2}{W}{U}" }, label: "Walking Archive — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "snapping voidcraw": [{ cost: { mana: "{3}{C}", tap: true }, label: "Snapping Voidcraw — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "stone haven medic": [{ cost: { mana: "{W}", tap: true }, label: "Stone Haven Medic — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "sarcomite myr": [{ cost: { mana: "{2}", sacrifice: true }, label: "Sarcomite Myr — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "triskaidekaphile": [{ cost: { mana: "{3}{U}" }, label: "Triskaidekaphile — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "red herring": [{ cost: { mana: "{2}", sacrifice: true }, label: "Red Herring — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "swarm shambler": [{ cost: { mana: "{1}", tap: true }, label: "Swarm Shambler — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  "ice cream kitty": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Ice Cream Kitty — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -2069,8 +2189,15 @@ io.on("connection", (socket) => {
 
     if (cost.tap) {
       if (card.tapped) { socket.emit("actionError", `${card.name} is already tapped.`); return; }
-      const hasHaste = effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "haste");
-      if (card.controllerSince === lobby.turn.turnNumber && !hasHaste) { socket.emit("actionError", `${card.name} has summoning sickness.`); return; }
+      // Summoning sickness (CR 302.6) only ever restricts CREATURES -- a plain artifact/other
+      // permanent with a {T} cost is never subject to it, same as the client's own isSummoningSick
+      // helper already correctly gates on zoneType. Missing this check here meant a same-turn
+      // artifact's tap ability was incorrectly blocked, caught via a Campfire ({1},{T}: gain 2 life)
+      // activation test.
+      if (card.zoneType === "creature") {
+        const hasHaste = effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "haste");
+        if (card.controllerSince === lobby.turn.turnNumber && !hasHaste) { socket.emit("actionError", `${card.name} has summoning sickness.`); return; }
+      }
     }
     let remainingMana = null;
     if (cost.mana) {
