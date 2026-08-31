@@ -3,14 +3,18 @@ version: '3.8'
 services:
   mtg-table:
     build: .
-    container_name: mtg_web_canvass
+    container_name: archon_web
     volumes:
+      # Volume name kept as mtg_data (not renamed to match the app) -- Compose would otherwise
+      # create a brand-new empty volume under the new name on next deploy, silently orphaning every
+      # existing account/deck/card-archive in an already-running stack. Purely an internal detail,
+      # never user-visible, so there's nothing to gain by renaming it and real data to lose.
       - mtg_data:/app/data
     ports:
       - "8087:8087"
     environment:
       - TURN_URL=turn:${TURN_EXTERNAL_IP:?set this to your server's public IP or hostname}:3478
-      - TURN_USERNAME=${TURN_USERNAME:-commanderpod}
+      - TURN_USERNAME=${TURN_USERNAME:-archon}
       - TURN_PASSWORD=${TURN_PASSWORD:?set a password for the TURN relay — used by voice chat only}
       # Optional -- leave unset to disable. Set NTFY_TOPIC to get a push notification (via the
       # ntfy app) whenever someone registers and needs admin approval. See the README for setup.
@@ -34,7 +38,7 @@ services:
   # something unrelated to this app entirely -- it'd have no network route to the admin panel at all.
   admin-panel:
     build: .
-    container_name: mtg_admin_panel
+    container_name: archon_admin
     command: ["node", "admin-server.js"]
     volumes:
       - mtg_data:/app/data
@@ -55,15 +59,15 @@ services:
   # See the README for the router port-forwarding this actually requires to work through a tunnel.
   coturn:
     image: coturn/coturn:latest
-    container_name: mtg_coturn
+    container_name: archon_coturn
     network_mode: host
     command: >
       -n
       --listening-port=3478
       --min-port=49160
       --max-port=49200
-      --realm=commanderpod
-      --user=${TURN_USERNAME:-commanderpod}:${TURN_PASSWORD:?set a password for the TURN relay — used by voice chat only}
+      --realm=archon
+      --user=${TURN_USERNAME:-archon}:${TURN_PASSWORD:?set a password for the TURN relay — used by voice chat only}
       --external-ip=${TURN_EXTERNAL_IP:?set this to your server's public IP or hostname}
       --no-cli
       --no-tls

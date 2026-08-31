@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Commander Sandbox</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>👑</text></svg>">
+  <title>Archon</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔱</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
   <style>
@@ -236,7 +236,7 @@
 
   <div id="auth-screen">
     <div id="auth-box">
-      <h2 class="mtg-title" style="margin-top:0;">Commander Pod</h2>
+      <h2 class="mtg-title" style="margin-top:0;">Archon</h2>
       <input type="text" id="auth-username" placeholder="Username">
       <input type="password" id="auth-password" placeholder="Password">
       <div id="auth-error"></div>
@@ -264,7 +264,10 @@
 
   <div id="main-menu">
     <div id="main-menu-box">
-      <h2 class="mtg-title">Commander Pod</h2>
+      <div class="flex-row" style="justify-content:space-between;align-items:center;">
+        <h2 class="mtg-title" style="margin:0;">Archon</h2>
+        <button class="secondary" id="music-mute-btn" onclick="toggleMusicMute()" title="Toggle lobby music">🎵 Music On</button>
+      </div>
       <div class="mm-section">
         <div class="flex-row">
           <input type="text" id="lobby-name-input" placeholder="Table name (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
@@ -335,7 +338,7 @@
   <div id="app-root">
     <div id="top-bar">
       <div class="flex-row">
-        <strong class="mtg-title">Commander Pod</strong>
+        <strong class="mtg-title">Archon</strong>
         <span id="spectator-badge" style="display:none;font-size:12px;color:#d4af37;border:1px solid #5a4423;border-radius:4px;padding:3px 8px;">👁 Spectating</span>
         <input type="text" id="cardSearch" placeholder="Search card to spawn..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)">
         <datalist id="cardSuggestions"></datalist>
@@ -883,6 +886,7 @@
       amSpectator = false;
       document.getElementById("app-root").style.display = "none";
       document.getElementById("main-menu").style.display = "flex";
+      startLobbyMusic();
     }
 
     function renderLobbyList(list) {
@@ -906,6 +910,7 @@
       document.getElementById("auth-screen").style.display = "flex";
       document.getElementById("app-root").style.display = "none";
       document.getElementById("main-menu").style.display = "none";
+      stopLobbyMusic();
     });
     socket.on("connect_error", () => {
       document.getElementById("auth-error").innerText = "Connection error — retrying...";
@@ -1049,6 +1054,7 @@
       document.getElementById("auth-screen").style.display = "none";
       document.getElementById("app-root").style.display = "none";
       document.getElementById("main-menu").style.display = "flex";
+      startLobbyMusic();
       renderDeckList(data.decks);
       myAccountAvatar = data.avatar || null;
       myAccountDefaultName = data.defaultName || null;
@@ -1072,6 +1078,7 @@
     socket.on("lobbyJoined", (data) => {
       document.getElementById("main-menu").style.display = "none";
       document.getElementById("app-root").style.display = "flex";
+      stopLobbyMusic();
 
       myId = data.myId;
       currentLobbyId = data.lobbyId;
@@ -2356,7 +2363,7 @@
 
     function generateBugReport() {
       const lines = [];
-      lines.push(`Commander Pod bug report — ${new Date().toString()}`);
+      lines.push(`Archon bug report — ${new Date().toString()}`);
       lines.push(`User: ${(players[myId] && players[myId].name) || "(not in a table)"} | myId: ${myId || "-"}`);
       lines.push(`Table: ${currentLobbyName || "(none)"} | lobbyId: ${currentLobbyId || "-"}`);
       lines.push(`Turn: started=${currentTurn.started} phase=${currentTurn.phase} turn#=${currentTurn.turnNumber}`);
@@ -2775,6 +2782,64 @@
       localStorage.setItem("mtgSoundMuted", soundMuted ? "true" : "false");
       const btn = document.getElementById("sound-mute-btn");
       if (btn) btn.innerText = soundMuted ? "🔇 Sound Off" : "🔊 Sound On";
+    }
+
+    // ---------------- lobby music ----------------
+    // Generative ambient background music (Web Audio API, same self-contained-file constraint as
+    // the sound cues above -- no music file to license/embed) that plays only on the Main Menu, not
+    // during an actual game (where the sound cues above are the relevant audio). A slow, sparse
+    // wandering melody over a fixed scale, re-scheduling itself one note at a time rather than a
+    // fixed loop, so it never sounds exactly the same twice.
+    let musicMuted = localStorage.getItem("mtgMusicMuted") === "true";
+    let musicTimer = null;
+    { const btn = document.getElementById("music-mute-btn"); if (btn) btn.innerText = musicMuted ? "🎵 Music Off" : "🎵 Music On"; }
+    const MUSIC_SCALE = [220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00]; // A3..A4, natural minor -- a modal, slightly melancholy fantasy feel
+    function ensureAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+      return audioCtx;
+    }
+    function playMusicNote(freq, startOffset, duration, vol) {
+      try {
+        const ctx = ensureAudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        const t0 = ctx.currentTime + startOffset;
+        gain.gain.setValueAtTime(0, t0);
+        gain.gain.linearRampToValueAtTime(vol, t0 + 0.6); // soft attack -- a pad, not a pluck
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t0);
+        osc.stop(t0 + duration + 0.1);
+      } catch (e) {}
+    }
+    function scheduleNextMusicNote() {
+      if (!musicMuted) {
+        const idx = Math.floor(Math.random() * MUSIC_SCALE.length);
+        playMusicNote(MUSIC_SCALE[idx], 0, 2.4, 0.045);
+        // Occasional soft harmony a third or fifth away, for texture -- not every note.
+        if (Math.random() < 0.3) {
+          const harmonyIdx = (idx + (Math.random() < 0.5 ? 2 : 4)) % MUSIC_SCALE.length;
+          playMusicNote(MUSIC_SCALE[harmonyIdx], 0.08, 2.4, 0.028);
+        }
+      }
+      musicTimer = setTimeout(scheduleNextMusicNote, 1500 + Math.random() * 1300); // 1.5-2.8s between notes
+    }
+    function startLobbyMusic() {
+      if (musicTimer) return; // already running
+      scheduleNextMusicNote();
+    }
+    function stopLobbyMusic() {
+      if (musicTimer) { clearTimeout(musicTimer); musicTimer = null; }
+    }
+    function toggleMusicMute() {
+      musicMuted = !musicMuted;
+      localStorage.setItem("mtgMusicMuted", musicMuted ? "true" : "false");
+      const btn = document.getElementById("music-mute-btn");
+      if (btn) btn.innerText = musicMuted ? "🎵 Music Off" : "🎵 Music On";
     }
 
     // Cloned into #fx-layer (never touched by renderVisibleBoard's wipe-and-rebuild) so the

@@ -87,7 +87,7 @@ function notifyNewAccountPending(username) {
   if (!NTFY_TOPIC) return;
   fetch(NTFY_SERVER.replace(/\/$/, "") + "/" + NTFY_TOPIC, {
     method: "POST",
-    headers: { "Title": "Commander Pod", "Tags": "bust_in_silhouette" },
+    headers: { "Title": "Archon", "Tags": "bust_in_silhouette" },
     body: `New account waiting on approval: ${username}`,
   }).catch((e) => console.error("ntfy notification failed:", e.message));
 }
@@ -1967,7 +1967,7 @@ async function resolveCardNames(names) {
     const identifiers = batch.map((n) => ({ name: n }));
     const r = await fetch("https://api.scryfall.com/cards/collection", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": "CommanderVTT/8.0" },
+      headers: { "Content-Type": "application/json", "User-Agent": "Archon/1.0" },
       body: JSON.stringify({ identifiers })
     });
     const json = await r.json();
@@ -2062,7 +2062,7 @@ app.post("/api/spawn", async (req, res) => {
     const cached = cardArchive[archiveKey(name)];
     if (cached) return res.json({ success: true, ...cached });
     const url = "https://api.scryfall.com/cards/named?fuzzy=" + encodeURIComponent(name);
-    const r = await fetch(url, { headers: { "User-Agent": "CommanderVTT/8.0", "Accept": "application/json" } });
+    const r = await fetch(url, { headers: { "User-Agent": "Archon/1.0", "Accept": "application/json" } });
     const json = await r.json();
     const fields = extractCardFields(json);
     if (!fields.img) return res.json({ success: false });
@@ -3082,7 +3082,7 @@ io.on("connection", (socket) => {
       if (host === "archidekt.com") {
         const m = url.pathname.match(/\/decks\/(\d+)/);
         if (!m) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
-        const r = await fetch(`https://archidekt.com/api/decks/${m[1]}/`, { headers: { "User-Agent": "CommanderVTT/8.0" } });
+        const r = await fetch(`https://archidekt.com/api/decks/${m[1]}/`, { headers: { "User-Agent": "Archon/1.0" } });
         if (!r.ok) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
         const data = await r.json();
         (data.cards || []).forEach((entry) => {

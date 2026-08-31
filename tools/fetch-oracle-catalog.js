@@ -16,13 +16,13 @@ const OUT_FILE = path.join(OUT_DIR, "oracle-catalog.json");
 
 async function main() {
   console.log("Fetching bulk-data listing...");
-  const listRes = await fetch("https://api.scryfall.com/bulk-data", { headers: { "User-Agent": "CommanderPod-tools/1.0", "Accept": "application/json" } });
+  const listRes = await fetch("https://api.scryfall.com/bulk-data", { headers: { "User-Agent": "Archon-tools/1.0", "Accept": "application/json" } });
   const listing = await listRes.json();
   const entry = listing.data.find((d) => d.type === "oracle_cards");
   if (!entry) throw new Error("oracle_cards entry not found in bulk-data listing");
   console.log(`Downloading ${entry.name} (${(entry.compressed_size / 1024 / 1024).toFixed(1)} MB compressed)...`);
 
-  const fileRes = await fetch(entry.download_uri || entry.jsonl_download_uri, { headers: { "User-Agent": "CommanderPod-tools/1.0" } });
+  const fileRes = await fetch(entry.download_uri || entry.jsonl_download_uri, { headers: { "User-Agent": "Archon-tools/1.0" } });
   const buf = Buffer.from(await fileRes.arrayBuffer());
   const isGzip = buf[0] === 0x1f && buf[1] === 0x8b;
   const raw = isGzip ? zlib.gunzipSync(buf) : buf;

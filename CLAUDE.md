@@ -2,7 +2,7 @@
 
 ## Project
 
-Commander Pod — a self-hosted multiplayer Commander/EDH table (`server.js` + Express/Socket.IO backend, single-file `index.html` frontend). Solo hobby project for a small trusted pod, not a public/production service.
+Archon (formerly "Commander Pod") — a self-hosted multiplayer Commander/EDH table (`server.js` + Express/Socket.IO backend, single-file `index.html` frontend). Solo hobby project for a small trusted pod, not a public/production service.
 
 ## Standing workflow permission
 
