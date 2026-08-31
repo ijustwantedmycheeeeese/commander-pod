@@ -25,6 +25,13 @@ services:
   #   tailscale serve --bg --https=8443 http://127.0.0.1:9091
   # (NOT `tailscale funnel`, which would expose it to the public internet -- the whole point here is
   # that this panel can approve/delete accounts, so it needs to stay off any public-facing surface.)
+  #
+  # Also deliberately on its OWN Docker network (admin-only below), not the default one mtg-table
+  # sits on -- the two containers only ever need to share the mtg_data volume, never the network, so
+  # there's no reason for mtg-table to be able to reach admin-panel:9091 by container name/IP even
+  # though the host-only port binding above already blocks reaching it from outside the host. This
+  # closes that path in case mtg-table (the actual internet-facing container) is ever compromised by
+  # something unrelated to this app entirely -- it'd have no network route to the admin panel at all.
   admin-panel:
     build: .
     container_name: mtg_admin_panel
@@ -36,6 +43,8 @@ services:
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:?set a username for the admin panel}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set a password for the admin panel}
+    networks:
+      - admin-only
     restart: unless-stopped
 
   # Relays voice chat between players who aren't on the same network — without this, WebRTC can
@@ -63,3 +72,8 @@ services:
 
 volumes:
   mtg_data:
+
+networks:
+  # admin-panel's dedicated network -- see the comment on that service above. Not referenced by
+  # mtg-table or coturn, so nothing else in the stack can reach admin-panel over the network.
+  admin-only:

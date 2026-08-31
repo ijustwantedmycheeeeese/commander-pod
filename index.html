@@ -1444,7 +1444,7 @@
           if (cmd) {
             const onBattlefield = !!(cmd.battlefieldId && allCards[cmd.battlefieldId]);
             html += `<div class="cmdr-slot">
-              <img src="${cmd.img}" class="cmdr-thumb">
+              <img src="${escapeHtml(cmd.img || "")}" class="cmdr-thumb">
               <div class="cmdr-name">${escapeHtml(cmd.name)}</div>
               <div style="font-size:10px;">${manaCostPips(cmd.manaCost)}</div>
               <div class="cmdr-tax">Tax: ${cmd.tax}${cmd.tax ? ` (+{${cmd.tax}} to cast)` : ""}</div>`;
@@ -1581,13 +1581,13 @@
           const blkName = blk && !blk.faceDown ? escapeHtml(blk.name || "") : "Face-down blocker";
           const blkImg = blk && !blk.faceDown ? (blk.img || "") : "";
           const blkPT = effectivePT(blk);
-          rightSide = `<img src="${blkImg}" class="cv-thumb"><div class="cv-name">${blkName} (${blkPT})</div>`;
+          rightSide = `<img src="${escapeHtml(blkImg)}" class="cv-thumb"><div class="cv-name">${blkName} (${blkPT})</div>`;
         } else {
           const defender = players[c.attackers[atkId]];
           rightSide = `<div class="cv-name cv-unblocked">${defender ? escapeHtml(defender.name) : "?"} (unblocked)</div>`;
         }
         return `<div class="cv-row">
-          <div class="cv-side"><img src="${atkImg}" class="cv-thumb"><div class="cv-name">${atkName} (${atkPT})</div></div>
+          <div class="cv-side"><img src="${escapeHtml(atkImg)}" class="cv-thumb"><div class="cv-name">${atkName} (${atkPT})</div></div>
           <span class="cv-vs">→</span>
           <div class="cv-side">${rightSide}</div>
         </div>`;
@@ -1616,7 +1616,7 @@
           const targetableStyle = pendingTargetChoiceId ? "cursor:pointer;outline:2px solid #d4af37;" : "";
           const targetableClick = pendingTargetChoiceId ? `chooseTargetFor('${c.id}')` : "";
           return `<div class="stack-item${i === 0 ? " stack-top" : ""}" style="${targetableStyle}" onclick="${targetableClick}" title="${pendingTargetChoiceId ? "Click to target this" : ""}">
-            <img src="${c.img || ''}" class="zone-card-thumb" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')" title="Click to see the full card">
+            <img src="${escapeHtml(c.img || '')}" class="zone-card-thumb" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')" title="Click to see the full card">
             <div class="zone-card-name" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
             <button class="mini-btn" style="background:#7a1f1f;" onclick="event.stopPropagation();counterStackItem('${c.id}')" title="${counterTitle}">Counter</button>
           </div>`;
@@ -1637,10 +1637,15 @@
     function passPriority() { socket.emit("passPriority"); }
     function counterStackItem(cardId) { socket.emit("counterStackItem", cardId); }
 
+    // Deliberately NOT the old div.innerText/innerHTML round-trip -- that only escapes &, <, > (the
+    // characters that matter in HTML text content) and silently leaves " and ' untouched, which is
+    // exactly wrong for every call site here that interpolates into an HTML ATTRIBUTE (src="...",
+    // title="...", an onclick="...('...')" string) rather than element text. An unescaped quote in
+    // attribute position lets the value break out of the attribute entirely.
+    const ESCAPE_HTML_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
     function escapeHtml(s) {
-      const d = document.createElement("div");
-      d.innerText = s == null ? "" : s;
-      return d.innerHTML;
+      if (s == null) return "";
+      return String(s).replace(/[&<>"']/g, (ch) => ESCAPE_HTML_MAP[ch]);
     }
     function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
@@ -1840,7 +1845,7 @@
       const hand = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "hand");
       document.getElementById("discard-modal-grid").innerHTML = hand.map((c) => `
         <div class="discard-card-pick ${selectedDiscardIds.has(c.id) ? "picked" : ""}" onclick="toggleDiscardPick('${c.id}')">
-          <img src="${c.img || ""}" alt="${escapeHtml(c.name || "")}">
+          <img src="${escapeHtml(c.img || "")}" alt="${escapeHtml(c.name || "")}">
           <div class="discard-card-name">${escapeHtml(c.name || "Unknown")}</div>
         </div>
       `).join("");
@@ -2028,7 +2033,7 @@
         body.innerHTML = candidates.map((c) => {
           const ownerName = (players[c.owner] && players[c.owner].name) || "?";
           return `<div class="zone-card-row" style="cursor:pointer;" onclick="pickAttachTarget('${c.id}')">
-            <img src="${c.img || ''}" class="zone-card-thumb">
+            <img src="${escapeHtml(c.img || '')}" class="zone-card-thumb">
             <div class="zone-card-name">${escapeHtml(c.name || "Face-down card")}<div style="font-size:10px;color:#a89a70;">${escapeHtml(ownerName)}</div></div>
           </div>`;
         }).join("");
@@ -2154,7 +2159,7 @@
               <button class="mini-btn" onclick="zoneToBattlefield('${zoneName}',${idx})">To Battlefield</button>
               <button class="mini-btn" onclick="zoneToHand('${zoneName}',${idx})">To Hand</button>`;
           }
-          row.innerHTML = `<img src="${entry.img}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
+          row.innerHTML = `<img src="${escapeHtml(entry.img || "")}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
           body.appendChild(row);
         });
       }
@@ -2229,7 +2234,7 @@
       if (!c) return;
       const pt = (c.power != null && c.toughness != null) ? `<div class="de-prev-type">${escapeHtml(c.power)}/${escapeHtml(c.toughness)}</div>` : (c.loyalty != null ? `<div class="de-prev-type">Loyalty: ${escapeHtml(c.loyalty)}</div>` : "");
       document.getElementById("de-preview-body").innerHTML = `
-        ${c.img ? `<img src="${c.img}" alt="${escapeHtml(c.name || "")}">` : ""}
+        ${c.img ? `<img src="${escapeHtml(c.img)}" alt="${escapeHtml(c.name || "")}">` : ""}
         <div style="font-weight:600;">${escapeHtml(c.name || "Unknown")}</div>
         <div class="de-prev-type">${manaCostPips(c.manaCost)}</div>
         <div class="de-prev-type">${escapeHtml(c.type || "")}</div>
@@ -2250,7 +2255,7 @@
         if (cmd) {
           el.onmouseenter = () => dePreviewByIndex("cmd", slot);
           el.innerHTML = `
-            <img src="${cmd.img || ""}">
+            <img src="${escapeHtml(cmd.img || "")}">
             <div class="de-cmdr-name">${escapeHtml(cmd.name)}</div>
             <div style="font-size:10px;margin-bottom:6px;">${manaCostPips(cmd.manaCost)}</div>
             <button class="mini-btn" style="width:100%;" onclick="deClearCommanderSlot(${slot})">Clear</button>`;
@@ -2721,7 +2726,7 @@
       if (isMasked) {
         inner = `<div class="card-back">🂠</div><div class="card-label">Face-down card</div>`;
       } else {
-        inner = `<img src="${card.img || ""}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>${attachmentLabel(card)}${controlLabel(card)}`;
+        inner = `<img src="${escapeHtml(card.img || "")}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>${attachmentLabel(card)}${controlLabel(card)}`;
       }
       if (card.counters) inner += `<div class="counter-badge">${card.counters > 0 ? "+" : ""}${card.counters}</div>`;
       if (!isMasked && card.zoneType === "creature") {
@@ -3042,7 +3047,7 @@
         // enough; a 3+ player pod still requires actually picking who to attack.
         row.innerHTML = `
           <input type="checkbox" class="atk-check" data-id="${card.id}" onchange="updateAttackersSelectedCount()">
-          <img src="${card.img || ''}" class="zone-card-thumb">
+          <img src="${escapeHtml(card.img || '')}" class="zone-card-thumb">
           <div class="zone-card-name">${escapeHtml(card.name || '')} (${effectivePT(card)})</div>
           <select class="atk-target" data-id="${card.id}"><option value="">-- target --</option>${otherPlayers.map(([id, p]) => `<option value="${id}"${otherPlayers.length === 1 ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}</select>`;
         body.appendChild(row);
@@ -3085,7 +3090,7 @@
         const options = myCreatures.map((c) => `<option value="${c.id}">${escapeHtml(c.name || '')} (${effectivePT(c)})</option>`).join("");
         const visibleName = atk && !atk.faceDown ? escapeHtml(atk.name || '') : "Face-down attacker";
         row.innerHTML = `
-          <img src="${atk && !atk.faceDown ? atk.img : ''}" class="zone-card-thumb">
+          <img src="${escapeHtml(atk && !atk.faceDown ? atk.img : '')}" class="zone-card-thumb">
           <div class="zone-card-name">${visibleName} (${atk ? effectivePT(atk) : "0/0"}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}</div>
           <select class="blk-select" data-attacker="${attackerId}"><option value="">No block</option>${options}</select>`;
         body.appendChild(row);
