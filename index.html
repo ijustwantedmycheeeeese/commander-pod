@@ -1857,6 +1857,26 @@
       pendingManaChoiceCardId = null;
       document.getElementById("mana-choice-modal").style.display = "none";
     }
+
+    // Fetchlands ("search your library for a ... card") -- the server sets this up (EFFECTS.
+    // searchLandTypes) and tells us via "searchLibrary"; this just opens the library zone-modal in
+    // fetch mode, same view as normally browsing your own library, but with "Fetch This" in place of
+    // "Draw This" on matching cards and a way to find nothing (search is always optional).
+    let pendingFetch = null;
+    socket.on("searchLibrary", (data) => {
+      pendingFetch = data;
+      openZoneModal(myId, "library");
+    });
+    function fetchLand(idx) {
+      socket.emit("fetchLand", idx);
+      pendingFetch = null;
+      closeZoneModal();
+    }
+    function cancelFetch() {
+      socket.emit("cancelFetch");
+      pendingFetch = null;
+      closeZoneModal();
+    }
     function landDropBonus(delta) { socket.emit("landDropBonus", delta); }
 
     // Hand size limit (7): server blocks ending the turn past End Step until this resolves.
@@ -2176,17 +2196,34 @@
       } else {
         list = p[zoneName] || [];
       }
-      document.getElementById("zone-modal-title").innerText = `${p.name}'s ${capitalize(zoneName)} (${list.length})`;
+      const fetching = zoneName === "library" && isMine && pendingFetch;
+      if (fetching) {
+        const wantedLabel = `${pendingFetch.basicOnly ? "basic " : ""}${pendingFetch.types.join(" or ")}`;
+        document.getElementById("zone-modal-title").innerText = `Search your library for a ${wantedLabel} card`;
+      } else {
+        document.getElementById("zone-modal-title").innerText = `${p.name}'s ${capitalize(zoneName)} (${list.length})`;
+      }
       const body = document.getElementById("zone-modal-body");
       body.innerHTML = "";
+      if (fetching) {
+        const cancelRow = document.createElement("div");
+        cancelRow.style.cssText = "margin-bottom:10px;";
+        cancelRow.innerHTML = `<button class="mini-btn secondary" onclick="cancelFetch()">Find Nothing (Shuffle)</button>`;
+        body.appendChild(cancelRow);
+      }
       if (list.length === 0) {
-        body.innerHTML = "<div style='color:#8a7a55;padding:10px;'>Empty.</div>";
+        body.innerHTML += "<div style='color:#8a7a55;padding:10px;'>Empty.</div>";
       } else {
         list.forEach((entry, idx) => {
           const row = document.createElement("div");
           row.className = "zone-card-row";
           let actions = "";
-          if (zoneName === "library" && isMine) {
+          if (fetching) {
+            const typeLower = (entry.type || "").toLowerCase();
+            const matchesType = typeLower.includes("land") && pendingFetch.types.some((t) => typeLower.includes(t.toLowerCase()));
+            const matchesBasic = !pendingFetch.basicOnly || typeLower.includes("basic");
+            if (matchesType && matchesBasic) actions = `<button class="mini-btn" onclick="fetchLand(${idx})">Fetch This</button>`;
+          } else if (zoneName === "library" && isMine) {
             actions = `<button class="mini-btn" onclick="drawSpecific(${idx})">Draw This</button>`;
           } else if ((zoneName === "graveyard" || zoneName === "exile") && isMine) {
             actions = `

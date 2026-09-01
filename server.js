@@ -264,6 +264,25 @@ function getAutomatedAbilities(cardName, triggerType) {
 // another creature" would need its own target-choice-shaped flow, same precedent as everywhere
 // else this vocabulary narrows to the common case.
 const ACTIVATED_ABILITIES = {
+  // Fetchlands -- "{T}, Pay 1 life, Sacrifice: search your library for a [type] or [type] card, put
+  // it onto the battlefield, then shuffle." See EFFECTS.searchLandTypes and the fetchLand/cancelFetch
+  // handlers for how the actual search (a real choice among however many matches are in a 99-card
+  // library, not something automatable like a fixed-effect spell) gets resolved.
+  "arid mesa": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Arid Mesa — search for a Mountain or Plains", effects: [{ type: "searchLandTypes", types: ["Mountain", "Plains"] }] }],
+  "scalding tarn": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Scalding Tarn — search for an Island or Mountain", effects: [{ type: "searchLandTypes", types: ["Island", "Mountain"] }] }],
+  "verdant catacombs": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Verdant Catacombs — search for a Swamp or Forest", effects: [{ type: "searchLandTypes", types: ["Swamp", "Forest"] }] }],
+  "marsh flats": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Marsh Flats — search for a Plains or Swamp", effects: [{ type: "searchLandTypes", types: ["Plains", "Swamp"] }] }],
+  "misty rainforest": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Misty Rainforest — search for an Island or Forest", effects: [{ type: "searchLandTypes", types: ["Island", "Forest"] }] }],
+  "bloodstained mire": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Bloodstained Mire — search for a Swamp or Mountain", effects: [{ type: "searchLandTypes", types: ["Swamp", "Mountain"] }] }],
+  "flooded strand": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Flooded Strand — search for an Island or Plains", effects: [{ type: "searchLandTypes", types: ["Island", "Plains"] }] }],
+  "wooded foothills": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Wooded Foothills — search for a Mountain or Forest", effects: [{ type: "searchLandTypes", types: ["Mountain", "Forest"] }] }],
+  "windswept heath": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Windswept Heath — search for a Forest or Plains", effects: [{ type: "searchLandTypes", types: ["Forest", "Plains"] }] }],
+  "polluted delta": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Polluted Delta — search for an Island or Swamp", effects: [{ type: "searchLandTypes", types: ["Island", "Swamp"] }] }],
+  // "Painless" fetches: no life cost, but restricted to a BASIC land (basicOnly) and forced tapped
+  // regardless of what's fetched (entersTapped) -- unlike the life-paying fetches above, which can
+  // find any land with a matching type (including a nonbasic dual) and inherit ITS OWN tapped state.
+  "evolving wilds": [{ cost: { tap: true, sacrifice: true }, label: "Evolving Wilds — search for a basic land", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
+  "terramorphic expanse": [{ cost: { tap: true, sacrifice: true }, label: "Terramorphic Expanse — search for a basic land", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
   "archivist": [{ cost: { tap: true }, label: "Archivist — {T}: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "alchemist's apprentice": [{ cost: { sacrifice: true }, label: "Alchemist's Apprentice — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
@@ -618,6 +637,19 @@ const EFFECTS = {
     lobby.turn.pendingDiscard = { playerId: params.chosenTargetId, count };
     broadcastTurn(lobby);
     pushLog(lobby, `${p.name} must discard ${count} card${count === 1 ? "" : "s"}`);
+  },
+  // Fetchlands ("Search your library for a Mountain or Plains card...") -- WHICH card to fetch is a
+  // real choice among however many matches are in a 99-card library, not something automatable the
+  // way a fixed-effect spell is. This sets up pendingFetch and prompts the controller to open their
+  // own library (already viewable/searchable via the existing zone-modal) and pick one via the new
+  // fetchLand handler, rather than trying to guess or list every match server-side. Search is always
+  // optional in real Magic even with a legal target -- cancelFetch (also new) covers "find nothing."
+  searchLandTypes(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.pendingFetch = { types: params.types || [], basicOnly: !!params.basicOnly, forceTapped: !!params.entersTapped };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("searchLibrary", { types: p.pendingFetch.types, basicOnly: p.pendingFetch.basicOnly });
   }
 };
 // Shared by the manual Counter button (counterStackItem) and EFFECTS.counterTargetSpell -- pulls
@@ -2654,9 +2686,16 @@ io.on("connection", (socket) => {
       if (!remainingMana) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s ability.`); return; }
     }
     // cost.sacrifice has nothing to validate -- you already own it and it's on the battlefield.
+    // cost.life (a plain number, e.g. fetchlands' "Pay 1 life") has nothing to validate either --
+    // real Magic never blocks paying life as a cost, even at 1 life or below; it can legally kill you.
 
     if (cost.tap) { card.tapped = true; broadcastCard(lobby, card); }
     if (cost.mana) { p.mana = remainingMana; broadcastPlayers(lobby); }
+    if (cost.life) {
+      p.life -= cost.life;
+      checkEliminations(lobby); // paying life is a real way to die -- check immediately, not just at resolution
+      broadcastPlayers(lobby);
+    }
     pushLog(lobby, `${p.name} activated: ${ability.label}`);
     if (cost.sacrifice) {
       // Paid as part of the cost, immediately -- same as real Magic (costs are paid on activation,
@@ -2954,6 +2993,42 @@ io.on("connection", (socket) => {
     spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} searched their library for a card`);
+  });
+
+  // Answers a pending EFFECTS.searchLandTypes prompt (a fetchland) -- validates the chosen library
+  // card is actually a legal fetch target (a land whose type line contains one of the wanted basic
+  // types, and "basic land" specifically for a painless fetch like Evolving Wilds) before pulling it
+  // onto the battlefield, same placement path zoneToBattlefield already uses. spawnBattlefieldCard's
+  // own entersTapped check already handles a fetched shockland's own "unless you pay life" text
+  // correctly on its own; forceTapped only applies an ADDITIONAL forced-tapped rule from the fetch
+  // effect itself (Evolving Wilds-style), on top of whatever the fetched card would already do.
+  socket.on("fetchLand", (index) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p || !p.pendingFetch || !p.library[index]) return;
+    const entry = p.library[index];
+    const typeLower = (entry.type || "").toLowerCase();
+    const matchesType = typeLower.includes("land") && p.pendingFetch.types.some((t) => typeLower.includes(t.toLowerCase()));
+    const matchesBasic = !p.pendingFetch.basicOnly || typeLower.includes("basic");
+    if (!matchesType || !matchesBasic) { socket.emit("actionError", `${entry.name || "That card"} doesn't match what you're searching for.`); return; }
+    p.library.splice(index, 1);
+    shuffle(p.library);
+    const card = spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
+    if (p.pendingFetch.forceTapped && !card.tapped) { card.tapped = true; broadcastCard(lobby, card); }
+    p.pendingFetch = null;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
+    fireEtbTriggers(lobby, card);
+  });
+
+  // Search is always optional in real Magic, even with a legal target sitting right there --
+  // "find nothing" still shuffles (you looked through the whole library either way).
+  socket.on("cancelFetch", () => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p || !p.pendingFetch) return;
+    shuffle(p.library);
+    p.pendingFetch = null;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} found nothing`);
   });
 
   socket.on("millCard", (count) => {
