@@ -77,12 +77,22 @@
     #playmat { width: 3000px; height: 1260px; position: relative; background-image: radial-gradient(#1a2e1e 15%, transparent 15%); background-size: 30px 30px; transform-origin: top left; }
     #playmat.custom-mat { background-size: cover; background-position: center; }
 
-    .zone-band { position: absolute; border: 1px solid rgba(212,175,55,0.2); border-radius: 10px; }
-    .zone-band.zone-creature { background: rgba(239,68,68,0.05); }
-    .zone-band.zone-artifact { background: rgba(168,85,247,0.05); }
-    .zone-band.zone-mana { background: rgba(34,197,94,0.05); }
-    .zone-band.zone-hand { background: rgba(59,130,246,0.07); border-style: dashed; }
-    .zone-band-label { position: absolute; top: 4px; left: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(212,175,55,0.5); font-family: 'Cinzel', serif; }
+    /* --zone-opacity is a user-controlled multiplier (Settings -> Audio/Visual) on how solid the
+       zone backgrounds and the library/graveyard/exile piles look -- default 1 leaves the original
+       look untouched. Deliberately NOT applied to .zone-band-label (see below): that stays at full
+       opacity always, with its own text-shadow, so the label text never becomes illegible against a
+       busy custom board mat regardless of what the user picked for the zones themselves. */
+    .zone-band { position: absolute; border: 1px solid rgba(212,175,55,0.2); border-radius: 10px; opacity: var(--zone-opacity, 1); }
+    .zone-band.zone-creature { background: rgba(239,68,68,0.08); }
+    .zone-band.zone-artifact { background: rgba(168,85,247,0.08); }
+    .zone-band.zone-mana { background: rgba(34,197,94,0.08); }
+    .zone-band.zone-hand { background: rgba(59,130,246,0.1); border-style: dashed; }
+    /* A sibling of .zone-band now (not a child -- see renderVisibleBoard), specifically so it's
+       exempt from --zone-opacity. Solid-ish gold plus a dark text-shadow keeps it readable over any
+       board mat, dark or light, busy or plain -- this was the actual "zones almost disappear /
+       text hard to read" complaint, independent of the opacity slider entirely. */
+    .zone-band-label { position: absolute; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #f0dfa0; font-family: 'Cinzel', serif; text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.75); pointer-events: none; }
+    .zone-pile-wrap { opacity: var(--zone-opacity, 1); }
 
     .card { width: 108px; height: 150px; position: absolute; border-radius: 7px; box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,175,55,0.12); border: 3px solid #444; background: #1a1a1d; user-select: none; overflow: hidden; z-index: 2; transition: left 0.15s ease, top 0.15s ease, transform 0.25s ease; }
     .card img { width: 100%; height: 120px; object-fit: cover; pointer-events: none; display: block; }
@@ -650,6 +660,11 @@
         <div class="flex-row" style="margin-bottom:6px;">
           <select id="saved-mat-select"><option value="">-- saved mats --</option></select>
           <button class="mini-btn secondary" onclick="applySavedMat()">Apply</button>
+        </div>
+        <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;margin-bottom:6px;font-size:12px;">
+          <span title="How solid the creature/artifact/mana/hand zone outlines and the library/graveyard/exile piles look -- turn this up if a busy board mat makes them hard to see">Zone Opacity</span>
+          <input type="range" id="zone-opacity-slider" min="20" max="200" value="100" oninput="setZoneOpacity(this.value)">
+          <span id="zone-opacity-label" style="width:32px;text-align:right;color:#a89a70;">100%</span>
         </div>
 
         <div class="mm-label">Audio</div>
@@ -2602,16 +2617,16 @@
 
     function makePile(label, count, icon, ownerId, zoneName, yOffset) {
       const pile = document.createElement("div");
-      pile.style.cssText = `position:absolute; left:0px; top:${yOffset}px; width:80px; height:130px; cursor:pointer;`;
+      pile.style.cssText = `position:absolute; left:0px; top:${yOffset}px; width:104px; height:158px; cursor:pointer;`;
       pile.onclick = () => openZoneModal(ownerId, zoneName);
       pile.innerHTML = `
-        <div style="width:76px;height:100px;border-radius:6px;background:repeating-linear-gradient(45deg,#2a2a30,#2a2a30 6px,#1c1c20 6px,#1c1c20 12px);border:2px solid #5a4423;display:flex;align-items:center;justify-content:center;font-size:22px;">${icon}</div>
-        <div style="text-align:center;font-size:11px;color:#c9bc98;margin-top:2px;">${label} (${count})</div>`;
+        <div style="width:100px;height:124px;border-radius:6px;background:repeating-linear-gradient(45deg,#2a2a30,#2a2a30 6px,#1c1c20 6px,#1c1c20 12px);border:2px solid #5a4423;display:flex;align-items:center;justify-content:center;font-size:30px;">${icon}</div>
+        <div style="text-align:center;font-size:13px;color:#e0d5b0;margin-top:4px;text-shadow:0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.75);">${label} (${count})</div>`;
       return pile;
     }
 
     function renderVisibleBoard() {
-      playmat.querySelectorAll(".card, .zone-band, .zone-pile-wrap").forEach((el) => el.remove());
+      playmat.querySelectorAll(".card, .zone-band, .zone-band-label, .zone-pile-wrap").forEach((el) => el.remove());
       cardEls = {};
 
       const owner = activeBoardOwner;
@@ -2625,8 +2640,14 @@
         const band = document.createElement("div");
         band.className = "zone-band zone-" + z.key;
         band.style.cssText = `left:${ZONE_X}px; top:${z.y}px; width:${ZONE_WIDTH}px; height:${z.height}px;`;
-        band.innerHTML = `<div class="zone-band-label">${z.label}</div>`;
         playmat.appendChild(band);
+        // A SIBLING of the band, not a child -- so it's exempt from --zone-opacity and always
+        // stays legible (see the .zone-band-label CSS comment for why).
+        const label = document.createElement("div");
+        label.className = "zone-band-label";
+        label.style.cssText = `left:${ZONE_X + 8}px; top:${z.y + 4}px;`;
+        label.textContent = z.label;
+        playmat.appendChild(label);
       });
       const lastZone = currentZoneLayout[currentZoneLayout.length - 1];
       playmat.style.height = Math.max(1260, lastZone.y + lastZone.height + 20) + "px";
@@ -2644,15 +2665,15 @@
         pilesWrap.style.cssText = `position:absolute; left:${PILE_X}px; top:40px;`;
         const libCount = owner === myId ? (p.library ? p.library.length : 0) : (p.libraryCount || 0);
         pilesWrap.appendChild(makePile("Library", libCount, "📚", owner, "library", 0));
-        pilesWrap.appendChild(makePile("Graveyard", (p.graveyard || []).length, "⚰️", owner, "graveyard", 150));
-        pilesWrap.appendChild(makePile("Exile", (p.exile || []).length, "🌀", owner, "exile", 300));
+        pilesWrap.appendChild(makePile("Graveyard", (p.graveyard || []).length, "⚰️", owner, "graveyard", 176));
+        pilesWrap.appendChild(makePile("Exile", (p.exile || []).length, "🌀", owner, "exile", 352));
         if (owner === myId) {
           const controls = document.createElement("div");
-          controls.style.cssText = "position:absolute; left:0; top:455px; display:flex; gap:4px;";
+          controls.style.cssText = "position:absolute; left:0; top:528px; width:104px; display:flex; flex-wrap:wrap; gap:6px;";
           controls.innerHTML = `
-            <button class="mini-btn" onclick="drawCard(1)">Draw</button>
-            <button class="mini-btn" onclick="shuffleLibrary()">Shuffle</button>
-            <button class="mini-btn" onclick="millCard(1)">Mill</button>`;
+            <button class="mini-btn" style="padding:6px 10px;font-size:13px;flex:1;min-width:46px;" onclick="drawCard(1)">Draw</button>
+            <button class="mini-btn" style="padding:6px 10px;font-size:13px;flex:1;min-width:46px;" onclick="shuffleLibrary()">Shuffle</button>
+            <button class="mini-btn" style="padding:6px 10px;font-size:13px;flex:1;min-width:46px;" onclick="millCard(1)">Mill</button>`;
           pilesWrap.appendChild(controls);
         }
         playmat.appendChild(pilesWrap);
@@ -2817,6 +2838,24 @@
       playmat.appendChild(div);
       cardEls[card.id] = div;
       applyTargetRing(card.id);
+    }
+
+    // ---------------- zone opacity ----------------
+    // How solid the zone-band backgrounds and library/graveyard/exile piles look, independent of
+    // the always-legible zone labels (see the CSS comment on .zone-band-label). 100% = the default
+    // look; the range goes both below (more see-through) and above (more solid, for a busy board
+    // mat that would otherwise wash the zones out) rather than just muting them like a volume slider.
+    let zoneOpacityPct = parseInt(localStorage.getItem("mtgZoneOpacity"), 10);
+    if (isNaN(zoneOpacityPct) || zoneOpacityPct < 20 || zoneOpacityPct > 200) zoneOpacityPct = 100;
+    document.documentElement.style.setProperty("--zone-opacity", zoneOpacityPct / 100);
+    { const slider = document.getElementById("zone-opacity-slider"); if (slider) slider.value = zoneOpacityPct;
+      const label = document.getElementById("zone-opacity-label"); if (label) label.innerText = zoneOpacityPct + "%"; }
+    function setZoneOpacity(val) {
+      const pct = Math.max(20, Math.min(200, parseInt(val, 10) || 100));
+      document.documentElement.style.setProperty("--zone-opacity", pct / 100);
+      localStorage.setItem("mtgZoneOpacity", String(pct));
+      const label = document.getElementById("zone-opacity-label");
+      if (label) label.innerText = pct + "%";
     }
 
     // ---------------- sound cues ----------------
