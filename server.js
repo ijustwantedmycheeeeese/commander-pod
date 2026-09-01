@@ -960,8 +960,28 @@ function reattachPlayer(lobby, oldId, newId) {
   p.disconnectedAt = null;
   lobby.players[newId] = p;
 
+  // The bug this loop's broadcastCard call fixes: reassigning .owner here only ever updated THIS
+  // server's own memory. Both call sites already send the reconnecting player their own full,
+  // correct board via lobbyJoined -- but every OTHER already-connected client's local allCards
+  // cache still held these same cards under the OLD (now-orphaned) owner id, since nothing ever
+  // told them otherwise. Rendering code that groups cards by owner against the current players list
+  // would then find zero cards under the new id -- the reconnecting player's entire board silently
+  // vanishing from everyone ELSE's screen, even though the reconnecting player's own view looked
+  // fine. Reproducible back-and-forth: whoever refreshes correctly sees everything, but every other
+  // still-connected client's view of THEM goes stale, until that player also refreshes (or a real
+  // leave+rejoin, which already resends everything to everyone via a different path).
   for (const id in lobby.cards) {
-    if (lobby.cards[id].owner === oldId) lobby.cards[id].owner = newId;
+    const card = lobby.cards[id];
+    let touched = false;
+    if (card.owner === oldId) { card.owner = newId; touched = true; }
+    // originalOwner (set only by takeControl, for a stolen permanent) is the same kind of stable-
+    // reference-that-goes-stale-on-reconnect problem .owner has: every "which player does this
+    // actually belong to" lookup (commanderSlotKey, moveOut/toHand's zone destination, etc.)
+    // prefers originalOwner when set. Left un-rekeyed, a stolen permanent's true owner reconnecting
+    // would make it file into lobby.players[oldId] -- which delete lobby.players[oldId] above just
+    // removed -- silently landing in no one's graveyard/hand at all.
+    if (card.originalOwner === oldId) { card.originalOwner = newId; touched = true; }
+    if (touched) broadcastCard(lobby, card);
   }
   // Triggered-ability stack instances aren't in lobby.cards (they're not real cards), so the loop
   // above never sees them -- without this, a trigger pending on the stack when its controller
