@@ -53,7 +53,7 @@ If you're self-hosting your own ntfy server instead of using the public `ntfy.sh
 
 ## Lobby music
 
-The Main Menu plays a looping background track (`audio/lobby-music.mp3`), with its own volume slider on the Main Menu and mirrored in the in-game Settings modal. It's a royalty-free track supplied by the project owner — swap `audio/lobby-music.mp3` for a different file (same filename) if you'd rather use something else; nothing else needs to change.
+The Main Menu plays a looping background track (`audio/lobby-music.mp3`), with its own volume slider on the Main Menu and mirrored in the in-game Settings modal. It's royalty-free — swap `audio/lobby-music.mp3` for a different file (same filename) if you'd rather use something else; nothing else needs to change.
 
 ## Local development
 
