@@ -423,6 +423,7 @@ const ATTACK_TAX_EFFECTS = { "propaganda": 2, "ghostly prison": 2, "windborn mus
 // is one of "creature" (existing zoneType-based matching), "player", "any" (creature, player, or
 // planeswalker), or "spell" (anything currently on the stack, for counters).
 const SPELL_ABILITIES = {
+  "armageddon": { label: "Armageddon — destroy all lands", effects: [{ type: "destroyAllLands" }] },
   // Batch-generated from data/oracle-catalog.json via tools/scan-spell-candidates.js -- same
   // real-Scryfall-text verification as the CARD_ABILITIES/ACTIVATED_ABILITIES batches. Every entry's
   // whole oracle text (not just one line -- a spell resolves atomically) matched one of a small set
@@ -557,6 +558,15 @@ const EFFECTS = {
   drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
   eachPlayerDrawsCards(lobby, ctx, params) {
     Object.keys(lobby.players).forEach((id) => drawN(lobby, id, params.amount || 1));
+  },
+  // Armageddon -- every land, everyone's, not just the caster's (real Magic has no "friendly fire"
+  // exception here, and neither does this). Snapshotted via Object.values() before iterating since
+  // sendToGraveyardInternal deletes from lobby.cards as it goes.
+  destroyAllLands(lobby, ctx, params) {
+    Object.values(lobby.cards).filter((c) => c.zoneType === "mana").forEach((card) => {
+      fireDeathTriggers(lobby, card);
+      sendToGraveyardInternal(lobby, card);
+    });
   },
   gainLife(lobby, ctx, params) {
     effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => applyLifeGain(lobby, id, params.amount || 0));
@@ -1906,6 +1916,10 @@ function resolveCombatDamage(lobby) {
   const dmgEvents = []; // purely for client-side damage-number animation, no gameplay effect
   const marked = {}; // cardId -> cumulative damage marked this combat
   const deathtouchHit = new Set(); // cardIds that have taken ANY damage from a deathtouch source this combat
+  // Lifelink: applied at every point actual damage gets dealt below (attacker->blocker, trample
+  // overflow->player, blocker->attacker, unblocked->player) via the shared applyLifeGain hook, same
+  // as any other life gain in this app -- so a lifelinker's controller's OWN selfGainsLife triggers
+  // (if any) correctly fire off combat damage too, not just spells/abilities that explicitly gain life.
 
   function hasKw(card, kw) {
     return effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === kw);
@@ -1976,6 +1990,7 @@ function resolveCombatDamage(lobby) {
                 pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}`);
               }
             }
+            if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, toBlocker + toPlayer);
           }
         }
         const blkFS = hasKw(blocker, "first strike"), blkDS = hasKw(blocker, "double strike");
@@ -1983,6 +1998,7 @@ function resolveCombatDamage(lobby) {
         if (blockerActs && lobby.cards[blocker.id]) {
           const { power: defPower } = effPT(blocker);
           markDamage(attacker, defPower, hasKw(blocker, "deathtouch"));
+          if (defPower > 0 && hasKw(blocker, "lifelink")) applyLifeGain(lobby, blocker.owner, defPower);
         }
         if (attackerActs || blockerActs) {
           const atkAfter = effPT(attacker), defAfter = effPT(blocker);
@@ -2003,6 +2019,7 @@ function resolveCombatDamage(lobby) {
           }
           pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
           dmgEvents.push({ targetId: defenderId, amount: atkPower });
+          if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, atkPower);
         }
       }
     }
@@ -2547,6 +2564,9 @@ io.on("connection", (socket) => {
         pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
         fireEtbTriggers(lobby, card);
       } else {
+        // Same broadcast gap as playCard below -- attemptPlay above already deducted the mana cost,
+        // but castSpell itself never tells anyone the caster's mana pool changed.
+        broadcastPlayers(lobby);
         castSpell(lobby, card, socket.id);
       }
       return;
@@ -2580,6 +2600,13 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
       fireEtbTriggers(lobby, card);
     } else {
+      // attemptPlay already deducted the mana cost above -- castSpell itself only ever
+      // broadcastCard/broadcastStack (pushToStack) or prompts a target (queueTargetChoice), neither
+      // of which tells anyone the caster's mana pool just changed. Without this, the caster's own
+      // client kept showing the PRE-cast mana total until some unrelated broadcastPlayers happened
+      // to fire later (e.g. the next phase change, which resets it to zero anyway) -- looking like
+      // casting a spell didn't charge anything, or charged the wrong amount.
+      broadcastPlayers(lobby);
       castSpell(lobby, card, socket.id);
     }
   });
