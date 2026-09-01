@@ -283,6 +283,20 @@ const ACTIVATED_ABILITIES = {
   // find any land with a matching type (including a nonbasic dual) and inherit ITS OWN tapped state.
   "evolving wilds": [{ cost: { tap: true, sacrifice: true }, label: "Evolving Wilds — search for a basic land", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
   "terramorphic expanse": [{ cost: { tap: true, sacrifice: true }, label: "Terramorphic Expanse — search for a basic land", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
+  // Signets -- "{1}, {T}: Add {X}{Y}." Both colors at once for a fixed cost, not a choice the way a
+  // dual land's "T: add X or Y" is -- manaAbility:true is what makes that distinction real (see
+  // activateAbility and the tap handler's own comments for why this can't just be the same
+  // tap-for-free-mana shortcut every land/dork already uses).
+  "azorius signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Azorius Signet — Add {W}{U}", effects: [{ type: "addFixedMana", colors: ["W", "U"] }] }],
+  "dimir signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Dimir Signet — Add {U}{B}", effects: [{ type: "addFixedMana", colors: ["U", "B"] }] }],
+  "rakdos signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Rakdos Signet — Add {B}{R}", effects: [{ type: "addFixedMana", colors: ["B", "R"] }] }],
+  "gruul signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Gruul Signet — Add {R}{G}", effects: [{ type: "addFixedMana", colors: ["R", "G"] }] }],
+  "selesnya signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Selesnya Signet — Add {G}{W}", effects: [{ type: "addFixedMana", colors: ["G", "W"] }] }],
+  "orzhov signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Orzhov Signet — Add {W}{B}", effects: [{ type: "addFixedMana", colors: ["W", "B"] }] }],
+  "izzet signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Izzet Signet — Add {U}{R}", effects: [{ type: "addFixedMana", colors: ["U", "R"] }] }],
+  "golgari signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Golgari Signet — Add {B}{G}", effects: [{ type: "addFixedMana", colors: ["B", "G"] }] }],
+  "boros signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Boros Signet — Add {R}{W}", effects: [{ type: "addFixedMana", colors: ["R", "W"] }] }],
+  "simic signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Simic Signet — Add {G}{U}", effects: [{ type: "addFixedMana", colors: ["G", "U"] }] }],
   "archivist": [{ cost: { tap: true }, label: "Archivist — {T}: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "alchemist's apprentice": [{ cost: { sacrifice: true }, label: "Alchemist's Apprentice — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
@@ -389,15 +403,25 @@ function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
 }
 
+// "Creatures can't attack you unless their controller pays {2} for each creature they control
+// that's attacking you." A real static restriction on DECLARING an attacker (checked/paid for right
+// in declareAttackers below), not a triggered ability -- there's nothing to trigger, it's a cost
+// gating the action itself, same as summoning sickness or a tapped creature already are in that same
+// handler. Scoped to the flat "{N} per attacker, no other condition" shape shared by every card
+// here; a variable-amount one (Sphere of Safety's per-enchantment scaling, Collective Restraint's
+// per-Wall scaling) would need real per-card logic this table can't express, so those aren't
+// included -- same "narrow to the common, unconditional case" precedent as everywhere else in this
+// file that draws a line around what's automatable.
+const ATTACK_TAX_EFFECTS = { "propaganda": 2, "ghostly prison": 2, "windborn muse": 2 };
+
 // What a cast instant/sorcery spell actually DOES, for the narrow set of real cards authored here --
 // one entry per card (unlike CARD_ABILITIES/ACTIVATED_ABILITIES, a spell only ever resolves once,
 // so there's no array of multiple abilities to pick from). Targets, when present, are chosen at
-// RESOLUTION time (once the spell reaches the top of the stack) rather than at cast time like real
-// Magic -- a deliberate simplification matching how every other target-requiring effect in this app
-// already works (see queueTargetChoice's own comment), and arguably more forgiving than the real
-// rule besides (nothing here can "fizzle" for a target that became illegal mid-stack the way real
-// Magic can). targetKind is one of "creature" (existing zoneType-based matching), "player", "any"
-// (creature, player, or planeswalker), or "spell" (anything currently on the stack, for counters).
+// CAST time (see castSpell), matching real Magic -- a target that becomes illegal before the spell
+// resolves (e.g. its creature target died in response) simply fizzles: executeSpellEffectsNow's
+// underlying EFFECTS functions all already no-op gracefully on a missing chosenTargetId. targetKind
+// is one of "creature" (existing zoneType-based matching), "player", "any" (creature, player, or
+// planeswalker), or "spell" (anything currently on the stack, for counters).
 const SPELL_ABILITIES = {
   // Batch-generated from data/oracle-catalog.json via tools/scan-spell-candidates.js -- same
   // real-Scryfall-text verification as the CARD_ABILITIES/ACTIVATED_ABILITIES batches. Every entry's
@@ -650,6 +674,16 @@ const EFFECTS = {
     p.pendingFetch = { types: params.types || [], basicOnly: !!params.basicOnly, forceTapped: !!params.entersTapped };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibrary", { types: p.pendingFetch.types, basicOnly: p.pendingFetch.basicOnly });
+  },
+  // Signets and similar mana rocks ("{1}, T: Add {W}{B}.") produce a FIXED set of colors all at
+  // once -- not a choice among them the way a dual land's "add W or B" is. Only ever reached via
+  // activateAbility's manaAbility fast path (see there for why mana abilities skip the stack
+  // entirely), never via the plain tap-for-free-mana shortcut, since this one has a real cost.
+  addFixedMana(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    (params.colors || []).forEach((c) => { if (["W", "U", "B", "R", "G", "C"].includes(c)) p.mana[c] = (p.mana[c] || 0) + 1; });
+    broadcastPlayers(lobby);
   }
 };
 // Shared by the manual Counter button (counterStackItem) and EFFECTS.counterTargetSpell -- pulls
@@ -2586,6 +2620,12 @@ io.on("connection", (socket) => {
     if (card.tapped) return;
     card.tapped = true;
     broadcastCard(lobby, card);
+    // A card with its own real ACTIVATED_ABILITIES manaAbility entry (a signet: "{1}, T: Add {W}
+    // {B}.") has a genuine mana COST to pay and/or produces more than one color simultaneously --
+    // neither of which this auto-mana shortcut (built for free, single-choice sources) can
+    // represent. Skip it entirely here; the player activates the real ability instead, same as any
+    // other costed activated ability, rather than getting free or wrong mana from a plain tap.
+    if (getActivatedAbilities(card.name).some((a) => a.manaAbility)) return;
     // Auto-add mana for any tapped source with an unambiguous color — lands, rocks, and dorks
     // alike — not just basics. Basic land types are unambiguous by their type line; anything else
     // (rocks, dorks, nonbasic lands) is unambiguous only when the archive says it produces exactly
@@ -2704,7 +2744,16 @@ io.on("connection", (socket) => {
       fireDeathTriggers(lobby, card);
       sendToGraveyardInternal(lobby, card);
     }
-    fireTrigger(lobby, card, ability);
+    if (ability.manaAbility) {
+      // Real Magic (CR 605): a mana ability never uses the stack -- it resolves the instant it's
+      // activated, precisely because its mana usually needs to be available immediately to help
+      // pay for whatever prompted tapping this in the first place. Every other activated ability
+      // still goes through fireTrigger/the stack below.
+      const ctx = { controllerId: socket.id, sourceCard: { id: card.id } };
+      (ability.effects || []).forEach((params) => { const fn = EFFECTS[params.type]; if (fn) fn(lobby, ctx, params); });
+    } else {
+      fireTrigger(lobby, card, ability);
+    }
   });
 
   // Manually granted keywords -- represents an aura/equipment/anthem/etc. effect, since none of
@@ -3408,14 +3457,42 @@ io.on("connection", (socket) => {
     if (!lobby.turn.started || lobby.turn.order[lobby.turn.activeIndex] !== socket.id) return;
     if (lobby.stack.length > 0) return; // can't move combat forward with something pending
     if (lobby.combat.step !== "declareAttackers") return;
-    const validAttackers = {};
-    const defendersSet = new Set();
+    // First pass: which submitted assignments are even legal attackers at all (unchanged checks),
+    // without mutating/tapping anything yet -- the attack-tax total right after needs the FULL
+    // legal set to compute correctly, and an unaffordable tax should reject the whole declaration
+    // cleanly rather than leaving some creatures tapped and others not.
+    const candidateAttackers = {};
     for (const [cardId, defenderId] of Object.entries(assignments || {})) {
       const card = lobby.cards[cardId];
       if (!card || card.owner !== socket.id || card.zoneType !== "creature" || card.tapped) continue;
       const hasHaste = effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "haste");
       if (card.controllerSince === lobby.turn.turnNumber && !hasHaste) continue; // summoning sick
       if (!lobby.players[defenderId] || defenderId === socket.id) continue;
+      candidateAttackers[cardId] = defenderId;
+    }
+    // Attack-tax effects (Propaganda and its functional cousins) -- a real static cost to declare
+    // an attacker against a player who controls one, owed once per attacking creature per effect.
+    const p = lobby.players[socket.id];
+    let totalTax = 0;
+    for (const defenderId of Object.values(candidateAttackers)) {
+      for (const id in lobby.cards) {
+        const c = lobby.cards[id];
+        if (c.owner === defenderId && c.zoneType !== "hand" && c.zoneType !== "stack") {
+          totalTax += ATTACK_TAX_EFFECTS[archiveKey(c.name)] || 0;
+        }
+      }
+    }
+    if (totalTax > 0) {
+      const paid = canAffordAndPay(p.mana, parseManaCost(`{${totalTax}}`), 0);
+      if (!paid) { socket.emit("actionError", `Not enough mana to pay the attack tax (need {${totalTax}} total for these attackers).`); return; }
+      p.mana = paid;
+      broadcastPlayers(lobby);
+      pushLog(lobby, `${p.name} paid {${totalTax}} in attack taxes`);
+    }
+    const validAttackers = {};
+    const defendersSet = new Set();
+    for (const [cardId, defenderId] of Object.entries(candidateAttackers)) {
+      const card = lobby.cards[cardId];
       validAttackers[cardId] = defenderId;
       defendersSet.add(defenderId);
       card.tapped = true;
