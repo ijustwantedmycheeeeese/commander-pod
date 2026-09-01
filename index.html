@@ -77,20 +77,18 @@
     #playmat { width: 3000px; height: 1260px; position: relative; background-image: radial-gradient(#1a2e1e 15%, transparent 15%); background-size: 30px 30px; transform-origin: top left; }
     #playmat.custom-mat { background-size: cover; background-position: center; }
 
-    /* --zone-opacity is a user-controlled multiplier (Settings -> Audio/Visual) on how solid the
-       zone backgrounds and the library/graveyard/exile piles look -- default 1 leaves the original
-       look untouched. Deliberately NOT applied to .zone-band-label (see below): that stays at full
-       opacity always, with its own text-shadow, so the label text never becomes illegible against a
-       busy custom board mat regardless of what the user picked for the zones themselves. */
+    /* --zone-opacity: Settings slider controlling how solid the zone backgrounds and the
+       library/graveyard/exile piles look. Deliberately not applied to .zone-band-label (below) --
+       that stays at full opacity with its own text-shadow so the label text stays legible over any
+       board mat, independent of the opacity slider. */
     .zone-band { position: absolute; border: 1px solid rgba(212,175,55,0.2); border-radius: 10px; opacity: var(--zone-opacity, 1); }
     .zone-band.zone-creature { background: rgba(239,68,68,0.08); }
     .zone-band.zone-artifact { background: rgba(168,85,247,0.08); }
     .zone-band.zone-mana { background: rgba(34,197,94,0.08); }
     .zone-band.zone-hand { background: rgba(59,130,246,0.1); border-style: dashed; }
-    /* A sibling of .zone-band now (not a child -- see renderVisibleBoard), specifically so it's
-       exempt from --zone-opacity. Solid-ish gold plus a dark text-shadow keeps it readable over any
-       board mat, dark or light, busy or plain -- this was the actual "zones almost disappear /
-       text hard to read" complaint, independent of the opacity slider entirely. */
+    /* A sibling of .zone-band, not a child (see renderVisibleBoard) -- so it's exempt from
+       --zone-opacity. Gold plus a dark text-shadow keeps it readable over any board mat, dark or
+       light, busy or plain. */
     .zone-band-label { position: absolute; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #f0dfa0; font-family: 'Cinzel', serif; text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.75); pointer-events: none; }
     .zone-pile-wrap { opacity: var(--zone-opacity, 1); }
 
@@ -154,7 +152,9 @@
 
     #zoom-row input[type=range] { width: 100px; }
 
-    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: none; align-items: center; justify-content: center; z-index: 200; }
+    /* Above #main-menu/#deck-editor-screen (both 400) so a modal reachable from those screens (the
+       Account modal, opened from the Main Menu) actually sits on top of them, not underneath. */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: none; align-items: center; justify-content: center; z-index: 600; }
     .modal-box { position: relative; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 18px; max-width: 640px; width: 90%; max-height: 80vh; overflow-y: auto; }
     .modal-box h2 { margin-top: 0; margin-right: 24px; font-size: 16px; font-family: 'Cinzel', serif; color: #d4af37; }
     .modal-close-row { display: flex; justify-content: flex-end; margin-top: 12px; gap: 8px; }
@@ -252,13 +252,15 @@
   <div id="auth-screen">
     <div id="auth-box">
       <h2 class="mtg-title" style="margin-top:0;">Archon</h2>
-      <input type="text" id="auth-username" placeholder="Username">
-      <input type="password" id="auth-password" placeholder="Password">
-      <div id="auth-error"></div>
-      <div class="flex-row">
-        <button onclick="submitAuth()" style="flex:1;">Log In</button>
-        <button onclick="showRegisterScreen()" class="secondary" style="flex:1;">Register</button>
-      </div>
+      <form id="login-form" autocomplete="on" onsubmit="submitAuth(); return false;">
+        <input type="text" id="auth-username" name="username" autocomplete="username" placeholder="Username">
+        <input type="password" id="auth-password" name="password" autocomplete="current-password" placeholder="Password">
+        <div id="auth-error"></div>
+        <div class="flex-row">
+          <button type="submit" style="flex:1;">Log In</button>
+          <button type="button" onclick="showRegisterScreen()" class="secondary" style="flex:1;">Register</button>
+        </div>
+      </form>
       <p style="font-size:11px;color:#8a7a55;margin-top:12px;">New here? Hit Register to create an account.</p>
     </div>
   </div>
@@ -266,13 +268,15 @@
   <div id="register-screen" style="display:none;">
     <div id="register-box">
       <h2 class="mtg-title" style="margin-top:0;">Create Account</h2>
-      <input type="text" id="register-username" placeholder="Username">
-      <input type="password" id="register-password" placeholder="Password">
-      <div id="register-error"></div>
-      <div class="flex-row">
-        <button onclick="submitRegister()" style="flex:1;">Create Account</button>
-        <button onclick="showLoginScreen()" class="secondary" style="flex:1;">Back to Login</button>
-      </div>
+      <form id="register-form" autocomplete="on" onsubmit="submitRegister(); return false;">
+        <input type="text" id="register-username" name="username" autocomplete="username" placeholder="Username">
+        <input type="password" id="register-password" name="new-password" autocomplete="new-password" placeholder="Password">
+        <div id="register-error"></div>
+        <div class="flex-row">
+          <button type="submit" style="flex:1;">Create Account</button>
+          <button type="button" onclick="showLoginScreen()" class="secondary" style="flex:1;">Back to Login</button>
+        </div>
+      </form>
       <p style="font-size:11px;color:#8a7a55;margin-top:12px;">Already have an account? Go back and log in.</p>
     </div>
   </div>
@@ -519,19 +523,19 @@
         <ul>
           <li>After logging in you land on the <strong>Main Menu</strong>: create a new table (optionally named, optionally password-protected — 🔒 in the list means it needs one) or join one already open, each fully separate from the others — your board, life, decks-in-play, chat, and voice are all scoped to the table you're at. <strong>My Decks</strong> (also on the Main Menu) is where your saved decks live — Edit opens one in the Deck Editor, Del removes it. <strong>Leave Table</strong> (⚙ Menu, in-game) returns to the menu — your seat (board, hand, library, commander, everything) is held for 60 seconds in case you rejoin the same table, shown as a countdown next to your name in the Players panel; after that it's freed up for good.</li>
           <li><strong>Spectate</strong> instead of Join to watch a table without taking a seat — you see the board and life totals like any non-owner (hands and face-down cards stay hidden), can use chat and voice, but can't touch cards or start/advance the game. Works on a game already in progress, not just a fresh table.</li>
-          <li>The <strong>Deck Editor</strong> (Main Menu, or ⚙ Menu once in a table) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too, and its own "Load Into Current Game" button is how you swap decks mid-game.</li>
+          <li>The <strong>Deck Editor</strong> (Main Menu, or ⚙ Menu once in a table) is where you build a deck: up to 2 commander slots and a 99-card library, either added one at a time or bulk-pasted as a decklist — commanders go in their own slots so they never end up shuffled into the library. Loading a saved deck auto-fills your commander slots too, and its own "Load Into Current Game" button is how you swap decks mid-game. <strong>Import from URL</strong> pulls a decklist straight from a Moxfield or Archidekt link — best-effort, since both are unofficial APIs that can break without notice; paste the list directly if it fails.</li>
           <li>Every card belongs to a <strong>zone</strong> (Lands/Mana, Creatures, Artifacts &amp; Enchantments, Hand) based on its real type, and lays itself out automatically.</li>
           <li><strong>Drag</strong> your own card into a different row to move/play it. <strong>Right-click a hand card → Play to Battlefield</strong> does the same instantly. Dragging a permanent back into the Hand row does nothing on purpose — there's no general rule that lets you just pick a permanent back up. To represent a bounce effect, right-click the permanent and choose <strong>Return to Hand</strong> instead.</li>
           <li>Playing a <strong>land</strong> is capped at one per turn (see "Land drops" in the sidebar; use +1 extra drop for effects that let you play more). Once the game has started, lands and anything else that isn't an Instant (or doesn't have Flash) can only be played on your own turn, during a main phase — Instants and Flash cards can go anytime.</li>
           <li>Playing anything else checks your <strong>mana pool</strong> against the card's real cost — you need the mana or it won't go through. This includes <strong>casting your Commander</strong> from its zone: it costs its real mana cost plus the current commander tax shown there, and it's disabled while a copy of it is already on the battlefield.</li>
-          <li>Tap a <strong>basic land</strong>, or any land/rock/dork archived with exactly one fixed color, to auto-add its color to your pool. A source that can produce more than one color (Command Tower, most signets/talismans, City of Brass) prompts you to pick instead of guessing or staying fully manual. The manual +/− buttons in the Mana Pool panel are still there for anything else — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules. A land with "enters the battlefield tapped" in its unconditional text (not shocklands/checklands, which involve a real choice) now actually enters tapped.</li>
+          <li>Tap a <strong>basic land</strong>, or any land/rock/dork archived with exactly one fixed color, to auto-add its color to your pool. A source that can produce more than one color (Command Tower, most signets/talismans, City of Brass) prompts you to pick instead of guessing or staying fully manual. The manual +/− buttons in the Mana Pool panel are still there for anything else — use − to back out a misclick. Mana empties at the end of every step/phase, like the real rules. A land with "enters the battlefield tapped" in its unconditional text (not shocklands/checklands, which involve a real choice) enters tapped. A source that costs mana or another cost to activate (signets, fetchlands, and similar) shows up as its own labeled button in the right-click menu instead of a plain tap — a fetchland's search prompts you to pick a matching land straight out of your library.</li>
           <li><strong>Double-click</strong> your own card to tap it (using it, e.g. for mana) — this only ever taps, since there's no real rule that lets you freely untap something at will; untapping only happens automatically each Untap step, or via <strong>Untap All</strong> for effects that untap things. Right-click for the full action menu — only your own cards can be tapped/flipped/countered/removed; anyone can <strong>Target</strong> anything.</li>
           <li>A creature has <strong>summoning sickness</strong> (shown tilted) until it's been under your control since the start of your most recent turn — it can still block, just not attack, unless it has Haste.</li>
           <li><strong>Opening Hand</strong> pops up automatically the moment a game starts: Draw 7, Mulligan up to twice, then Keep Hand — stays up until you keep a hand, then it's gone for the rest of the game.</li>
           <li><strong>Hand size</strong> is capped at 7: ending your turn (past End Step) with more than that opens a required discard prompt — pick exactly enough cards to get back to 7 before the turn actually ends. A permanent whose text says "no maximum hand size" exempts you entirely.</li>
           <li><strong>Casting a spell</strong> (anything except a land) puts it on the <strong>Stack</strong> instead of resolving instantly — everyone gets a real window to respond with an instant/flash spell of their own before it resolves, last-in-first-out, same as real Magic. Whoever currently has priority sees a "You have priority" prompt with a Pass button; once everyone passes in a row, the top of the stack resolves — a permanent goes to the battlefield, an instant/sorcery goes to the graveyard. You can't play a land, advance the turn, or move combat forward while something's pending. What a spell's text actually *does* is still up to you to adjudicate manually, same as combat keywords — the stack only handles the sequencing. Any player can hit <strong>Counter</strong> on a stack item to send it straight to the graveyard (or, for a ⚡ triggered ability, just remove it), representing a counterspell or similar effect that resolved elsewhere.</li>
-          <li>A small, growing list of specific cards have a real <strong>triggered ability</strong> ("when this enters the battlefield...") automated — it shows up on the Stack marked ⚡, resolves the same way a spell does, and actually applies its effect (draws cards, creates tokens, changes life totals, destroys/exiles/bounces a chosen creature) when it resolves. This only covers a card's own trigger about itself, hand-picked and added over time — everything else about every card, and every card without one of these, is still adjudicated manually exactly as before. A few of these need a target — a gold banner appears telling you what to pick, and clicking any card on the battlefield chooses it (the trigger doesn't even join the Stack until you do).</li>
-          <li><strong>Manage Keywords</strong> (right-click a battlefield permanent) lets you grant it Flying, Haste, Indestructible, and other common keywords, representing an aura/equipment/anthem effect — shown as small icon badges on the card. Nothing is enforced automatically except Haste, which already plugs into the summoning-sickness check.</li>
+          <li>A growing catalog of specific cards have a real <strong>triggered ability</strong> automated — enters-the-battlefield, dies, attacks, "another creature you control dies," gaining life, and casting a spell can all trigger something — it shows up on the Stack marked ⚡, resolves the same way a spell does, and actually applies its effect (draws cards, creates tokens, changes life totals, destroys/exiles/bounces a chosen creature) when it resolves. Only cards with a matching entry get this; everything else is still adjudicated manually. A few of these need a target — a gold banner appears telling you what to pick, and clicking any card on the battlefield chooses it (the trigger doesn't even join the Stack until you do).</li>
+          <li><strong>Manage Keywords</strong> (right-click a battlefield permanent) lets you grant it Flying, Haste, Indestructible, and other common keywords, representing an aura/equipment/anthem effect — shown as small icon badges on the card. Nothing is enforced automatically except Haste, which already plugs into the summoning-sickness check. A plain "Other creatures you control get +X/+Y" anthem/lord effect is picked up automatically from a permanent's own printed text and applied to everyone else's stats; anything more conditional (color- or type-restricted anthems) still needs a manual grant.</li>
           <li><strong>Attach To...</strong> (right-click, on equipment/auras or anything else) links a card to another permanent — shown as a small "⚭ Host Name" label on the attached card, and "🔗 Name" on the host listing what's attached to it. If the card's text has a real Equip cost, it's paid automatically from your mana pool; anything else (like an aura, whose cost was already paid casting it) attaches for free. A simple, common pattern of oracle text — "Equipped/Enchanted creature gets +X/+Y" and/or "...has [keyword]" — is automated: the bonus and any granted keyword actually apply to combat math and summoning-sickness checks (shown as a small blue +X/+Y badge and a keyword icon on the card), for as long as the attachment lasts. Anything more conditional than that plain wording isn't picked up and still needs a manual <strong>Manage Keywords</strong> grant. If the host leaves the battlefield, an attached Aura goes to the graveyard with it; anything else just becomes unattached. <strong>Detach</strong> is always free, for manual correction.</li>
           <li><strong>Take Control</strong> (right-click any permanent that isn't already yours) represents an effect like Control Magic — the card moves to your board and you can play it as your own; it's marked "stolen from X" and treated as freshly under your control (summoning sick again, like real Magic). <strong>Return Control</strong> hands it back to its real owner whenever the effect should end — nothing tracks that duration automatically, same as everything else this app doesn't automate.</li>
           <li><strong>Create Copy</strong> (right-click any permanent) represents an effect like Clone — makes you a fresh token sharing that card's current printed name/type/P-T/text/keywords, not its counters, attachments, or any equipment bonus (matching how a real copy effect works). Fires that card's own "enters the battlefield" trigger if it has one, same as any other new permanent. Blocked on an opponent's face-down card, so it can't be used to peek at something hidden.</li>
@@ -540,10 +544,11 @@
           <li><strong>Free Cast (no cost)</strong> (right-click a hand card) represents an effect like Cascade or Through the Breach — casts it without paying its mana cost or checking whose turn it is, straight onto the stack like any other cast. A manual tool for whatever already-resolved effect earned it; nothing verifies you actually earned it.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click.</li>
           <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
-          <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. Note: this is vanilla combat math only — keyword abilities like deathtouch, first strike, or trample aren't automatically applied.</li>
+          <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. First strike, deathtouch, trample, double strike, and lifelink are all factored into damage automatically when granted via Manage Keywords or an equipment/aura bonus. A shared combat view pops up for everyone at the table once attackers are declared, showing each attacker next to its blocker (or the player it's headed for) side by side. Some cards tax declaring attackers against their controller (Propaganda and similar) — the total cost across every attacker you're declaring is checked and paid before any of them tap.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
-          <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it. Save one under a name in the <strong>Account</strong> modal to reuse it on any table later instead of pasting the URL every time — pick it from the dropdown next to Set/Clear and hit Apply.</li>
+          <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it. Save one under a name in the <strong>Account</strong> modal to reuse it on any table later instead of pasting the URL every time — pick it from the dropdown next to Set/Clear and hit Apply. The <strong>Zone Opacity</strong> slider (same Settings panel) controls how solid the zone outlines and library/graveyard/exile piles look, if a busy mat makes them hard to pick out.</li>
+          <li>The active player's name shows a small elapsed-time readout once their turn's been going a while, purely informational — nothing is ever auto-passed or forced. Casting, combat damage, and a trigger waiting on your target all play a short sound cue; volume for each is adjustable in Settings, same panel as the music slider.</li>
           <li><strong>Account</strong> (Main Menu, or ⚙ Menu → Profile → Account Settings) is where account-wide preferences live, separate from the per-table nickname field: an avatar (by image URL, shown next to your color dot in the Players panel), a default nickname used every time you join a new table, and a change-password form. These persist across every table, unlike the per-table nickname override.</li>
           <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
         </ul>
@@ -698,51 +703,6 @@
       </div>
     </div>
 
-    <div class="modal-overlay" id="account-modal">
-      <div class="modal-box" style="max-width:420px;">
-        <button class="modal-close-x" onclick="closeAccountModal()" title="Close">✕</button>
-        <h2>Account</h2>
-
-        <div class="mm-label" style="margin-top:0;">Avatar</div>
-        <div class="flex-row" style="align-items:center;margin-bottom:6px;">
-          <img id="account-avatar-preview" src="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;background:#2a2a30;display:none;border:2px solid #5a4423;">
-          <input type="text" id="account-avatar-url" placeholder="Avatar image URL..." oninput="previewAccountAvatar()" style="flex:1;">
-          <input type="file" id="account-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'account-avatar-url', previewAccountAvatar)">
-          <button class="mini-btn secondary" onclick="document.getElementById('account-avatar-file').click()">Upload...</button>
-        </div>
-
-        <div class="mm-label">Default Nickname</div>
-        <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Used whenever you join a new table, instead of your username.</div>
-        <input type="text" id="account-default-name" placeholder="Default nickname..." style="width:100%;margin-bottom:6px;">
-
-        <div class="flex-row" style="margin-bottom:10px;">
-          <button onclick="saveAccountProfile()">Save Profile</button>
-        </div>
-        <div id="account-profile-status" style="font-size:12px;color:#a89a70;margin-bottom:10px;"></div>
-
-        <div class="mm-label">Saved Board Mats</div>
-        <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Save a mat once, then pick it from any table's Board Mat menu instead of pasting the URL again.</div>
-        <div class="flex-row" style="align-items:center;margin-bottom:6px;">
-          <input type="text" id="new-mat-url" placeholder="Mat image URL..." style="flex:1;">
-          <input type="file" id="new-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'new-mat-url')">
-          <button class="mini-btn secondary" onclick="document.getElementById('new-mat-file').click()">Upload...</button>
-        </div>
-        <div class="flex-row" style="margin-bottom:10px;">
-          <button class="mini-btn" onclick="saveNewMat()">Save As...</button>
-        </div>
-        <div id="saved-mats-list" style="margin-bottom:10px;"></div>
-
-        <div class="mm-label">Change Password</div>
-        <input type="password" id="account-current-password" placeholder="Current password" style="width:100%;margin-bottom:6px;">
-        <input type="password" id="account-new-password" placeholder="New password" style="width:100%;margin-bottom:6px;">
-        <input type="password" id="account-confirm-password" placeholder="Confirm new password" style="width:100%;margin-bottom:6px;">
-        <div class="flex-row" style="margin-bottom:6px;">
-          <button class="secondary" onclick="changeAccountPassword()">Change Password</button>
-        </div>
-        <div id="account-password-status" style="font-size:12px;color:#a89a70;"></div>
-      </div>
-    </div>
-
     <div class="modal-overlay" id="token-modal">
       <div class="modal-box" style="max-width:420px;">
         <button class="modal-close-x" onclick="closeTokenModal()" title="Close">✕</button>
@@ -791,6 +751,57 @@
           <button onclick="saveKeywords()">Save</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Sibling of #app-root and #main-menu, not nested in either -- Account is reachable both from
+       the Main Menu (before joining any table) and from the in-game ⚙ Menu, so this modal can't
+       live inside a container that's hidden on one of those two screens. -->
+  <div class="modal-overlay" id="account-modal">
+    <div class="modal-box" style="max-width:420px;">
+      <button class="modal-close-x" onclick="closeAccountModal()" title="Close">✕</button>
+      <h2>Account</h2>
+
+      <div class="mm-label" style="margin-top:0;">Avatar</div>
+      <div class="flex-row" style="align-items:center;margin-bottom:6px;">
+        <img id="account-avatar-preview" src="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;background:#2a2a30;display:none;border:2px solid #5a4423;">
+        <input type="text" id="account-avatar-url" placeholder="Avatar image URL..." oninput="previewAccountAvatar()" style="flex:1;">
+        <input type="file" id="account-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'account-avatar-url', previewAccountAvatar)">
+        <button class="mini-btn secondary" onclick="document.getElementById('account-avatar-file').click()">Upload...</button>
+      </div>
+
+      <div class="mm-label">Default Nickname</div>
+      <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Used whenever you join a new table, instead of your username.</div>
+      <input type="text" id="account-default-name" placeholder="Default nickname..." style="width:100%;margin-bottom:6px;">
+
+      <div class="flex-row" style="margin-bottom:10px;">
+        <button onclick="saveAccountProfile()">Save Profile</button>
+      </div>
+      <div id="account-profile-status" style="font-size:12px;color:#a89a70;margin-bottom:10px;"></div>
+
+      <div class="mm-label">Saved Board Mats</div>
+      <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Save a mat once, then pick it from any table's Board Mat menu instead of pasting the URL again.</div>
+      <div class="flex-row" style="align-items:center;margin-bottom:6px;">
+        <input type="text" id="new-mat-url" placeholder="Mat image URL..." style="flex:1;">
+        <input type="file" id="new-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'new-mat-url')">
+        <button class="mini-btn secondary" onclick="document.getElementById('new-mat-file').click()">Upload...</button>
+      </div>
+      <div class="flex-row" style="margin-bottom:10px;">
+        <button class="mini-btn" onclick="saveNewMat()">Save As...</button>
+      </div>
+      <div id="saved-mats-list" style="margin-bottom:10px;"></div>
+
+      <div class="mm-label">Change Password</div>
+      <form id="change-password-form" autocomplete="on" onsubmit="changeAccountPassword(); return false;">
+        <input type="text" id="account-username-hidden" name="username" autocomplete="username" style="display:none;" aria-hidden="true">
+        <input type="password" id="account-current-password" name="current-password" autocomplete="current-password" placeholder="Current password" style="width:100%;margin-bottom:6px;">
+        <input type="password" id="account-new-password" name="new-password" autocomplete="new-password" placeholder="New password" style="width:100%;margin-bottom:6px;">
+        <input type="password" id="account-confirm-password" name="new-password" autocomplete="new-password" placeholder="Confirm new password" style="width:100%;margin-bottom:6px;">
+        <div class="flex-row" style="margin-bottom:6px;">
+          <button type="submit" class="secondary">Change Password</button>
+        </div>
+      </form>
+      <div id="account-password-status" style="font-size:12px;color:#a89a70;"></div>
     </div>
   </div>
 
@@ -1044,6 +1055,7 @@
     const previewPanel = document.getElementById("preview-panel");
 
     let myId = null;
+    let myUsername = null;
     let currentLobbyId = null;
     let currentLobbyName = null;
     let players = {};
@@ -1098,6 +1110,9 @@
       document.getElementById("main-menu").style.display = "flex";
       startLobbyMusic();
       renderDeckList(data.decks);
+      myUsername = data.username;
+      const usernameHidden = document.getElementById("account-username-hidden");
+      if (usernameHidden) usernameHidden.value = data.username;
       myAccountAvatar = data.avatar || null;
       myAccountDefaultName = data.defaultName || null;
       mySavedMats = data.mats || {};

@@ -960,16 +960,11 @@ function reattachPlayer(lobby, oldId, newId) {
   p.disconnectedAt = null;
   lobby.players[newId] = p;
 
-  // The bug this loop's broadcastCard call fixes: reassigning .owner here only ever updated THIS
-  // server's own memory. Both call sites already send the reconnecting player their own full,
-  // correct board via lobbyJoined -- but every OTHER already-connected client's local allCards
-  // cache still held these same cards under the OLD (now-orphaned) owner id, since nothing ever
-  // told them otherwise. Rendering code that groups cards by owner against the current players list
-  // would then find zero cards under the new id -- the reconnecting player's entire board silently
-  // vanishing from everyone ELSE's screen, even though the reconnecting player's own view looked
-  // fine. Reproducible back-and-forth: whoever refreshes correctly sees everything, but every other
-  // still-connected client's view of THEM goes stale, until that player also refreshes (or a real
-  // leave+rejoin, which already resends everything to everyone via a different path).
+  // Reassigning ownership only updates server memory. The reconnecting player gets their own full,
+  // correct board via lobbyJoined, but every other connected client's local card cache still holds
+  // these cards under the old (now-orphaned) owner id unless told otherwise -- rendering that groups
+  // cards by owner against the current players list would then show none of the reconnecting
+  // player's cards to anyone else. Broadcasting each touched card keeps every client in sync.
   for (const id in lobby.cards) {
     const card = lobby.cards[id];
     let touched = false;
@@ -1527,14 +1522,12 @@ function pushToStack(lobby, card, casterId) {
 }
 
 // The single choke point for "a card in hand is being cast." A target-requiring instant/sorcery
-// (SPELL_ABILITIES with requiresTarget) gets its target locked in as PART OF casting -- exactly
-// like real Magic, and exactly like this file's existing pattern for triggered abilities (see
-// fireTrigger just below) -- rather than being pushed to the stack immediately and only prompted
-// for a target once it resolves (the bug this replaces: a cast instant would sit on the stack with
-// no visible sign it needed a target at all, since the prompt didn't fire until resolution, which
-// could be turns later or never come up before the game moved on). The card stays in hand until a
-// target is chosen; only then does it actually go on the stack, with its target already resolved.
-// Everything else (untargeted spells, permanents, lands never reach this at all) is unaffected.
+// (SPELL_ABILITIES with requiresTarget) gets its target locked in as PART OF casting -- matching
+// real Magic rules, and this file's existing pattern for triggered abilities (see fireTrigger just
+// below) -- rather than being pushed to the stack and only prompted for a target once it resolves,
+// which would leave a spell sitting on the stack with no visible sign it needs a target. The card
+// stays in hand until a target is chosen; only then does it go on the stack, target already
+// resolved. Untargeted spells, permanents, and lands never reach this at all.
 function castSpell(lobby, card, casterId, logSuffix) {
   if (isInstantOrSorcery(card.type)) {
     const spellAbility = getSpellAbility(card.name);
@@ -2979,10 +2972,10 @@ io.on("connection", (socket) => {
     lobby.pendingTargetChoices.splice(idx, 1);
     const effects = entry.effects.map((e) => ({ ...e, chosenTargetId: targetId }));
     if (entry.kind === "castSpell") {
-      // Target chosen as part of casting (matches real Magic, and fixes the actual bug -- the
-      // prompt now fires immediately when the spell is cast, not whenever it happens to resolve).
-      // The spell now actually goes on the stack, with its chosen target baked into
-      // _resolvedSpellEffects so resolveStackTop just runs them directly later, no second prompt.
+      // Target chosen as part of casting, matching real Magic -- the prompt fires immediately when
+      // the spell is cast, not whenever it happens to resolve. The spell goes on the stack with its
+      // chosen target baked into _resolvedSpellEffects so resolveStackTop just runs it directly
+      // later, no second prompt.
       entry.spellCard._resolvedSpellEffects = effects;
       pushToStack(lobby, entry.spellCard, entry.controllerId);
       const owner = lobby.players[entry.controllerId];
