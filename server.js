@@ -203,7 +203,7 @@ const CARD_ABILITIES = {
   "kitchen finks": [{ trigger: "etb", label: "Kitchen Finks — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
   "hornet queen": [{
     trigger: "etb", label: "Hornet Queen — create four Insect tokens",
-    effects: [{ type: "createToken", amount: 4, name: "Insect", type: "Token Creature — Insect", power: "1", toughness: "1", colors: ["G"], keywords: ["Flying", "Deathtouch"] }]
+    effects: [{ type: "createToken", amount: 4, name: "Insect", tokenType: "Token Creature — Insect", power: "1", toughness: "1", colors: ["G"], keywords: ["Flying", "Deathtouch"] }]
   }],
   // Real text is "you may draw a card" -- optional triggers ("may") aren't modeled, always resolves.
   "solemn simulacrum": [{ trigger: "death", label: "Solemn Simulacrum — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
@@ -258,7 +258,20 @@ const CARD_ABILITIES = {
   "elenda's hierophant": [{ trigger: "selfGainsLife", label: "Elenda's Hierophant — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
   "scion of the swarm": [{ trigger: "selfGainsLife", label: "Scion of the Swarm — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
   "twinblade paladin": [{ trigger: "selfGainsLife", label: "Twinblade Paladin — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
-  "aerith gainsborough": [{ trigger: "selfGainsLife", label: "Aerith Gainsborough — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }]
+  "aerith gainsborough": [{ trigger: "selfGainsLife", label: "Aerith Gainsborough — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  // Windcrag Siege ("As this enchantment enters, choose Mardu or Jeskai. • Mardu — ... • Jeskai —
+  // At the beginning of your upkeep, create a 1/1 red Goblin creature token. It gains lifelink and
+  // haste until end of turn.") -- the mode itself is chosen via ACTIVATED_ABILITIES (see its comment
+  // for why), this is just the Jeskai mode's resulting upkeep trigger, gated on that choice.
+  // Simplification: lifelink/haste are granted PERMANENTLY on the token rather than until end of
+  // turn -- this app has no temporary/duration-based effect system (nothing ever expires at cleanup),
+  // so a real "until end of turn" grant isn't representable; haste no longer matters past this turn
+  // anyway, and permanent lifelink on a single 1/1 token is a minor, disclosed deviation rather than
+  // a silent one. The Mardu mode ("double a triggered ability caused by attacking") is NOT automated
+  // at all -- it would need to intercept every OTHER permanent's arbitrary triggered abilities, far
+  // outside this vocabulary's scope; picking it is tracked (see chooseMode) but has no game effect.
+  "windcrag siege": [{ trigger: "upkeep", label: "Windcrag Siege — create a Goblin token", condition: (c) => c.chosenMode === "Jeskai",
+    effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], keywords: ["Lifelink", "Haste"] }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -404,7 +417,16 @@ const ACTIVATED_ABILITIES = {
   "triskaidekaphile": [{ cost: { mana: "{3}{U}" }, label: "Triskaidekaphile — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "red herring": [{ cost: { mana: "{2}", sacrifice: true }, label: "Red Herring — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "swarm shambler": [{ cost: { mana: "{1}", tap: true }, label: "Swarm Shambler — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
-  "ice cream kitty": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Ice Cream Kitty — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }]
+  "ice cream kitty": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Ice Cream Kitty — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  // Windcrag Siege's "as this enchantment enters, choose Mardu or Jeskai" -- modeled as two free,
+  // no-cost activated abilities rather than a new generic "modal ETB choice" prompt system, since
+  // this app already has a working per-card dynamic-button mechanism (maskCard's activatedAbilities
+  // list) that fits perfectly: `condition` hides both once chosenMode is set, so the choice can only
+  // be made once. See the matching CARD_ABILITIES entry for what the Jeskai mode actually does.
+  "windcrag siege": [
+    { label: "Windcrag Siege — choose Mardu", condition: (c) => !c.chosenMode, effects: [{ type: "chooseMode", mode: "Mardu" }] },
+    { label: "Windcrag Siege — choose Jeskai", condition: (c) => !c.chosenMode, effects: [{ type: "chooseMode", mode: "Jeskai" }] }
+  ]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -596,13 +618,21 @@ const EFFECTS = {
       }
     });
   },
+  // `tokenType` (the token's own type line), NOT `type` -- an effect's dispatch key IS `type`
+  // ("createToken", read by executeAbilityEffects via `EFFECTS[params.type]`), so a params object
+  // can't also use `type` for anything else: a duplicate `type` key in the same object literal
+  // silently keeps only the LAST one, which for years quietly overwrote "createToken" with whatever
+  // the token's type line was, making `EFFECTS[params.type]` look up a nonexistent handler and
+  // silently no-op -- Hornet Queen and every other createToken entry created zero tokens in
+  // practice despite looking correct in the table and resolving "cleanly" off the stack. Found while
+  // adding Windcrag Siege's token trigger, which copied the exact same (broken) shape.
   createToken(lobby, ctx, params) {
     const n = params.amount || 1;
     for (let i = 0; i < n; i++) {
       spawnBattlefieldCard(lobby, {
-        name: params.name || "Token", type: params.type || "Token Creature", img: params.img || "",
+        name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
         power: params.power, toughness: params.toughness, colors: params.colors || [],
-        keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.type || "Token Creature")
+        keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature")
       });
     }
   },
@@ -611,6 +641,16 @@ const EFFECTS = {
   addCountersToSelf(lobby, ctx, params) {
     const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
     if (card) { card.counters = (card.counters || 0) + (params.amount || 1); broadcastCard(lobby, card); }
+  },
+  // Records a "choose one" ETB-style pick (e.g. Windcrag Siege's "choose Mardu or Jeskai") directly
+  // on the source card, for other abilities' `condition` to key off of and for the client to show.
+  // Modeled as a player-activated ability (see ACTIVATED_ABILITIES) rather than a real automatic ETB
+  // trigger, since this app has no generic "choose one of these modes" prompt -- reusing the
+  // existing per-card activated-ability button list (each mode its own entry, self-hidden via
+  // `condition` once a mode is already chosen) needed no new UI at all.
+  chooseMode(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (card) { card.chosenMode = params.mode; broadcastCard(lobby, card); }
   },
   // The four targeted effects -- params.chosenTargetId is baked in by chooseTargetFor before this
   // ever runs (see queueTargetChoice), so resolveStackTop/passPriority need no knowledge of
@@ -1335,7 +1375,14 @@ function maskCard(card, viewerId) {
   if (card.zoneType === "hand" || card.zoneType === "stack") return card;
   const abilities = getActivatedAbilities(card.name);
   if (!abilities.length) return card;
-  return { ...card, activatedAbilities: abilities.map((a, index) => ({ index, label: a.label })) };
+  // `index` has to stay the RAW index into the unfiltered array -- activateAbility looks the chosen
+  // ability back up by that same index, so a filtered-out entry must not shift the numbering of the
+  // ones still visible.
+  const visible = abilities
+    .map((a, index) => ({ a, index }))
+    .filter(({ a }) => !a.condition || a.condition(card));
+  if (!visible.length) return card;
+  return { ...card, activatedAbilities: visible.map(({ a, index }) => ({ index, label: a.label })) };
 }
 
 function broadcastCard(lobby, card) {
@@ -1660,9 +1707,13 @@ function finishStackTail(lobby) {
   broadcastPlayers(lobby);
   broadcastStack(lobby);
 }
-// Shared by fireEtbTriggers/fireDeathTriggers/fireAttackTriggers: either queues for a target or
-// pushes straight to the stack, depending on the authored ability.
+// Shared by fireEtbTriggers/fireDeathTriggers/fireAttackTriggers/fireGlobalTrigger: either queues
+// for a target or pushes straight to the stack, depending on the authored ability. An optional
+// `condition(card)` gates on the SOURCE card's own runtime state (e.g. "only if this permanent's
+// controller chose mode X") -- distinct from targeting or from fireGlobalTrigger's forPlayerId
+// scoping, which are both about who the event happened to, not what state the source card is in.
 function fireTrigger(lobby, card, ability) {
+  if (ability.condition && !ability.condition(card)) return;
   if (ability.requiresTarget) {
     queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType });
   } else {
@@ -1865,12 +1916,17 @@ function bounceCardToHandInternal(lobby, card) {
 
 // ---------------- turn engine ----------------
 
-// Untap/Upkeep/Draw never require a decision (no triggers are automated, draw already happens on
-// its own), and Combat is skipped too when the active player has no creature to attack with --
-// no need to make them click through three no-op phases (or an empty combat) every single turn.
+// Untap/Upkeep/Draw never require a decision of their own (draw already happens automatically),
+// and Combat is skipped too when the active player has no creature to attack with -- no need to
+// make them click through three no-op phases (or an empty combat) every single turn. Stops short
+// the instant something lands on the stack (an upkeep trigger firing mid-Upkeep, say) -- advancing
+// straight through to Main 1 anyway would leave a real triggered ability stranded unresolved while
+// the phase indicator claims the table's already past it, and the priority UI wouldn't even be
+// showing yet to prompt for it.
 function shouldAutoAdvance(lobby) {
   const turn = lobby.turn;
   if (!turn.started || turn.order.length === 0) return false;
+  if (lobby.stack.length > 0) return false;
   if (turn.phase === "Untap" || turn.phase === "Upkeep" || turn.phase === "Draw") return true;
   if (turn.phase === "Combat") {
     const activeId = turn.order[turn.activeIndex];
@@ -1918,6 +1974,10 @@ function advanceOnePhase(lobby) {
       }
     }
   }
+  // "At the beginning of your upkeep" triggers -- reuses fireGlobalTrigger exactly as it already
+  // scans a player's own permanents for aristocrats-style non-self-referential triggers; an upkeep
+  // trigger is likewise "whoever's upkeep this is", not about the source card's own history.
+  if (activePlayer && turn.phase === "Upkeep") fireGlobalTrigger(lobby, "upkeep", activeId);
   if (activePlayer && turn.phase === "Draw") {
     const isVeryFirstTurn = turn.turnNumber === 1 && turn.activeIndex === 0;
     if (!isVeryFirstTurn) {
