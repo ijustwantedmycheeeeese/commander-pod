@@ -44,7 +44,9 @@ function deleteUploadIfOrphaned(oldUrl, forUsername) {
   for (const id in lobbies) {
     for (const sid in lobbies[id].players) {
       const p = lobbies[id].players[sid];
-      if (p.username === forUsername && p.boardMat === oldUrl) return;
+      if (p.username !== forUsername) continue;
+      if (p.boardMat === oldUrl) return;
+      if (p.pileArt && Object.values(p.pileArt).some((a) => a && a.url === oldUrl)) return;
     }
   }
   const filename = oldUrl.slice("/uploads/".length);
@@ -1266,6 +1268,13 @@ function sanitizeImgUrl(s) {
   return /^(https?:\/\/|\/uploads\/)/i.test(v) ? v : "";
 }
 
+// A crop/zoom transform for a custom image (pile art, board mat) -- scale is a zoom multiplier on
+// top of a cover-fit baseline, x/y are the object-position percentages used to pan within it.
+function sanitizeImgFit({ scale, x, y } = {}) {
+  const clamp = (n, lo, hi, dflt) => { n = Number(n); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt; };
+  return { scale: clamp(scale, 1, 3, 1), x: clamp(x, 0, 100, 50), y: clamp(y, 0, 100, 50) };
+}
+
 // A handful of places turn a free-text, client-supplied string directly into an object key on a
 // plain JS object (usernames on `users`, deck/mat names on `decks[username]`/`mats[username]`).
 // "__proto__" as a key doesn't add an own property -- it reassigns that object's prototype, and
@@ -1350,6 +1359,8 @@ function playersView(lobby, viewerId) {
       eliminated: !!p.eliminated,
       poison: p.poison,
       boardMat: p.boardMat || null,
+      boardMatFit: p.boardMatFit || null,
+      pileArt: p.pileArt || { library: null, graveyard: null, exile: null },
       mulligans: p.mulligans,
       handKept: p.handKept,
       openingHandDrawn: !!p.openingHandDrawn,
@@ -2343,7 +2354,8 @@ io.on("connection", (socket) => {
       username,
       name: (users[username] && users[username].defaultName) || username,
       color: nextColor(),
-      life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0, boardMat: null,
+      life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0, boardMat: null, boardMatFit: null,
+      pileArt: { library: null, graveyard: null, exile: null },
       library: [], graveyard: [], exile: [],
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
@@ -2478,10 +2490,33 @@ io.on("connection", (socket) => {
   socket.on("setBoardMat", (url) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
     const clean = sanitizeImgUrl(url);
-    const oldMat = lobby.players[socket.id].boardMat;
-    lobby.players[socket.id].boardMat = clean || null;
+    const p = lobby.players[socket.id];
+    const oldMat = p.boardMat;
+    p.boardMat = clean || null;
+    // A crop/zoom set for the OLD photo would frame a totally different image now -- reset to the
+    // default cover/center fit whenever the mat itself actually changes, not just on every re-set
+    // of the same URL (e.g. immediately followed by a real setBoardMatFit from the crop editor).
+    if (oldMat !== p.boardMat) p.boardMatFit = null;
     broadcastPlayers(lobby);
-    if (oldMat && oldMat !== lobby.players[socket.id].boardMat) deleteUploadIfOrphaned(oldMat, username);
+    if (oldMat && oldMat !== p.boardMat) deleteUploadIfOrphaned(oldMat, username);
+  });
+
+  socket.on("setBoardMatFit", (fit) => {
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    lobby.players[socket.id].boardMatFit = sanitizeImgFit(fit);
+    broadcastPlayers(lobby);
+  });
+
+  socket.on("setPileArt", ({ zone, url, scale, x, y } = {}) => {
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    if (!["library", "graveyard", "exile"].includes(zone)) return;
+    const p = lobby.players[socket.id];
+    if (!p.pileArt) p.pileArt = { library: null, graveyard: null, exile: null };
+    const oldEntry = p.pileArt[zone];
+    const clean = sanitizeImgUrl(url);
+    p.pileArt[zone] = clean ? { url: clean, ...sanitizeImgFit({ scale, x, y }) } : null;
+    broadcastPlayers(lobby);
+    if (oldEntry && oldEntry.url && oldEntry.url !== clean) deleteUploadIfOrphaned(oldEntry.url, username);
   });
 
   socket.on("statChange", ({ key, val }) => {

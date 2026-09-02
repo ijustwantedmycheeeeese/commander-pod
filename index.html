@@ -75,7 +75,10 @@
 
     #table-wrapper { flex: 1; position: relative; background: radial-gradient(ellipse at center, #16241a 0%, #0a120c 100%); overflow: auto; }
     #playmat { width: 3000px; height: 1260px; position: relative; background-image: radial-gradient(#1a2e1e 15%, transparent 15%); background-size: 30px 30px; transform-origin: top left; }
-    #playmat.custom-mat { background-size: cover; background-position: center; }
+    /* object-fit:cover gives the "fit to space" baseline on its own; scale()/object-position add the
+       optional extra zoom/pan from the crop editor on top of it. Hidden (no src) when there's no
+       custom board mat -- #playmat's own polka-dot background-image shows through instead. */
+    #playmat-mat-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; pointer-events: none; display: none; }
 
     /* --zone-opacity: Settings slider controlling how solid the zone backgrounds and the
        library/graveyard/exile piles look. Deliberately not applied to .zone-band-label (below) --
@@ -443,7 +446,7 @@
         </div>
         <div id="board-tabs"></div>
         <div id="table-wrapper">
-          <div id="playmat"><div id="fx-layer"></div></div>
+          <div id="playmat"><img id="playmat-mat-img" alt=""><div id="fx-layer"></div></div>
         </div>
       </div>
 
@@ -673,10 +676,19 @@
           <button class="mini-btn" onclick="setBoardMat()">Set</button>
           <button class="mini-btn secondary" onclick="clearBoardMat()">Clear</button>
           <button class="mini-btn secondary" onclick="document.getElementById('board-mat-file').click()">Upload...</button>
+          <button class="mini-btn secondary" onclick="openCropEditor('boardMat')" title="Crop, zoom, and pan the board mat image">Crop...</button>
         </div>
         <div class="flex-row" style="margin-bottom:6px;">
           <select id="saved-mat-select"><option value="">-- saved mats --</option></select>
           <button class="mini-btn secondary" onclick="applySavedMat()">Apply</button>
+        </div>
+
+        <div class="mm-label">Pile Art</div>
+        <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Set a custom photo behind each pile's icon, with its own crop and zoom.</div>
+        <div class="flex-row" style="margin-bottom:6px;">
+          <button class="mini-btn secondary" onclick="openCropEditor('pile', 'library')">Library</button>
+          <button class="mini-btn secondary" onclick="openCropEditor('pile', 'graveyard')">Graveyard</button>
+          <button class="mini-btn secondary" onclick="openCropEditor('pile', 'exile')">Exile</button>
         </div>
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;margin-bottom:6px;font-size:12px;">
           <span title="How solid the creature/artifact/mana/hand zone outlines and the library/graveyard/exile piles look -- turn this up if a busy board mat makes them hard to see">Zone Opacity</span>
@@ -814,6 +826,41 @@
         </div>
       </form>
       <div id="account-password-status" style="font-size:12px;color:#a89a70;"></div>
+    </div>
+  </div>
+
+  <!-- Shared crop/zoom editor for the board mat and each pile's custom art -- see the account-modal
+       comment above for why this lives as a sibling of #app-root/#main-menu rather than nested
+       inside either. -->
+  <div class="modal-overlay" id="crop-modal">
+    <div class="modal-box" style="max-width:420px;">
+      <button class="modal-close-x" onclick="closeCropEditor()" title="Close">✕</button>
+      <h2 id="crop-modal-title">Edit Image</h2>
+      <input type="text" id="crop-source-url" placeholder="Image URL..." oninput="cropSourceChanged()" style="width:100%;margin-bottom:6px;">
+      <input type="file" id="crop-source-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'crop-source-url', cropSourceChanged)">
+      <div class="flex-row" style="margin-bottom:10px;">
+        <button class="mini-btn secondary" onclick="document.getElementById('crop-source-file').click()">Upload...</button>
+        <button class="mini-btn secondary" onclick="cropResetFit()">Fit to Space</button>
+      </div>
+      <div id="crop-preview-box" style="position:relative;width:100%;max-width:280px;margin:0 auto 12px;overflow:hidden;border-radius:10px;border:2px solid #5a4423;background:#100c08;">
+        <img id="crop-preview-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
+        <div id="crop-preview-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8a7a55;font-size:12px;text-align:center;padding:10px;">Paste a URL or upload a photo above.</div>
+      </div>
+      <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 8px;align-items:center;font-size:12px;">
+        <span>Zoom</span>
+        <input type="range" id="crop-zoom" min="100" max="300" value="100" oninput="cropUpdatePreview()">
+        <span id="crop-zoom-label" style="width:36px;text-align:right;color:#a89a70;">100%</span>
+        <span>Pan X</span>
+        <input type="range" id="crop-x" min="0" max="100" value="50" oninput="cropUpdatePreview()">
+        <span id="crop-x-label" style="width:36px;text-align:right;color:#a89a70;">50%</span>
+        <span>Pan Y</span>
+        <input type="range" id="crop-y" min="0" max="100" value="50" oninput="cropUpdatePreview()">
+        <span id="crop-y-label" style="width:36px;text-align:right;color:#a89a70;">50%</span>
+      </div>
+      <div class="flex-row" style="margin-top:12px;">
+        <button onclick="saveCropEditor()">Apply</button>
+        <button class="secondary" onclick="clearCropTarget()">Clear (use default)</button>
+      </div>
     </div>
   </div>
 
@@ -1730,6 +1777,99 @@
     function updateName() { socket.emit("setName", document.getElementById("playerName").value || "Player"); }
     function setBoardMat() { socket.emit("setBoardMat", document.getElementById("board-mat-url").value || ""); }
     function clearBoardMat() { document.getElementById("board-mat-url").value = ""; socket.emit("setBoardMat", ""); }
+
+    // ---------------- crop/zoom editor (board mat + pile art) ----------------
+    // One shared modal for both targets -- cropTarget tracks which one Apply/Clear should act on.
+    let cropTarget = null; // { kind: "boardMat" } or { kind: "pile", zone: "library"|"graveyard"|"exile" }
+    let cropLastSrc = "";
+    function openCropEditor(kind, zone) {
+      cropTarget = { kind, zone };
+      const me = players[myId];
+      let current = null;
+      if (kind === "boardMat") {
+        document.getElementById("crop-modal-title").innerText = "Edit Board Mat";
+        document.getElementById("crop-preview-box").style.aspectRatio = "600 / 320";
+        if (me && me.boardMat) current = { url: me.boardMat, ...(me.boardMatFit || { scale: 1, x: 50, y: 50 }) };
+      } else {
+        document.getElementById("crop-modal-title").innerText = `Edit ${capitalize(zone)} Art`;
+        document.getElementById("crop-preview-box").style.aspectRatio = "250 / 310";
+        current = me && me.pileArt && me.pileArt[zone] || null;
+      }
+      document.getElementById("crop-source-url").value = current ? current.url : "";
+      document.getElementById("crop-zoom").value = current ? Math.round(current.scale * 100) : 100;
+      document.getElementById("crop-x").value = current ? current.x : 50;
+      document.getElementById("crop-y").value = current ? current.y : 50;
+      cropLastSrc = current ? current.url : "";
+      cropUpdatePreview();
+      document.getElementById("crop-modal").style.display = "flex";
+    }
+    function closeCropEditor() { document.getElementById("crop-modal").style.display = "none"; cropTarget = null; }
+    function cropSourceChanged() {
+      const url = document.getElementById("crop-source-url").value.trim();
+      // A newly picked photo starts fresh instead of carrying over the previous image's crop.
+      if (url && url !== cropLastSrc) {
+        document.getElementById("crop-zoom").value = 100;
+        document.getElementById("crop-x").value = 50;
+        document.getElementById("crop-y").value = 50;
+        cropLastSrc = url;
+      }
+      cropUpdatePreview();
+    }
+    function cropResetFit() {
+      document.getElementById("crop-zoom").value = 100;
+      document.getElementById("crop-x").value = 50;
+      document.getElementById("crop-y").value = 50;
+      cropUpdatePreview();
+    }
+    function cropUpdatePreview() {
+      const url = document.getElementById("crop-source-url").value.trim();
+      const zoom = parseInt(document.getElementById("crop-zoom").value, 10) || 100;
+      const xRaw = parseInt(document.getElementById("crop-x").value, 10);
+      const yRaw = parseInt(document.getElementById("crop-y").value, 10);
+      const x = isNaN(xRaw) ? 50 : xRaw, y = isNaN(yRaw) ? 50 : yRaw;
+      document.getElementById("crop-zoom-label").innerText = zoom + "%";
+      document.getElementById("crop-x-label").innerText = x + "%";
+      document.getElementById("crop-y-label").innerText = y + "%";
+      const img = document.getElementById("crop-preview-img");
+      const empty = document.getElementById("crop-preview-empty");
+      if (url) {
+        img.src = url;
+        img.style.objectPosition = `${x}% ${y}%`;
+        img.style.transform = `scale(${zoom / 100})`;
+        img.style.display = "block";
+        empty.style.display = "none";
+      } else {
+        img.style.display = "none";
+        empty.style.display = "flex";
+      }
+    }
+    function saveCropEditor() {
+      if (!cropTarget) return;
+      const url = document.getElementById("crop-source-url").value.trim();
+      if (!url) { alert("Add an image URL or upload a photo first."); return; }
+      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || 100) / 100;
+      const xRaw = parseInt(document.getElementById("crop-x").value, 10);
+      const yRaw = parseInt(document.getElementById("crop-y").value, 10);
+      const x = isNaN(xRaw) ? 50 : xRaw, y = isNaN(yRaw) ? 50 : yRaw;
+      if (cropTarget.kind === "boardMat") {
+        document.getElementById("board-mat-url").value = url;
+        socket.emit("setBoardMat", url);
+        socket.emit("setBoardMatFit", { scale, x, y });
+      } else {
+        socket.emit("setPileArt", { zone: cropTarget.zone, url, scale, x, y });
+      }
+      closeCropEditor();
+    }
+    function clearCropTarget() {
+      if (!cropTarget) return;
+      if (cropTarget.kind === "boardMat") {
+        document.getElementById("board-mat-url").value = "";
+        socket.emit("setBoardMat", "");
+      } else {
+        socket.emit("setPileArt", { zone: cropTarget.zone, url: "" });
+      }
+      closeCropEditor();
+    }
 
     // ---------------- saved board mats (account-wide) ----------------
     function saveNewMat() {
@@ -2654,12 +2794,24 @@
       return m ? parseFloat(m[1]) : 1;
     }
 
-    function makePile(label, count, icon, ownerId, zoneName, yOffset) {
+    // Default backdrop behind each pile's icon, replacing plain diagonal stripes with something
+    // thematically matched per zone -- overridden by a real photo when the player sets one via the
+    // crop editor (Settings -> Pile Art).
+    const ZONE_DEFAULT_ART = {
+      library: "radial-gradient(circle at 30% 25%, #6b4f28 0%, #2a1f10 55%, #17120a 100%)",
+      graveyard: "radial-gradient(circle at 50% 30%, #52525f 0%, #26262e 55%, #131316 100%)",
+      exile: "radial-gradient(circle at 50% 40%, #6b3aa8 0%, #2a1442 55%, #150a22 100%)",
+    };
+    function makePile(label, count, icon, ownerId, zoneName, yOffset, art) {
       const pile = document.createElement("div");
       pile.style.cssText = `position:absolute; left:0px; top:${yOffset}px; width:260px; height:395px; cursor:pointer;`;
       pile.onclick = () => openZoneModal(ownerId, zoneName);
+      const bgStyle = art && art.url ? "" : `background:${ZONE_DEFAULT_ART[zoneName] || "#2a2a30"};`;
+      const imgHtml = art && art.url
+        ? `<img src="${escapeHtml(art.url)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:${art.x}% ${art.y}%;transform:scale(${art.scale});">`
+        : "";
       pile.innerHTML = `
-        <div style="width:250px;height:310px;border-radius:15px;background:repeating-linear-gradient(45deg,#2a2a30,#2a2a30 6px,#1c1c20 6px,#1c1c20 12px);border:5px solid #5a4423;display:flex;align-items:center;justify-content:center;font-size:75px;">${icon}</div>
+        <div style="position:relative;width:250px;height:310px;border-radius:15px;overflow:hidden;border:5px solid #5a4423;display:flex;align-items:center;justify-content:center;font-size:75px;${bgStyle}">${imgHtml}<div style="position:relative;z-index:1;text-shadow:0 2px 8px rgba(0,0,0,0.85);">${icon}</div></div>
         <div style="text-align:center;font-size:18px;color:#e0d5b0;margin-top:8px;text-shadow:0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.75);">${label} (${count})</div>`;
       return pile;
     }
@@ -2691,24 +2843,30 @@
       const lastZone = currentZoneLayout[currentZoneLayout.length - 1];
       playmat.style.height = Math.max(1260, lastZone.y + lastZone.height + 20) + "px";
       const p = players[owner];
+      const matImg = document.getElementById("playmat-mat-img");
       if (p && p.boardMat) {
-        playmat.classList.add("custom-mat");
-        playmat.style.backgroundImage = `url("${p.boardMat.replace(/"/g, '%22')}")`;
+        const fit = p.boardMatFit || { scale: 1, x: 50, y: 50 };
+        if (matImg.dataset.src !== p.boardMat) { matImg.src = p.boardMat; matImg.dataset.src = p.boardMat; }
+        matImg.style.objectPosition = `${fit.x}% ${fit.y}%`;
+        matImg.style.transform = `scale(${fit.scale})`;
+        matImg.style.display = "block";
       } else {
-        playmat.classList.remove("custom-mat");
-        playmat.style.backgroundImage = "";
+        matImg.style.display = "none";
+        matImg.removeAttribute("src");
+        delete matImg.dataset.src;
       }
       if (p) {
         const pilesWrap = document.createElement("div");
         pilesWrap.className = "zone-pile-wrap";
         pilesWrap.style.cssText = `position:absolute; left:${PILE_X}px; top:40px;`;
         const libCount = owner === myId ? (p.library ? p.library.length : 0) : (p.libraryCount || 0);
-        pilesWrap.appendChild(makePile("Library", libCount, "📚", owner, "library", 0));
-        pilesWrap.appendChild(makePile("Graveyard", (p.graveyard || []).length, "⚰️", owner, "graveyard", 440));
-        pilesWrap.appendChild(makePile("Exile", (p.exile || []).length, "🌀", owner, "exile", 880));
+        const pileArt = p.pileArt || {};
+        pilesWrap.appendChild(makePile("Library", libCount, "📚", owner, "library", 0, pileArt.library));
+        pilesWrap.appendChild(makePile("Graveyard", (p.graveyard || []).length, "⚰️", owner, "graveyard", 407, pileArt.graveyard));
+        pilesWrap.appendChild(makePile("Exile", (p.exile || []).length, "🌀", owner, "exile", 814, pileArt.exile));
         if (owner === myId) {
           const controls = document.createElement("div");
-          controls.style.cssText = "position:absolute; left:0; top:1320px; width:260px; display:flex; gap:8px;";
+          controls.style.cssText = "position:absolute; left:0; top:1221px; width:260px; display:flex; gap:8px;";
           controls.innerHTML = `
             <button class="mini-btn" style="padding:8px 4px;font-size:14px;flex:1;white-space:nowrap;" onclick="drawCard(1)">Draw</button>
             <button class="mini-btn" style="padding:8px 4px;font-size:14px;flex:1;white-space:nowrap;" onclick="shuffleLibrary()">Shuffle</button>
