@@ -149,6 +149,11 @@
        preview markup (buildCardPreviewHtml) rendered in two different containers. */
     .pv-name { font-size: 12px; text-align: center; margin-top: 6px; color: #ddd; }
     .pv-text { font-size: 11px; text-align: left; margin-top: 8px; color: #c9bc98; white-space: pre-wrap; line-height: 1.4; border-top: 1px solid #3a2e18; padding-top: 6px; }
+    /* Bounded + independently scrollable, same as #zone-modal-preview-col below -- without this,
+       a long library/graveyard/exile list just grows past the modal's own height, making the whole
+       .modal-box the scroll container instead, which drags the preview column along with it as you
+       scroll the list rather than leaving it in view. */
+    #zone-modal-body { max-height: 60vh; overflow-y: auto; }
     #zone-modal-preview-col { flex: 1; min-width: 240px; max-width: 320px; max-height: 60vh; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 16px; overflow-y: auto; flex-shrink: 0; align-self: flex-start; }
     #zone-modal-preview-col img { width: 100%; border-radius: 8px; }
     #zone-modal-preview-empty { color: #8a7a55; font-size: 12px; }
