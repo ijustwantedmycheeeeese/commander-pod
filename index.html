@@ -2277,6 +2277,25 @@
       pendingFetch = null;
       closeZoneModal();
     }
+
+    // Tutors ("search your library for a card") -- same shape as the fetchland block above (server
+    // sets it up via EFFECTS.tutorToHand, tells us via "searchLibraryForHand"), landing in hand
+    // instead of onto the battlefield, with "Tutor This" in place of "Fetch This"/"Draw This".
+    let pendingTutor = null;
+    socket.on("searchLibraryForHand", (data) => {
+      pendingTutor = data;
+      openZoneModal(myId, "library");
+    });
+    function tutorCard(idx) {
+      socket.emit("tutorCard", idx);
+      pendingTutor = null;
+      closeZoneModal();
+    }
+    function cancelTutor() {
+      socket.emit("cancelTutor");
+      pendingTutor = null;
+      closeZoneModal();
+    }
     function landDropBonus(delta) { socket.emit("landDropBonus", delta); }
 
     // Hand size limit (7): server blocks ending the turn past End Step until this resolves.
@@ -2366,12 +2385,12 @@
     // ---------------- keyword tagging ----------------
     // Matches server.js's KNOWN_KEYWORDS. Small icon per keyword for the on-card badge row --
     // falls back to the first letter for anything without a curated icon.
-    const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection"];
+    const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud"];
     const KEYWORD_ICONS = {
       "Flying": "🦅", "Haste": "⚡", "Indestructible": "🛡", "Deathtouch": "☠",
       "Lifelink": "❤", "Trample": "👣", "Vigilance": "👁", "Menace": "😈",
       "Reach": "🏹", "First strike": "⚔", "Double strike": "⚔⚔", "Hexproof": "🚫", "Ward": "🔰",
-      "Defender": "🚧", "Flash": "✨", "Protection": "🔱"
+      "Defender": "🚧", "Flash": "✨", "Protection": "🔱", "Shroud": "🌫"
     };
     let keywordModalCardId = null;
     function openKeywordModal(cardId) {
@@ -2433,8 +2452,17 @@
     }
     function effectiveKeywords(card) {
       const bonus = attachedBonusFor(card);
-      if (!bonus.keywords.length) return card.keywords || [];
-      return [...new Set([...(card.keywords || []), ...bonus.keywords])];
+      let extra = [...(card.keywords || []), ...bonus.keywords];
+      if (card.zoneType === "creature") {
+        Object.values(allCards).forEach((c) => {
+          if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") return;
+          const anthem = anthemKeywordsFromText(c.text);
+          if (!anthem.keywords.length) return;
+          if (c.id === card.id && !anthem.includesSelf) return;
+          extra = extra.concat(anthem.keywords);
+        });
+      }
+      return [...new Set(extra)];
     }
     // Mirrors server.js's anthemEffectsFromText/staticBonusFor exactly -- same single untyped
     // "Other creatures you control get +X/+Y" pattern, same "other" enforced by skipping card.id.
@@ -2444,6 +2472,20 @@
       const m = t.match(/other creatures you control get ([+-]\d+)\/([+-]\d+)/i);
       if (m) { powerBonus = parseInt(m[1], 10) || 0; toughnessBonus = parseInt(m[2], 10) || 0; }
       return { powerBonus, toughnessBonus };
+    }
+    // Mirrors server.js's anthemKeywordsFromText/parseKeywordList exactly.
+    function anthemKeywordsFromText(text) {
+      const t = text || "";
+      let m = t.match(/other (?:creatures|permanents) you control have ([^.]+)\./i);
+      if (m) return { keywords: parseKeywordList(m[1]), includesSelf: false };
+      m = t.match(/creatures you control have ([^.]+)\./i);
+      if (m) return { keywords: parseKeywordList(m[1]), includesSelf: true };
+      return { keywords: [], includesSelf: false };
+    }
+    function parseKeywordList(raw) {
+      return raw.split(/,| and /i).map((s) => s.trim())
+        .map((r) => KNOWN_KEYWORDS.find((k) => k.toLowerCase() === r.toLowerCase()))
+        .filter(Boolean);
     }
     function staticBonusFor(card) {
       let powerBonus = 0, toughnessBonus = 0;
@@ -2608,9 +2650,13 @@
         list = p[zoneName] || [];
       }
       const fetching = zoneName === "library" && isMine && pendingFetch;
+      const tutoring = zoneName === "library" && isMine && !fetching && pendingTutor;
       if (fetching) {
         const wantedLabel = `${pendingFetch.basicOnly ? "basic " : ""}${pendingFetch.types.join(" or ")}`;
         document.getElementById("zone-modal-title").innerText = `Search your library for a ${wantedLabel} card`;
+      } else if (tutoring) {
+        const wantedLabel = pendingTutor.typeFilter ? `${pendingTutor.typeFilter} card` : "card";
+        document.getElementById("zone-modal-title").innerText = `Search your library for a ${wantedLabel}`;
       } else {
         document.getElementById("zone-modal-title").innerText = `${p.name}'s ${capitalize(zoneName)} (${list.length})`;
       }
@@ -2621,6 +2667,11 @@
         const cancelRow = document.createElement("div");
         cancelRow.style.cssText = "margin-bottom:10px;";
         cancelRow.innerHTML = `<button class="mini-btn secondary" onclick="cancelFetch()">Find Nothing (Shuffle)</button>`;
+        body.appendChild(cancelRow);
+      } else if (tutoring) {
+        const cancelRow = document.createElement("div");
+        cancelRow.style.cssText = "margin-bottom:10px;";
+        cancelRow.innerHTML = `<button class="mini-btn secondary" onclick="cancelTutor()">Find Nothing (Shuffle)</button>`;
         body.appendChild(cancelRow);
       }
       if (list.length === 0) {
@@ -2635,6 +2686,10 @@
             const matchesType = typeLower.includes("land") && pendingFetch.types.some((t) => typeLower.includes(t.toLowerCase()));
             const matchesBasic = !pendingFetch.basicOnly || typeLower.includes("basic");
             if (matchesType && matchesBasic) actions = `<button class="mini-btn" onclick="fetchLand(${idx})">Fetch This</button>`;
+          } else if (tutoring) {
+            const typeLower = (entry.type || "").toLowerCase();
+            const matchesFilter = !pendingTutor.typeFilter || typeLower.includes(pendingTutor.typeFilter.toLowerCase());
+            if (matchesFilter) actions = `<button class="mini-btn" onclick="tutorCard(${idx})">Tutor This</button>`;
           } else if (zoneName === "library" && isMine) {
             actions = `<button class="mini-btn" onclick="drawSpecific(${idx})">Draw This</button>`;
           } else if ((zoneName === "graveyard" || zoneName === "exile") && isMine) {
