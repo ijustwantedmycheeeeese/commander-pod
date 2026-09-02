@@ -203,7 +203,7 @@ const CARD_ABILITIES = {
   "kitchen finks": [{ trigger: "etb", label: "Kitchen Finks — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
   "hornet queen": [{
     trigger: "etb", label: "Hornet Queen — create four Insect tokens",
-    effects: [{ type: "createToken", amount: 4, name: "Insect", tokenType: "Token Creature — Insect", power: "1", toughness: "1", colors: ["G"], keywords: ["Flying", "Deathtouch"] }]
+    effects: [{ type: "createToken", amount: 4, name: "Insect", tokenType: "Token Creature — Insect", power: "1", toughness: "1", colors: ["G"], keywords: ["Flying", "Deathtouch"], img: "https://cards.scryfall.io/normal/front/f/5/f5844636-3fdd-4818-9c35-c24f74b29baa.jpg" }]
   }],
   // Real text is "you may draw a card" -- optional triggers ("may") aren't modeled, always resolves.
   "solemn simulacrum": [{ trigger: "death", label: "Solemn Simulacrum — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
@@ -271,7 +271,7 @@ const CARD_ABILITIES = {
   // at all -- it would need to intercept every OTHER permanent's arbitrary triggered abilities, far
   // outside this vocabulary's scope; picking it is tracked (see chooseMode) but has no game effect.
   "windcrag siege": [{ trigger: "upkeep", label: "Windcrag Siege — create a Goblin token", condition: (c) => c.chosenMode === "Jeskai",
-    effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], keywords: ["Lifelink", "Haste"] }] }]
+    effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], keywords: ["Lifelink", "Haste"], img: "https://cards.scryfall.io/normal/front/7/0/70f8a1de-cd4c-4afa-bf03-0245d375d42e.jpg" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -514,6 +514,10 @@ const SPELL_ABILITIES = {
   "lightning blast": { label: "Lightning Blast — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
   "scorching spear": { label: "Scorching Spear — deal 1 damage", effects: [{ type: "damageTarget", amount: 1 }], requiresTarget: true, targetKind: "any" },
   "murder": { label: "Murder — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  // Real text: "Exile target creature. Its controller may search their library for a basic land
+  // card, put that card onto the battlefield tapped, then shuffle." The optional land-search isn't
+  // modeled -- same "may" abilities aren't automated precedent used everywhere else in this app.
+  "path to exile": { label: "Path to Exile — exile target creature", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "creature" },
   "sephiroth's intervention": { label: "Sephiroth's Intervention — destroy target creature, gain 2 life", effects: [{ type: "destroyTarget" }, { type: "gainLife", target: "controller", amount: 2 }], requiresTarget: true, targetKind: "creature" },
   "dark nourishment": { label: "Dark Nourishment — deal 3 damage, gain 3 life", effects: [{ type: "damageTarget", amount: 3 }, { type: "gainLife", target: "controller", amount: 3 }], requiresTarget: true, targetKind: "any" },
   "volcanic hammer": { label: "Volcanic Hammer — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
@@ -1063,7 +1067,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     stack: lobby.stack.map((c) => maskCard(c, socketId)),
     priority: lobby.priority,
-    pendingTargetChoice: myPendingChoice ? { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img } : null,
+    pendingTargetChoice: myPendingChoice ? { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature" } : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
     spectatorRoster: Object.values(lobby.spectators).map((s) => s.name),
@@ -1639,7 +1643,14 @@ function queueTargetChoice(lobby, choice) {
 }
 function promptTargetChoice(lobby, entry) {
   const sock = io.sockets.sockets.get(entry.controllerId);
-  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img });
+  // targetKind tells the client WHICH clickable things (battlefield cards vs. stack items vs.
+  // players) are actually legal here, so its banner/highlighting can match what resolveChosenTarget
+  // will actually accept instead of always saying "click a battlefield card" regardless of the real
+  // target kind -- previously a "target a spell"/"target a player" choice still showed that same
+  // battlefield-only instruction and lit up every card as clickable, so a player naturally clicking
+  // what they were told to click got a confusing rejection with no way to tell what went wrong.
+  const targetKind = entry.targetKind || entry.targetZoneType || "creature";
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, targetKind });
 }
 // Discards any pending target choices belonging to a departing controller (a real disconnect/leave
 // or an elimination) -- otherwise the table would be stuck forever waiting on a target that will
@@ -1878,7 +1889,19 @@ function sendToGraveyardInternal(lobby, card) {
   // A card's owner (where it goes when it leaves play) isn't necessarily who currently controls
   // it -- a permanent stolen via takeControl still belongs to whoever it was stolen from.
   const owner = lobby.players[card.originalOwner || card.owner];
-  if (owner) owner.graveyard.push(toEntry(card));
+  if (!owner) return;
+  // Real Magic (CR 903.9a) lets a commander's owner move it to the Command Zone instead of any
+  // other zone it would go to from the battlefield -- overwhelmingly the choice players actually
+  // make (why one of Commander's defining rules exists at all), so this applies it automatically
+  // rather than leaving the commander sitting in the graveyard with no obvious way back out.
+  // clearCommanderRef just above already reset battlefieldId to null, so the Commander Zone dock
+  // is already showing it as castable again -- this only decides whether a SEPARATE graveyard
+  // entry also gets created, which would otherwise make it look stuck there even though it isn't.
+  if (card.isCommander) {
+    pushLog(lobby, `${owner.name}'s ${card.name || "commander"} returned to the Command Zone`);
+    return;
+  }
+  owner.graveyard.push(toEntry(card));
 }
 
 // Same shape as sendToGraveyardInternal, for exileTarget -- kept as its own top-level function
@@ -1891,7 +1914,13 @@ function exileCardInternal(lobby, card) {
   clearCommanderRef(lobby, card);
   detachDependents(lobby, card);
   const owner = lobby.players[card.originalOwner || card.owner];
-  if (owner) owner.exile.push(toEntry(card));
+  if (!owner) return;
+  // Same Command Zone replacement as sendToGraveyardInternal -- see its comment for why.
+  if (card.isCommander) {
+    pushLog(lobby, `${owner.name}'s ${card.name || "commander"} returned to the Command Zone`);
+    return;
+  }
+  owner.exile.push(toEntry(card));
 }
 
 // Bounce returns to the card's true OWNER's hand (not necessarily its current controller -- a
@@ -3108,6 +3137,26 @@ io.on("connection", (socket) => {
     if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
   });
 
+  // A manual escape hatch for a pending target choice -- real Magic auto-fizzles a triggered
+  // ability the instant it has zero legal targets (CR 603.3c), which this app doesn't check for
+  // when queuing one, so a player could otherwise be stuck forever facing a choice with no target
+  // they're actually able to satisfy (or one they simply don't want to pay attention to). A
+  // castSpell-kind entry needs no cleanup -- the card just stays sitting in hand, never having left
+  // it (see castSpell); any other kind is a triggered ability that just never resolves, same as a
+  // real one with no legal target would.
+  socket.on("cancelTargetChoice", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const idx = lobby.pendingTargetChoices.findIndex((c) => c.id === id);
+    if (idx === -1) return;
+    const entry = lobby.pendingTargetChoices[idx];
+    if (entry.controllerId !== socket.id) return;
+    lobby.pendingTargetChoices.splice(idx, 1);
+    const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
+    pushLog(lobby, `${who} canceled: ${entry.label}`);
+    socket.emit("targetChoiceResolved", id);
+    if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
+  });
+
   // ---- zone transitions: battlefield -> graveyard/exile/library (owner only) ----
 
   function moveOut(lobby, cardId, zone, pos) {
@@ -3131,6 +3180,16 @@ io.on("connection", (socket) => {
     clearCommanderRef(lobby, card);
     detachDependents(lobby, card);
     if (!lobby.players[owner]) return;
+    const ownerName = lobby.players[owner].name;
+    // Same Command Zone replacement sendToGraveyardInternal/exileCardInternal apply automatically
+    // (CR 903.9a) -- this is the separate manual "send to zone" path (right-click, or the
+    // combat-lethal branch just above), so it needs the same check rather than only ever leaving a
+    // commander stuck-looking in the graveyard when moved there this way.
+    if (card.isCommander && (zone === "graveyard" || zone === "exile")) {
+      broadcastPlayers(lobby);
+      pushLog(lobby, `${ownerName}'s ${card.name || "commander"} returned to the Command Zone`);
+      return;
+    }
     const entry = toEntry(card);
     if (zone === "graveyard") lobby.players[owner].graveyard.push(entry);
     else if (zone === "exile") lobby.players[owner].exile.push(entry);
@@ -3139,7 +3198,6 @@ io.on("connection", (socket) => {
       else lobby.players[owner].library.push(entry);
     }
     broadcastPlayers(lobby);
-    const ownerName = lobby.players[owner].name;
     pushLog(lobby, `${ownerName}'s ${card.name || "face-down card"} went to ${zone}`);
   }
 
@@ -3167,6 +3225,21 @@ io.on("connection", (socket) => {
     spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} returned a card to their hand`);
+  });
+
+  // Manual cleanup tool for a commander sitting in the graveyard/exile from before
+  // sendToGraveyardInternal/exileCardInternal/moveOut started redirecting it to the Command Zone
+  // automatically -- clearCommanderRef already reset its battlefieldId to null the moment it left
+  // the battlefield, so the Command Zone dock has been castable this whole time regardless; this
+  // just removes the now-redundant, confusing-looking duplicate sitting in the zone list.
+  socket.on("commanderToCommandZone", ({ zone, index }) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p || (zone !== "graveyard" && zone !== "exile") || !p[zone] || !p[zone][index]) return;
+    const entry = p[zone][index];
+    if (!entry.isCommander) return;
+    p[zone].splice(index, 1);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} moved ${entry.name || "their commander"} from ${zone} to the Command Zone`);
   });
 
   // ---- library management (owner only) ----
