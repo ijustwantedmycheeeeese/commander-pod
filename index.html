@@ -142,8 +142,13 @@
     .cv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cv-unblocked { color: #a89a70; font-style: italic; }
     #preview-panel img { width: 100%; border-radius: 6px; display: block; }
-    #preview-panel .pv-name { font-size: 12px; text-align: center; margin-top: 6px; color: #ddd; }
-    #preview-panel .pv-text { font-size: 11px; text-align: left; margin-top: 8px; color: #c9bc98; white-space: pre-wrap; line-height: 1.4; border-top: 1px solid #3a2e18; padding-top: 6px; }
+    /* Shared by the floating #preview-panel and the docked #zone-modal-preview-body -- same card
+       preview markup (buildCardPreviewHtml) rendered in two different containers. */
+    .pv-name { font-size: 12px; text-align: center; margin-top: 6px; color: #ddd; }
+    .pv-text { font-size: 11px; text-align: left; margin-top: 8px; color: #c9bc98; white-space: pre-wrap; line-height: 1.4; border-top: 1px solid #3a2e18; padding-top: 6px; }
+    #zone-modal-preview-col { flex: 1; min-width: 240px; max-width: 320px; max-height: 60vh; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 16px; overflow-y: auto; flex-shrink: 0; align-self: flex-start; }
+    #zone-modal-preview-col img { width: 100%; border-radius: 8px; }
+    #zone-modal-preview-empty { color: #8a7a55; font-size: 12px; }
 
     #context-menu { position: fixed; z-index: 100; background: #1c1710; border: 1px solid #5a4423; border-radius: 6px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display: none; min-width: 190px; }
     #context-menu button { display: block; width: 100%; text-align: left; background: transparent; border: none; border-radius: 0; padding: 8px 12px; font-weight: 400; font-size: 12px; }
@@ -486,10 +491,17 @@
     </div>
 
     <div class="modal-overlay" id="zone-modal">
-      <div class="modal-box">
+      <div class="modal-box modal-box-wide">
         <button class="modal-close-x" onclick="closeZoneModal()" title="Close">✕</button>
         <h2 id="zone-modal-title">Zone</h2>
-        <div id="zone-modal-body"></div>
+        <div style="display:flex;gap:16px;">
+          <div style="flex:1.3;min-width:280px;">
+            <div id="zone-modal-body"></div>
+          </div>
+          <div id="zone-modal-preview-col">
+            <div id="zone-modal-preview-body"><div id="zone-modal-preview-empty">Hover a card to preview it here.</div></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -668,7 +680,7 @@
         </div>
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;margin-bottom:6px;font-size:12px;">
           <span title="How solid the creature/artifact/mana/hand zone outlines and the library/graveyard/exile piles look -- turn this up if a busy board mat makes them hard to see">Zone Opacity</span>
-          <input type="range" id="zone-opacity-slider" min="20" max="200" value="100" oninput="setZoneOpacity(this.value)">
+          <input type="range" id="zone-opacity-slider" min="0" max="100" value="100" oninput="setZoneOpacity(this.value)">
           <span id="zone-opacity-label" style="width:32px;text-align:right;color:#a89a70;">100%</span>
         </div>
 
@@ -2235,6 +2247,7 @@
       }
       const body = document.getElementById("zone-modal-body");
       body.innerHTML = "";
+      zoneModalPreviewClear();
       if (fetching) {
         const cancelRow = document.createElement("div");
         cancelRow.style.cssText = "margin-bottom:10px;";
@@ -2261,14 +2274,25 @@
               <button class="mini-btn" onclick="zoneToHand('${zoneName}',${idx})">To Hand</button>`;
           }
           row.innerHTML = `<img src="${escapeHtml(entry.img || "")}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
-          row.onmouseenter = () => showPreviewFor(entry);
-          row.onmouseleave = hidePreview;
+          row.onmouseenter = () => zoneModalPreview(entry);
           body.appendChild(row);
         });
       }
       document.getElementById("zone-modal").style.display = "flex";
     }
     function closeZoneModal() { document.getElementById("zone-modal").style.display = "none"; }
+
+    // Docked preview column for the zone modal (library/graveyard/exile) -- a floating preview
+    // panel would sit behind the modal's own dark backdrop and look washed out, so this renders
+    // inside the modal itself instead, same pattern as the Deck Editor's preview column.
+    function zoneModalPreviewClear() {
+      document.getElementById("zone-modal-preview-body").innerHTML = '<div id="zone-modal-preview-empty">Hover a card to preview it here.</div>';
+    }
+    function zoneModalPreview(card) {
+      if (!card || !card.img) return;
+      document.getElementById("zone-modal-preview-body").innerHTML =
+        `<img src="${escapeHtml(card.img)}"><div class="pv-name">${buildCardPreviewHtml(card)}</div>`;
+    }
 
     // ---------------- commander zone ----------------
 
@@ -2632,11 +2656,11 @@
 
     function makePile(label, count, icon, ownerId, zoneName, yOffset) {
       const pile = document.createElement("div");
-      pile.style.cssText = `position:absolute; left:0px; top:${yOffset}px; width:104px; height:158px; cursor:pointer;`;
+      pile.style.cssText = `position:absolute; left:0px; top:${yOffset}px; width:260px; height:395px; cursor:pointer;`;
       pile.onclick = () => openZoneModal(ownerId, zoneName);
       pile.innerHTML = `
-        <div style="width:100px;height:124px;border-radius:6px;background:repeating-linear-gradient(45deg,#2a2a30,#2a2a30 6px,#1c1c20 6px,#1c1c20 12px);border:2px solid #5a4423;display:flex;align-items:center;justify-content:center;font-size:30px;">${icon}</div>
-        <div style="text-align:center;font-size:13px;color:#e0d5b0;margin-top:4px;text-shadow:0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.75);">${label} (${count})</div>`;
+        <div style="width:250px;height:310px;border-radius:15px;background:repeating-linear-gradient(45deg,#2a2a30,#2a2a30 6px,#1c1c20 6px,#1c1c20 12px);border:5px solid #5a4423;display:flex;align-items:center;justify-content:center;font-size:75px;">${icon}</div>
+        <div style="text-align:center;font-size:18px;color:#e0d5b0;margin-top:8px;text-shadow:0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.75);">${label} (${count})</div>`;
       return pile;
     }
 
@@ -2680,15 +2704,15 @@
         pilesWrap.style.cssText = `position:absolute; left:${PILE_X}px; top:40px;`;
         const libCount = owner === myId ? (p.library ? p.library.length : 0) : (p.libraryCount || 0);
         pilesWrap.appendChild(makePile("Library", libCount, "📚", owner, "library", 0));
-        pilesWrap.appendChild(makePile("Graveyard", (p.graveyard || []).length, "⚰️", owner, "graveyard", 176));
-        pilesWrap.appendChild(makePile("Exile", (p.exile || []).length, "🌀", owner, "exile", 352));
+        pilesWrap.appendChild(makePile("Graveyard", (p.graveyard || []).length, "⚰️", owner, "graveyard", 440));
+        pilesWrap.appendChild(makePile("Exile", (p.exile || []).length, "🌀", owner, "exile", 880));
         if (owner === myId) {
           const controls = document.createElement("div");
-          controls.style.cssText = "position:absolute; left:0; top:528px; width:104px; display:flex; flex-wrap:wrap; gap:6px;";
+          controls.style.cssText = "position:absolute; left:0; top:1320px; width:260px; display:flex; gap:8px;";
           controls.innerHTML = `
-            <button class="mini-btn" style="padding:6px 10px;font-size:13px;flex:1;min-width:46px;" onclick="drawCard(1)">Draw</button>
-            <button class="mini-btn" style="padding:6px 10px;font-size:13px;flex:1;min-width:46px;" onclick="shuffleLibrary()">Shuffle</button>
-            <button class="mini-btn" style="padding:6px 10px;font-size:13px;flex:1;min-width:46px;" onclick="millCard(1)">Mill</button>`;
+            <button class="mini-btn" style="padding:8px 4px;font-size:14px;flex:1;white-space:nowrap;" onclick="drawCard(1)">Draw</button>
+            <button class="mini-btn" style="padding:8px 4px;font-size:14px;flex:1;white-space:nowrap;" onclick="shuffleLibrary()">Shuffle</button>
+            <button class="mini-btn" style="padding:8px 4px;font-size:14px;flex:1;white-space:nowrap;" onclick="millCard(1)">Mill</button>`;
           pilesWrap.appendChild(controls);
         }
         playmat.appendChild(pilesWrap);
@@ -2860,14 +2884,18 @@
     // the always-legible zone labels (see the CSS comment on .zone-band-label). 100% = the default
     // look; the range goes both below (more see-through) and above (more solid, for a busy board
     // mat that would otherwise wash the zones out) rather than just muting them like a volume slider.
+    // Slider runs 0-100 for a simple, familiar 0%-100% feel, but never goes fully invisible --
+    // it maps onto an actual opacity range of 0.1 (10%, still faintly visible) to 1.0 (fully solid).
+    function zoneOpacityFromPct(pct) { return 0.1 + (pct / 100) * 0.9; }
     let zoneOpacityPct = parseInt(localStorage.getItem("mtgZoneOpacity"), 10);
-    if (isNaN(zoneOpacityPct) || zoneOpacityPct < 20 || zoneOpacityPct > 200) zoneOpacityPct = 100;
-    document.documentElement.style.setProperty("--zone-opacity", zoneOpacityPct / 100);
+    if (isNaN(zoneOpacityPct) || zoneOpacityPct < 0 || zoneOpacityPct > 100) zoneOpacityPct = 100;
+    document.documentElement.style.setProperty("--zone-opacity", zoneOpacityFromPct(zoneOpacityPct));
     { const slider = document.getElementById("zone-opacity-slider"); if (slider) slider.value = zoneOpacityPct;
       const label = document.getElementById("zone-opacity-label"); if (label) label.innerText = zoneOpacityPct + "%"; }
     function setZoneOpacity(val) {
-      const pct = Math.max(20, Math.min(200, parseInt(val, 10) || 100));
-      document.documentElement.style.setProperty("--zone-opacity", pct / 100);
+      const parsed = parseInt(val, 10);
+      const pct = Math.max(0, Math.min(100, isNaN(parsed) ? 100 : parsed));
+      document.documentElement.style.setProperty("--zone-opacity", zoneOpacityFromPct(pct));
       localStorage.setItem("mtgZoneOpacity", String(pct));
       const label = document.getElementById("zone-opacity-label");
       if (label) label.innerText = pct + "%";
