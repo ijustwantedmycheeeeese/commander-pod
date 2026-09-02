@@ -465,7 +465,8 @@
 
     <div id="target-choice-banner">
       <div id="target-choice-banner-text"></div>
-      <div style="font-size:11px;color:#a89a70;margin-top:2px;">Click any card on the battlefield to target it.</div>
+      <div id="target-choice-banner-hint" style="font-size:11px;color:#a89a70;margin-top:2px;"></div>
+      <button class="mini-btn secondary" style="margin-top:6px;" onclick="cancelTargetChoice()" title="No legal target, or you just want out -- this makes it not happen">Cancel</button>
     </div>
 
     <div id="combat-view-panel">
@@ -743,8 +744,12 @@
         <div class="flex-row" style="margin-bottom:6px;">
           <input type="text" id="tok-power" placeholder="Power" style="width:70px;">
           <input type="text" id="tok-toughness" placeholder="Toughness" style="width:70px;">
-          <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="tok-flying"> Flying</label>
-          <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="tok-haste"> Haste</label>
+        </div>
+        <div class="mm-label">Art</div>
+        <div class="flex-row" style="align-items:center;margin-bottom:10px;">
+          <input type="text" id="tok-img" placeholder="Image URL (optional)..." style="flex:1;">
+          <input type="file" id="tok-img-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'tok-img')">
+          <button class="mini-btn secondary" onclick="document.getElementById('tok-img-file').click()">Upload...</button>
         </div>
         <div class="mm-label">Colors</div>
         <div class="flex-row" style="margin-bottom:10px;">
@@ -754,6 +759,8 @@
           <label style="font-size:12px;"><input type="checkbox" class="tok-color" value="R"> R</label>
           <label style="font-size:12px;"><input type="checkbox" class="tok-color" value="G"> G</label>
         </div>
+        <div class="mm-label">Keywords</div>
+        <div id="tok-keywords" style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;margin-bottom:10px;"></div>
         <div id="tok-status" style="font-size:12px;color:#a89a70;margin-bottom:6px;"></div>
         <div class="modal-close-row">
           <button onclick="createToken()">Create Token</button>
@@ -1187,6 +1194,11 @@
     // silently losing track of a still-pending trigger.
     let pendingTargetChoiceId = null;
     let pendingTargetChoiceLabel = "";
+    // What KIND of thing the pending choice actually wants ("creature"/other zoneType, "player",
+    // "spell", "any") -- drives which cards light up as legal-looking targets and what the banner
+    // tells you to click, instead of every card/stack item/player unconditionally becoming a target
+    // candidate regardless of what resolveChosenTarget will actually accept.
+    let pendingTargetChoiceKind = "creature";
 
     let myAccountAvatar = null;
     let myAccountDefaultName = null;
@@ -1275,6 +1287,7 @@
       if (data.pendingTargetChoice) {
         pendingTargetChoiceId = data.pendingTargetChoice.id;
         pendingTargetChoiceLabel = data.pendingTargetChoice.label;
+        pendingTargetChoiceKind = data.pendingTargetChoice.targetKind || "creature";
         showTargetChoiceBanner();
       } else {
         pendingTargetChoiceId = null;
@@ -1350,16 +1363,41 @@
     socket.on("chooseTarget", (data) => {
       pendingTargetChoiceId = data.id;
       pendingTargetChoiceLabel = data.label;
+      pendingTargetChoiceKind = data.targetKind || "creature";
       showTargetChoiceBanner();
       playTargetNeededCue();
+      // Which cards/stack items/players light up as legal-looking targets depends on the kind that
+      // JUST changed -- without this they'd only pick it up whenever some unrelated broadcast next
+      // happened to trigger a re-render.
+      renderVisibleBoard(); renderStackState(); renderPlayerList();
     });
     socket.on("targetChoiceResolved", (id) => {
       if (id !== pendingTargetChoiceId) return; // a stale/unrelated confirmation, ignore
       pendingTargetChoiceId = null;
       document.getElementById("target-choice-banner").style.display = "none";
+      renderVisibleBoard(); renderStackState(); renderPlayerList();
     });
+    // targetKindLabel/targetKindMatchesCard/targetKindClickableOnStack/targetKindClickableOnPlayer
+    // are the single source of truth for "what does pendingTargetChoiceKind actually accept" --
+    // used both for the banner's own instructions and for scoping which clicks get intercepted, so
+    // the two can never drift out of sync with each other the way the old hardcoded "click a
+    // battlefield card" text could drift from what the server actually validates.
+    function targetKindLabel(kind) {
+      if (kind === "player") return "Click a player to target them.";
+      if (kind === "spell") return "Click a spell or ability on the Stack to target it.";
+      if (kind === "any") return "Click a creature, player, or spell/ability on the Stack to target it.";
+      return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
+    }
+    function targetKindMatchesCard(kind, card) {
+      if (kind === "any") return card.zoneType === "creature" || (card.type || "").toLowerCase().includes("planeswalker");
+      if (kind === "player" || kind === "spell") return false; // battlefield cards are never legal for these
+      return card.zoneType === kind;
+    }
+    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }
+    function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any"; }
     function showTargetChoiceBanner() {
       document.getElementById("target-choice-banner-text").innerText = `Choose a target for: ${pendingTargetChoiceLabel}`;
+      document.getElementById("target-choice-banner-hint").innerText = targetKindLabel(pendingTargetChoiceKind);
       document.getElementById("target-choice-banner").style.display = "flex";
     }
     // Called from renderCard's onclick -- any card, regardless of owner, same "anyone can Target
@@ -1369,6 +1407,14 @@
     function chooseTargetFor(cardId) {
       if (!pendingTargetChoiceId) return;
       socket.emit("chooseTargetFor", { id: pendingTargetChoiceId, targetId: cardId });
+    }
+    // The escape hatch: real Magic auto-fizzles a triggered ability with zero legal targets, which
+    // this app doesn't check for when queuing one, so this is the manual way out of a choice that
+    // can't actually be satisfied (or one you just don't want to deal with right now).
+    function cancelTargetChoice() {
+      if (!pendingTargetChoiceId) return;
+      if (!confirm(`Cancel this? "${pendingTargetChoiceLabel}" won't happen.`)) return;
+      socket.emit("cancelTargetChoice", pendingTargetChoiceId);
     }
 
     // Only the eliminated player themselves gets the overlay -- everyone else just sees the log
@@ -1439,9 +1485,11 @@
         row.classList.toggle("eliminated-row", !!p.eliminated);
         // Same "click whatever's pending" pattern as a battlefield card (see renderCard) -- a
         // player-targeting spell (damage/discard/"any target") needs a player to be clickable too,
-        // not just cards. The server is the real gate on whether a player is actually a legal
-        // choice for the pending prompt; this is just wiring the click through.
-        if (pendingTargetChoiceId) { row.style.cursor = "pointer"; row.onclick = () => chooseTargetFor(id); }
+        // not just cards. Only lit up when the pending choice's kind actually accepts a player,
+        // though -- previously every player row went clickable for ANY pending choice regardless of
+        // kind, so clicking one for a "target creature" choice always failed validation with no clue
+        // why a perfectly reasonable-looking click didn't do anything.
+        if (pendingTargetChoiceId && targetKindClickableOnPlayer(pendingTargetChoiceKind)) { row.style.cursor = "pointer"; row.onclick = () => chooseTargetFor(id); }
         row.innerHTML = `
           ${p.avatar ? `<img class="player-avatar" src="${escapeHtml(p.avatar)}" style="border-color:${p.color};">` : `<div class="player-dot" style="background:${p.color};color:${p.color};"></div>`}
           <div class="player-info">
@@ -1771,10 +1819,15 @@
           const counterTitle = isAbility ? "Represents a response that removes this triggered ability from the stack without it resolving" : "Represents a counterspell resolving against this -- sends it straight to the graveyard";
           // Same "click whatever's pending" pattern as a battlefield card/player row -- a real
           // Counterspell-shaped card resolving needs to let its controller pick WHICH stack item to
-          // counter, separate from the always-available manual Counter button below.
-          const targetableStyle = pendingTargetChoiceId ? "cursor:pointer;outline:2px solid #d4af37;" : "";
-          const targetableClick = pendingTargetChoiceId ? `chooseTargetFor('${c.id}')` : "";
-          return `<div class="stack-item${i === 0 ? " stack-top" : ""}" style="${targetableStyle}" onclick="${targetableClick}" onmouseenter="showStackItemPreview('${c.id}')" onmouseleave="hidePreview()" title="${pendingTargetChoiceId ? "Click to target this" : ""}">
+          // counter, separate from the always-available manual Counter button below. Only lit up
+          // when the pending choice's kind can actually target a spell/ability -- previously every
+          // stack item went clickable for ANY pending choice, so a "target a creature" choice made
+          // stack items look just as valid as battlefield cards even though clicking one could never
+          // succeed, and its outline/cursor visually competed with the Counter button underneath.
+          const stackTargetable = pendingTargetChoiceId && targetKindClickableOnStack(pendingTargetChoiceKind);
+          const targetableStyle = stackTargetable ? "cursor:pointer;outline:2px solid #d4af37;" : "";
+          const targetableClick = stackTargetable ? `chooseTargetFor('${c.id}')` : "";
+          return `<div class="stack-item${i === 0 ? " stack-top" : ""}" style="${targetableStyle}" onclick="${targetableClick}" onmouseenter="showStackItemPreview('${c.id}')" onmouseleave="hidePreview()" title="${stackTargetable ? "Click to target this" : ""}">
             <img src="${escapeHtml(c.img || '')}" class="zone-card-thumb" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')" title="Click to see the full card">
             <div class="zone-card-name" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
             <button class="mini-btn" style="background:#7a1f1f;" onclick="event.stopPropagation();counterStackItem('${c.id}')" title="${counterTitle}">Counter</button>
@@ -2489,18 +2542,29 @@
         `<button class="mini-btn" onclick="applyTokenPreset(${i})">${escapeHtml(t.name)}</button>`
       ).join("");
     }
+    function tokKeywordId(kw) { return "tok-kw-" + kw.toLowerCase().replace(/\s+/g, "-"); }
+    function renderTokenKeywords() {
+      document.getElementById("tok-keywords").innerHTML = KNOWN_KEYWORDS.map((kw) =>
+        `<label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="tok-kw" id="${tokKeywordId(kw)}" value="${escapeHtml(kw)}"> ${KEYWORD_ICONS[kw] || ""} ${escapeHtml(kw)}</label>`
+      ).join("");
+    }
     function applyTokenPreset(i) {
       const t = TOKEN_PRESETS[i];
       document.getElementById("tok-name").value = t.name;
       document.getElementById("tok-type").value = t.type;
       document.getElementById("tok-power").value = t.power || "";
       document.getElementById("tok-toughness").value = t.toughness || "";
-      document.getElementById("tok-flying").checked = !!t.flying;
-      document.getElementById("tok-haste").checked = !!t.haste;
+      document.getElementById("tok-img").value = "";
+      const presetKeywords = new Set();
+      if (t.flying) presetKeywords.add("Flying");
+      if (t.haste) presetKeywords.add("Haste");
+      document.querySelectorAll(".tok-kw").forEach((cb) => { cb.checked = presetKeywords.has(cb.value); });
       document.querySelectorAll(".tok-color").forEach((cb) => { cb.checked = t.colors.includes(cb.value); });
     }
     function openTokenModal() {
       renderTokenPresets();
+      renderTokenKeywords();
+      document.getElementById("tok-img").value = "";
       document.getElementById("tok-status").innerText = "";
       document.getElementById("token-modal").style.display = "flex";
     }
@@ -2511,12 +2575,11 @@
       const type = document.getElementById("tok-type").value.trim() || "Token Creature";
       const power = document.getElementById("tok-power").value.trim();
       const toughness = document.getElementById("tok-toughness").value.trim();
+      const img = document.getElementById("tok-img").value.trim();
       const colors = Array.from(document.querySelectorAll(".tok-color:checked")).map((cb) => cb.value);
-      const keywords = [];
-      if (document.getElementById("tok-flying").checked) keywords.push("Flying");
-      if (document.getElementById("tok-haste").checked) keywords.push("Haste");
+      const keywords = Array.from(document.querySelectorAll(".tok-kw:checked")).map((cb) => cb.value);
       socket.emit("spawnCard", {
-        name, type, power: power || null, toughness: toughness || null,
+        name, type, img, power: power || null, toughness: toughness || null,
         colors, colorIdentity: colors, manaCost: "", cmc: 0, text: "", keywords, producedMana: null, faceDown: false
       });
       closeTokenModal();
@@ -2528,6 +2591,7 @@
     function drawSpecific(idx) { socket.emit("drawSpecific", idx); closeZoneModal(); }
     function zoneToBattlefield(zone, idx) { socket.emit("zoneToBattlefield", { zone, index: idx }); closeZoneModal(); }
     function zoneToHand(zone, idx) { socket.emit("zoneToHand", { zone, index: idx }); closeZoneModal(); }
+    function commanderToCommandZone(zone, idx) { socket.emit("commanderToCommandZone", { zone, index: idx }); closeZoneModal(); }
 
     function openZoneModal(ownerId, zoneName) {
       const p = players[ownerId];
@@ -2576,7 +2640,8 @@
           } else if ((zoneName === "graveyard" || zoneName === "exile") && isMine) {
             actions = `
               <button class="mini-btn" onclick="zoneToBattlefield('${zoneName}',${idx})">To Battlefield</button>
-              <button class="mini-btn" onclick="zoneToHand('${zoneName}',${idx})">To Hand</button>`;
+              <button class="mini-btn" onclick="zoneToHand('${zoneName}',${idx})">To Hand</button>
+              ${entry.isCommander ? `<button class="mini-btn" onclick="commanderToCommandZone('${zoneName}',${idx})" title="Real Commander rule: you can move your commander to the Command Zone instead of here">To Command Zone</button>` : ""}`;
           }
           row.innerHTML = `<img src="${escapeHtml(entry.img || "")}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
           row.onmouseenter = () => zoneModalPreview(entry);
@@ -2660,8 +2725,13 @@
 
     // ---- deck editor card preview ----
     function dePreviewClear() {
+      dePreviewedRef = null;
       document.getElementById("de-preview-body").innerHTML = '<div id="de-preview-empty">Hover or click a commander/card to preview it here.</div>';
     }
+    // Which card dePreview is currently showing -- {kind, index} into deckEditor.commanders/library,
+    // same addressing dePreviewByIndex already uses -- so the "Edit Art" field below the preview
+    // knows which entry to actually update.
+    let dePreviewedRef = null;
     function dePreview(c) {
       if (!c) return;
       const pt = (c.power != null && c.toughness != null) ? `<div class="de-prev-type">${escapeHtml(c.power)}/${escapeHtml(c.toughness)}</div>` : (c.loyalty != null ? `<div class="de-prev-type">Loyalty: ${escapeHtml(c.loyalty)}</div>` : "");
@@ -2671,10 +2741,32 @@
         <div class="de-prev-type">${manaCostPips(c.manaCost)}</div>
         <div class="de-prev-type">${escapeHtml(c.type || "")}</div>
         ${pt}
-        <div class="de-prev-text">${escapeHtml(c.text || "")}</div>`;
+        <div class="de-prev-text">${escapeHtml(c.text || "")}</div>
+        <div class="mm-label" style="margin-top:10px;">Custom Art</div>
+        <input type="text" id="de-art-url" placeholder="Image URL..." value="${escapeHtml(c.img || "")}" style="width:100%;margin-bottom:6px;">
+        <div class="flex-row">
+          <button class="mini-btn secondary" onclick="document.getElementById('de-art-file').click()">Upload...</button>
+          <button class="mini-btn" onclick="deSetCustomArt()">Set</button>
+        </div>
+        <input type="file" id="de-art-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'de-art-url')">`;
     }
     function dePreviewByIndex(kind, i) {
+      dePreviewedRef = { kind, index: i };
       dePreview(kind === "cmd" ? deckEditor.commanders[i] : deckEditor.library[i]);
+    }
+    // Overrides just this ONE entry's art (a specific library card, or a commander slot) with a
+    // custom image -- deliberately per-card-instance, not a global "reskin this card everywhere"
+    // tool, since the same card name could reasonably want different art in different decks. Applies
+    // immediately to whatever's live in the editor; saving the deck (or "Load Into Current Game")
+    // persists it like any other card field.
+    function deSetCustomArt() {
+      if (!dePreviewedRef) return;
+      const url = document.getElementById("de-art-url").value.trim();
+      const target = dePreviewedRef.kind === "cmd" ? deckEditor.commanders[dePreviewedRef.index] : deckEditor.library[dePreviewedRef.index];
+      if (!target) return;
+      target.img = url;
+      if (dePreviewedRef.kind === "cmd") deRenderCommanders(); else deRenderLibrary();
+      dePreview(target);
     }
 
     function editDeck(name) { socket.emit("getDeckData", name); }
@@ -3101,11 +3193,21 @@
       };
       div.onmouseenter = () => showPreview(card.id);
       div.onmouseleave = hidePreview;
-      // Target-picking mode takes over a plain click on ANY card (own or not, same "anyone can
-      // Target anything" trust model as toggleTarget) while a triggered ability is waiting on me
-      // for one -- doesn't interfere with the drag handling below, since a real drag sets `moved`
-      // and this only cares about a genuine click.
-      div.onclick = (e) => { if (pendingTargetChoiceId) { e.stopPropagation(); chooseTargetFor(card.id); } };
+      // Target-picking mode takes over a plain click on a card (own or not, same "anyone can Target
+      // anything" trust model as toggleTarget) while a triggered ability is waiting on me for one --
+      // doesn't interfere with the drag handling below, since a real drag sets `moved` and this only
+      // cares about a genuine click. Scoped to cards the pending choice could actually accept (its
+      // zoneType has to match, and it's never a card still in hand -- no target kind this app has
+      // ever legally targets a hand card) -- previously EVERY card, hand included, was hijacked for
+      // ANY pending choice, so a card that could never be a legal target (or was meant for an
+      // unrelated action entirely, like free-casting something from hand) either silently errored or
+      // just seemed to do nothing when clicked.
+      div.onclick = (e) => {
+        if (pendingTargetChoiceId && card.zoneType !== "hand" && targetKindMatchesCard(pendingTargetChoiceKind, card)) {
+          e.stopPropagation();
+          chooseTargetFor(card.id);
+        }
+      };
 
       if (card.owner === myId) {
         div.style.cursor = "grab";
