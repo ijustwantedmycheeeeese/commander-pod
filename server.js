@@ -185,7 +185,7 @@ const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End St
 // this app) -- a curated list matching Scryfall's own keyword naming so a granted keyword looks
 // identical to one a card was natively printed with. Haste already plugs straight into the
 // existing summoning-sickness check in declareAttackers with zero extra code.
-const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection"];
+const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud"];
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
 
 // ---------------- trigger/effect engine ----------------
@@ -271,7 +271,14 @@ const CARD_ABILITIES = {
   // at all -- it would need to intercept every OTHER permanent's arbitrary triggered abilities, far
   // outside this vocabulary's scope; picking it is tracked (see chooseMode) but has no game effect.
   "windcrag siege": [{ trigger: "upkeep", label: "Windcrag Siege — create a Goblin token", condition: (c) => c.chosenMode === "Jeskai",
-    effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], keywords: ["Lifelink", "Haste"], img: "https://cards.scryfall.io/normal/front/7/0/70f8a1de-cd4c-4afa-bf03-0245d375d42e.jpg" }] }]
+    effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], keywords: ["Lifelink", "Haste"], img: "https://cards.scryfall.io/normal/front/7/0/70f8a1de-cd4c-4afa-bf03-0245d375d42e.jpg" }] }],
+  "rune-scarred demon": [{ trigger: "etb", label: "Rune-Scarred Demon — search for a card", effects: [{ type: "tutorToHand" }] }],
+  // Real text: "you MAY destroy target creature" -- optional, unlike most triggers in this table.
+  // Modeled as a normal required-target trigger (same as everything else "may" in this app), with
+  // Cancel on the target-choice banner as the way to decline -- that escape hatch didn't exist when
+  // most of the earlier "may" simplifications in this file were written, so this one uses it instead
+  // of quietly always resolving.
+  "overseer of the damned": [{ trigger: "etb", label: "Overseer of the Damned — destroy target creature", requiresTarget: true, targetZoneType: "creature", effects: [{ type: "destroyTarget" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -426,7 +433,20 @@ const ACTIVATED_ABILITIES = {
   "windcrag siege": [
     { label: "Windcrag Siege — choose Mardu", condition: (c) => !c.chosenMode, effects: [{ type: "chooseMode", mode: "Mardu" }] },
     { label: "Windcrag Siege — choose Jeskai", condition: (c) => !c.chosenMode, effects: [{ type: "chooseMode", mode: "Jeskai" }] }
-  ]
+  ],
+  // {T}: Add {C}{C} -- ONE color but TWO units from a single tap, which the generic "auto-add its
+  // one fixed color" free-tap shortcut can't express (it only ever adds one unit); needs the same
+  // manaAbility fast path (skips the stack, resolves the instant it's activated -- CR 605) signets
+  // already use, just with no mana cost of its own.
+  "sol ring": [{ cost: { tap: true }, manaAbility: true, label: "Sol Ring — Add {C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C"] }] }],
+  // A "painless" fetch like Evolving Wilds/Terramorphic Expanse (basicOnly, any basic) but WITH a
+  // real life cost like the life-paying fetches -- and unlike Evolving Wilds, doesn't force the
+  // fetched land tapped.
+  "prismatic vista": [{ cost: { tap: true, life: 1, sacrifice: true }, label: "Prismatic Vista — search for a basic land", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true }] }],
+  // Real text also requires "activate only if an opponent controls more lands than you" -- not
+  // checked (this table's cost/condition vocabulary has no cross-player state comparison), so this
+  // is always activatable. A real, disclosed simplification, not a silent one.
+  "weathered wayfarer": [{ cost: { mana: "{W}", tap: true }, label: "Weathered Wayfarer — search for a land", effects: [{ type: "tutorToHand", typeFilter: "land" }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -518,6 +538,15 @@ const SPELL_ABILITIES = {
   // card, put that card onto the battlefield tapped, then shuffle." The optional land-search isn't
   // modeled -- same "may" abilities aren't automated precedent used everywhere else in this app.
   "path to exile": { label: "Path to Exile — exile target creature", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "creature" },
+  "swords to plowshares": { label: "Swords to Plowshares — exile target creature", effects: [{ type: "exileTargetGainLifeEqualToPower" }], requiresTarget: true, targetKind: "creature" },
+  // No target -- the library search prompt (EFFECTS.tutorToHand) fires the instant this resolves.
+  "demonic tutor": { label: "Demonic Tutor — search for a card", effects: [{ type: "tutorToHand" }] },
+  "grim tutor": { label: "Grim Tutor — search for a card, lose 3 life", effects: [{ type: "tutorToHand", lifeLoss: 3 }] },
+  // Real text also lets Delirium (4+ card types in your graveyard) upgrade this to "search for ANY
+  // card" -- not modeled (this app doesn't track graveyard card-type diversity anywhere), so this
+  // always resolves as the base Demon-restricted search, a real but rare undercount.
+  "demonic counsel": { label: "Demonic Counsel — search for a Demon card", effects: [{ type: "tutorToHand", typeFilter: "demon" }] },
+  "dark ritual": { label: "Dark Ritual — Add {B}{B}{B}", effects: [{ type: "addFixedMana", colors: ["B", "B", "B"] }] },
   "sephiroth's intervention": { label: "Sephiroth's Intervention — destroy target creature, gain 2 life", effects: [{ type: "destroyTarget" }, { type: "gainLife", target: "controller", amount: 2 }], requiresTarget: true, targetKind: "creature" },
   "dark nourishment": { label: "Dark Nourishment — deal 3 damage, gain 3 life", effects: [{ type: "damageTarget", amount: 3 }, { type: "gainLife", target: "controller", amount: 3 }], requiresTarget: true, targetKind: "any" },
   "volcanic hammer": { label: "Volcanic Hammer — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
@@ -664,12 +693,30 @@ const EFFECTS = {
   destroyTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (!card) return;
+    // CR 702.12b -- a "destroy" effect doesn't destroy an indestructible permanent. Same check
+    // dealtLethal uses for combat.
+    if (effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "indestructible")) return;
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
   },
   exileTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (card) exileCardInternal(lobby, card);
+  },
+  // Swords to Plowshares -- "Its controller gains life equal to its power": the life goes to the
+  // EXILED creature's own controller (card.owner), not necessarily whoever cast this, since the
+  // target is very often an opponent's creature. Power is computed the same way combat damage does
+  // (base + equipment/aura + static anthem bonuses) so a pumped-up creature gives the right amount.
+  exileTargetGainLifeEqualToPower(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const basePower = parseInt(card.power, 10) || 0;
+    const bonus = attachedBonusFor(lobby, card);
+    const staticBonus = staticBonusFor(lobby, card);
+    const power = Math.max(0, basePower + bonus.powerBonus + staticBonus.powerBonus);
+    const recipientId = card.owner;
+    exileCardInternal(lobby, card);
+    if (power > 0) applyLifeGain(lobby, recipientId, power);
   },
   bounceTargetToHand(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
@@ -735,6 +782,20 @@ const EFFECTS = {
     p.pendingFetch = { types: params.types || [], basicOnly: !!params.basicOnly, forceTapped: !!params.entersTapped };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibrary", { types: p.pendingFetch.types, basicOnly: p.pendingFetch.basicOnly });
+  },
+  // "Search your library for a card, put it into your hand" (Demonic Tutor and similar) -- same
+  // "server sets up a pending choice, client prompts via the library zone-modal, a dedicated handler
+  // finishes it" shape as searchLandTypes above, just landing in hand instead of onto the
+  // battlefield and (optionally) restricted to a type substring instead of "must be a land". Life
+  // loss (Grim Tutor) is paid immediately, same as any other cost -- real Magic never blocks it.
+  tutorToHand(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    if (params.lifeLoss) { p.life -= params.lifeLoss; checkEliminations(lobby); }
+    p.pendingTutor = { typeFilter: params.typeFilter || null };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter });
+    broadcastPlayers(lobby);
   },
   // Signets and similar mana rocks ("{1}, T: Add {W}{B}.") produce a FIXED set of colors all at
   // once -- not a choice among them the way a dual land's "add W or B" is. Only ever reached via
@@ -1204,12 +1265,24 @@ function attachedBonusFor(lobby, card) {
   }
   return { powerBonus, toughnessBonus, keywords };
 }
-// A card's keywords plus whatever any attached equipment/aura grants -- the one thing that
-// matters for gameplay (Haste-gated summoning sickness, and anything else that reads keywords).
+// A card's keywords plus whatever any attached equipment/aura grants, plus whatever any OTHER
+// permanent's static keyword-anthem grants it -- the one thing that matters for gameplay
+// (Haste-gated summoning sickness, Indestructible in dealtLethal/destroyTarget, and anything else
+// that reads keywords).
 function effectiveKeywords(lobby, card) {
   const bonus = attachedBonusFor(lobby, card);
-  if (!bonus.keywords.length) return card.keywords || [];
-  return [...new Set([...(card.keywords || []), ...bonus.keywords])];
+  let extra = [...(card.keywords || []), ...bonus.keywords];
+  if (card.zoneType === "creature") {
+    for (const id in lobby.cards) {
+      const c = lobby.cards[id];
+      if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+      const anthem = anthemKeywordsFromText(c.text);
+      if (!anthem.keywords.length) continue;
+      if (id === card.id && !anthem.includesSelf) continue; // an "other creatures" anthem doesn't grant to its own source
+      extra = extra.concat(anthem.keywords);
+    }
+  }
+  return [...new Set(extra)];
 }
 
 // Parses a permanent's own oracle text for the single most common untyped anthem/lord pattern --
@@ -1222,6 +1295,23 @@ function anthemEffectsFromText(text) {
   const m = t.match(/other creatures you control get ([+-]\d+)\/([+-]\d+)/i);
   if (m) { powerBonus = parseInt(m[1], 10) || 0; toughnessBonus = parseInt(m[2], 10) || 0; }
   return { powerBonus, toughnessBonus };
+}
+// The keyword-granting counterpart to anthemEffectsFromText -- "Other creatures/permanents you
+// control have X[, Y and Z]." (Avacyn, Angel of Hope) or the self-inclusive "Creatures you control
+// have X." (Whip of Erebos -- no "other", so it also grants to itself if the source is itself a
+// creature). Same untyped-only narrowing as the stat-bonus version.
+function anthemKeywordsFromText(text) {
+  const t = text || "";
+  let m = t.match(/other (?:creatures|permanents) you control have ([^.]+)\./i);
+  if (m) return { keywords: parseKeywordList(m[1]), includesSelf: false };
+  m = t.match(/creatures you control have ([^.]+)\./i);
+  if (m) return { keywords: parseKeywordList(m[1]), includesSelf: true };
+  return { keywords: [], includesSelf: false };
+}
+function parseKeywordList(raw) {
+  return raw.split(/,| and /i).map((s) => s.trim())
+    .map((r) => KNOWN_KEYWORDS.find((k) => k.toLowerCase() === r.toLowerCase()))
+    .filter(Boolean);
 }
 // Live-computed like attachedBonusFor -- scans every OTHER permanent the same controller controls
 // (source can be a creature "lord", artifact, or enchantment; classifyType buckets all three under
@@ -2065,6 +2155,10 @@ function resolveCombatDamage(lobby) {
     dmgEvents.push({ targetId: card.id, amount });
   }
   function dealtLethal(card, dealtByDeathtouch) {
+    // CR 702.12b: lethal damage doesn't destroy an indestructible permanent. This keyword was
+    // previously only ever an icon badge -- present in KNOWN_KEYWORDS and shown on cards, but never
+    // actually checked anywhere combat/destruction happens, so it did nothing.
+    if (effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "indestructible")) return false;
     if (dealtByDeathtouch || deathtouchHit.has(card.id)) return (marked[card.id] || 0) > 0;
     return (marked[card.id] || 0) >= effPT(card).toughness;
   }
@@ -3310,6 +3404,35 @@ io.on("connection", (socket) => {
     if (!p || !p.pendingFetch) return;
     shuffle(p.library);
     p.pendingFetch = null;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} found nothing`);
+  });
+
+  // Answers a pending EFFECTS.tutorToHand prompt (Demonic Tutor and similar) -- same shape as
+  // fetchLand just above, landing in hand instead of onto the battlefield. A null typeFilter means
+  // "any card" (Demonic/Grim Tutor); a real one is a plain substring match against the type line
+  // (e.g. "land" for Weathered Wayfarer, "demon" for Demonic Counsel/Rune-Scarred Demon).
+  socket.on("tutorCard", (index) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p || !p.pendingTutor || !p.library[index]) return;
+    const entry = p.library[index];
+    const typeLower = (entry.type || "").toLowerCase();
+    if (p.pendingTutor.typeFilter && !typeLower.includes(p.pendingTutor.typeFilter.toLowerCase())) {
+      socket.emit("actionError", `${entry.name || "That card"} doesn't match what you're searching for.`);
+      return;
+    }
+    p.library.splice(index, 1);
+    shuffle(p.library);
+    spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
+    p.pendingTutor = null;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
+  });
+  socket.on("cancelTutor", () => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p || !p.pendingTutor) return;
+    shuffle(p.library);
+    p.pendingTutor = null;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} found nothing`);
   });
