@@ -80,20 +80,20 @@
        custom board mat -- #playmat's own polka-dot background-image shows through instead. */
     #playmat-mat-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; pointer-events: none; display: none; }
 
-    /* --zone-opacity: Settings slider controlling how solid the zone backgrounds and the
-       library/graveyard/exile piles look. Deliberately not applied to .zone-band-label (below) --
-       that stays at full opacity with its own text-shadow so the label text stays legible over any
-       board mat, independent of the opacity slider. */
-    .zone-band { position: absolute; border: 1px solid rgba(212,175,55,0.2); border-radius: 10px; opacity: var(--zone-opacity, 1); }
-    .zone-band.zone-creature { background: rgba(239,68,68,0.08); }
-    .zone-band.zone-artifact { background: rgba(168,85,247,0.08); }
-    .zone-band.zone-mana { background: rgba(34,197,94,0.08); }
-    .zone-band.zone-hand { background: rgba(59,130,246,0.1); border-style: dashed; }
+    /* --zone-opacity is the actual alpha (0-1) used for the four zone-band fills below -- NOT an
+       `opacity` multiplier on the whole element, so 100% (alpha 1) can reach a genuinely solid fill
+       instead of topping out at whatever faint base alpha the color started with. Only affects the
+       zone bands themselves -- piles and .zone-band-label (below) are both untouched by this var,
+       the label deliberately so its text stays legible over any board mat regardless of the slider. */
+    .zone-band { position: absolute; border: 1px solid rgba(212,175,55,0.2); border-radius: 10px; }
+    .zone-band.zone-creature { background: rgba(239,68,68, var(--zone-opacity, 0.08)); }
+    .zone-band.zone-artifact { background: rgba(168,85,247, var(--zone-opacity, 0.08)); }
+    .zone-band.zone-mana { background: rgba(34,197,94, var(--zone-opacity, 0.08)); }
+    .zone-band.zone-hand { background: rgba(59,130,246, var(--zone-opacity, 0.08)); border-style: dashed; }
     /* A sibling of .zone-band, not a child (see renderVisibleBoard) -- so it's exempt from
        --zone-opacity. Gold plus a dark text-shadow keeps it readable over any board mat, dark or
        light, busy or plain. */
     .zone-band-label { position: absolute; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #f0dfa0; font-family: 'Cinzel', serif; text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.75); pointer-events: none; }
-    .zone-pile-wrap { opacity: var(--zone-opacity, 1); }
 
     .card { width: 108px; height: 150px; position: absolute; border-radius: 7px; box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,175,55,0.12); border: 3px solid #444; background: #1a1a1d; user-select: none; overflow: hidden; z-index: 2; transition: left 0.15s ease, top 0.15s ease, transform 0.25s ease; }
     .card img { width: 100%; height: 120px; object-fit: cover; pointer-events: none; display: block; }
@@ -562,7 +562,7 @@
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. First strike, deathtouch, trample, double strike, and lifelink are all factored into damage automatically when granted via Manage Keywords or an equipment/aura bonus. A shared combat view pops up for everyone at the table once attackers are declared, showing each attacker next to its blocker (or the player it's headed for) side by side. Some cards tax declaring attackers against their controller (Propaganda and similar) — the total cost across every attacker you're declaring is checked and paid before any of them tap.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
-          <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it. Save one under a name in the <strong>Account</strong> modal to reuse it on any table later instead of pasting the URL every time — pick it from the dropdown next to Set/Clear and hit Apply. The <strong>Zone Opacity</strong> slider (same Settings panel) controls how solid the zone outlines and library/graveyard/exile piles look, if a busy mat makes them hard to pick out.</li>
+          <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it. Save one under a name in the <strong>Account</strong> modal to reuse it on any table later instead of pasting the URL every time — pick it from the dropdown next to Set/Clear and hit Apply. The <strong>Zone Opacity</strong> slider (same Settings panel) controls how solid the creature/artifact/mana/hand zone fills look, if a busy mat makes them hard to pick out -- piles aren't affected by it.</li>
           <li>The active player's name shows a small elapsed-time readout once their turn's been going a while, purely informational — nothing is ever auto-passed or forced. Casting, combat damage, and a trigger waiting on your target all play a short sound cue; volume for each is adjustable in Settings, same panel as the music slider.</li>
           <li><strong>Account</strong> (Main Menu, or ⚙ Menu → Profile → Account Settings) is where account-wide preferences live, separate from the per-table nickname field: an avatar (by image URL, shown next to your color dot in the Players panel), a default nickname used every time you join a new table, and a change-password form. These persist across every table, unlike the per-table nickname override.</li>
           <li>Hit something broken? The Bug Report button in the ⚙ Menu builds a copyable diagnostic report (recent game log + any client errors) — nothing is sent anywhere automatically, just copy it and hand it over.</li>
@@ -691,8 +691,8 @@
           <button class="mini-btn secondary" onclick="openCropEditor('pile', 'exile')">Exile</button>
         </div>
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;margin-bottom:6px;font-size:12px;">
-          <span title="How solid the creature/artifact/mana/hand zone outlines and the library/graveyard/exile piles look -- turn this up if a busy board mat makes them hard to see">Zone Opacity</span>
-          <input type="range" id="zone-opacity-slider" min="0" max="100" value="100" oninput="setZoneOpacity(this.value)">
+          <span title="How solid the creature/artifact/mana/hand zone fills look -- turn this up if a busy board mat makes them hard to see (piles aren't affected)">Zone Opacity</span>
+          <input type="range" id="zone-opacity-slider" min="0" max="100" value="8" oninput="setZoneOpacity(this.value)">
           <span id="zone-opacity-label" style="width:32px;text-align:right;color:#a89a70;">100%</span>
         </div>
 
@@ -3038,21 +3038,21 @@
     }
 
     // ---------------- zone opacity ----------------
-    // How solid the zone-band backgrounds and library/graveyard/exile piles look, independent of
-    // the always-legible zone labels (see the CSS comment on .zone-band-label). 100% = the default
-    // look; the range goes both below (more see-through) and above (more solid, for a busy board
-    // mat that would otherwise wash the zones out) rather than just muting them like a volume slider.
-    // Slider runs 0-100 for a simple, familiar 0%-100% feel, but never goes fully invisible --
-    // it maps onto an actual opacity range of 0.1 (10%, still faintly visible) to 1.0 (fully solid).
-    function zoneOpacityFromPct(pct) { return 0.1 + (pct / 100) * 0.9; }
+    // How solid the zone-band (creature/artifact/mana/hand) fills look -- piles and labels are
+    // untouched by this, see the CSS comment on .zone-band. The var IS the actual alpha used in
+    // each zone's rgba() fill (not an `opacity` multiplier), so 100% reaches a genuinely solid
+    // fill and 0% is fully invisible. Default is 8%, matching this app's original fixed-alpha look
+    // (0.08) before this slider existed, so a first-time/unadjusted table looks exactly as before.
+    const ZONE_OPACITY_DEFAULT_PCT = 8;
+    function zoneOpacityFromPct(pct) { return pct / 100; }
     let zoneOpacityPct = parseInt(localStorage.getItem("mtgZoneOpacity"), 10);
-    if (isNaN(zoneOpacityPct) || zoneOpacityPct < 0 || zoneOpacityPct > 100) zoneOpacityPct = 100;
+    if (isNaN(zoneOpacityPct) || zoneOpacityPct < 0 || zoneOpacityPct > 100) zoneOpacityPct = ZONE_OPACITY_DEFAULT_PCT;
     document.documentElement.style.setProperty("--zone-opacity", zoneOpacityFromPct(zoneOpacityPct));
     { const slider = document.getElementById("zone-opacity-slider"); if (slider) slider.value = zoneOpacityPct;
       const label = document.getElementById("zone-opacity-label"); if (label) label.innerText = zoneOpacityPct + "%"; }
     function setZoneOpacity(val) {
       const parsed = parseInt(val, 10);
-      const pct = Math.max(0, Math.min(100, isNaN(parsed) ? 100 : parsed));
+      const pct = Math.max(0, Math.min(100, isNaN(parsed) ? ZONE_OPACITY_DEFAULT_PCT : parsed));
       document.documentElement.style.setProperty("--zone-opacity", zoneOpacityFromPct(pct));
       localStorage.setItem("mtgZoneOpacity", String(pct));
       const label = document.getElementById("zone-opacity-label");
