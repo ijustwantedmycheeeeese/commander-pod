@@ -815,6 +815,10 @@
       </div>
       <div id="saved-mats-list" style="margin-bottom:10px;"></div>
 
+      <div class="mm-label">Saved Pile Art</div>
+      <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Save a photo (with its crop) from the pile art editor's "Save As..." button, then load it onto any pile on any table.</div>
+      <div id="saved-pile-mats-list" style="margin-bottom:10px;"></div>
+
       <div class="mm-label">Change Password</div>
       <form id="change-password-form" autocomplete="on" onsubmit="changeAccountPassword(); return false;">
         <input type="text" id="account-username-hidden" name="username" autocomplete="username" style="display:none;" aria-hidden="true">
@@ -842,11 +846,12 @@
         <button class="mini-btn secondary" onclick="document.getElementById('crop-source-file').click()">Upload...</button>
         <button class="mini-btn secondary" onclick="cropResetFit()">Fit to Space</button>
       </div>
-      <div id="crop-preview-box" style="position:relative;width:100%;max-width:280px;margin:0 auto 12px;overflow:hidden;border-radius:10px;border:2px solid #5a4423;background:#100c08;">
-        <img id="crop-preview-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
+      <div id="crop-preview-box" style="position:relative;width:100%;max-width:280px;margin:0 auto 6px;overflow:hidden;border-radius:10px;border:2px solid #5a4423;background:#100c08;cursor:grab;touch-action:none;">
+        <img id="crop-preview-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;" draggable="false">
         <div id="crop-preview-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#8a7a55;font-size:12px;text-align:center;padding:10px;">Paste a URL or upload a photo above.</div>
       </div>
-      <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 8px;align-items:center;font-size:12px;">
+      <div id="crop-preview-hint" style="font-size:11px;color:#8a7a55;text-align:center;margin-bottom:10px;visibility:hidden;">Drag the photo to reposition &middot; scroll to zoom</div>
+      <div id="crop-sliders" style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 8px;align-items:center;font-size:12px;">
         <span>Zoom</span>
         <input type="range" id="crop-zoom" min="100" max="300" value="100" oninput="cropUpdatePreview()">
         <span id="crop-zoom-label" style="width:36px;text-align:right;color:#a89a70;">100%</span>
@@ -856,6 +861,11 @@
         <span>Pan Y</span>
         <input type="range" id="crop-y" min="0" max="100" value="50" oninput="cropUpdatePreview()">
         <span id="crop-y-label" style="width:36px;text-align:right;color:#a89a70;">50%</span>
+      </div>
+      <div id="crop-preset-row" class="flex-row" style="margin-top:10px;">
+        <select id="crop-preset-select" style="flex:1;"><option value="">-- saved pile art --</option></select>
+        <button class="mini-btn secondary" onclick="cropLoadPreset()">Load</button>
+        <button class="mini-btn secondary" onclick="cropSaveAsPreset()">Save As...</button>
       </div>
       <div class="flex-row" style="margin-top:12px;">
         <button onclick="saveCropEditor()">Apply</button>
@@ -1013,8 +1023,24 @@
           <span class="lobby-count">${l.playerCount} player${l.playerCount === 1 ? "" : "s"}${l.spectatorCount ? ` · 👁 ${l.spectatorCount}` : ""}${l.started ? " · in progress" : ""}</span>
           <button class="mini-btn" onclick="joinLobby('${l.id}', ${!!l.locked})">Join</button>
           <button class="mini-btn secondary" onclick="spectateLobby('${l.id}', ${!!l.locked})">Spectate</button>
+          ${l.hostUsername === myUsername ? `<button class="mini-btn danger" onclick="deleteLobbyPrompt('${l.id}')" title="Delete this table for everyone">Delete</button>` : ""}
         </div>`).join("");
     }
+    function deleteLobbyPrompt(id) {
+      if (confirm("Delete this table for everyone? Anyone currently seated will be sent back to the Main Menu. This can't be undone.")) {
+        socket.emit("deleteLobby", id);
+      }
+    }
+    socket.on("lobbyDeleted", (data) => {
+      leaveVoice();
+      currentLobbyId = null;
+      currentLobbyName = null;
+      amSpectator = false;
+      document.getElementById("app-root").style.display = "none";
+      document.getElementById("main-menu").style.display = "flex";
+      startLobbyMusic();
+      alert(`"${data.name}" was deleted by its creator.`);
+    });
 
     socket.on("authError", (msg) => {
       localStorage.removeItem("mtgToken");
@@ -1160,6 +1186,7 @@
     let myAccountAvatar = null;
     let myAccountDefaultName = null;
     let mySavedMats = {}; // name -> url, account-wide (distinct from the per-table active boardMat)
+    let mySavedPileMats = {}; // name -> {url,scale,x,y}, account-wide (distinct from the per-table active pileArt)
     let automatedCardNames = new Set(); // lowercase card names with some automation, sent once at auth time -- see deckAutomationCoverage
 
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
@@ -1175,9 +1202,12 @@
       myAccountAvatar = data.avatar || null;
       myAccountDefaultName = data.defaultName || null;
       mySavedMats = data.mats || {};
+      mySavedPileMats = data.pileMats || {};
       automatedCardNames = new Set(data.automatedCardNames || []);
       renderSavedMatsList();
       renderSavedMatSelect();
+      renderSavedPileMatsList();
+      renderCropPresetSelect();
       const authToken = localStorage.getItem("mtgToken");
       if (authToken) {
         fetch("/api/iceServers?token=" + encodeURIComponent(authToken))
@@ -1362,6 +1392,7 @@
     socket.on("deckSaved", () => { document.getElementById("deck-status").innerText = "Deck saved!"; });
     socket.on("deckList", (names) => renderDeckList(names));
     socket.on("matList", (m) => { mySavedMats = m || {}; renderSavedMatsList(); renderSavedMatSelect(); });
+    socket.on("pileMatList", (m) => { mySavedPileMats = m || {}; renderSavedPileMatsList(); renderCropPresetSelect(); });
 
     socket.on("deckPasteResult", (res) => {
       const status = document.getElementById("de-status");
@@ -1800,6 +1831,8 @@
       document.getElementById("crop-x").value = current ? current.x : 50;
       document.getElementById("crop-y").value = current ? current.y : 50;
       cropLastSrc = current ? current.url : "";
+      document.getElementById("crop-preset-row").style.display = kind === "pile" ? "flex" : "none";
+      if (kind === "pile") renderCropPresetSelect();
       cropUpdatePreview();
       document.getElementById("crop-modal").style.display = "flex";
     }
@@ -1823,26 +1856,102 @@
     }
     function cropUpdatePreview() {
       const url = document.getElementById("crop-source-url").value.trim();
-      const zoom = parseInt(document.getElementById("crop-zoom").value, 10) || 100;
+      const zoom = Math.max(100, Math.min(300, parseInt(document.getElementById("crop-zoom").value, 10) || 100));
       const xRaw = parseInt(document.getElementById("crop-x").value, 10);
       const yRaw = parseInt(document.getElementById("crop-y").value, 10);
-      const x = isNaN(xRaw) ? 50 : xRaw, y = isNaN(yRaw) ? 50 : yRaw;
+      const x = Math.max(0, Math.min(100, isNaN(xRaw) ? 50 : xRaw));
+      const y = Math.max(0, Math.min(100, isNaN(yRaw) ? 50 : yRaw));
+      document.getElementById("crop-zoom").value = zoom;
+      document.getElementById("crop-x").value = x;
+      document.getElementById("crop-y").value = y;
       document.getElementById("crop-zoom-label").innerText = zoom + "%";
       document.getElementById("crop-x-label").innerText = x + "%";
       document.getElementById("crop-y-label").innerText = y + "%";
       const img = document.getElementById("crop-preview-img");
       const empty = document.getElementById("crop-preview-empty");
+      const hint = document.getElementById("crop-preview-hint");
+      const sliders = document.getElementById("crop-sliders");
       if (url) {
-        img.src = url;
+        if (img.dataset.src !== url) { img.src = url; img.dataset.src = url; }
         img.style.objectPosition = `${x}% ${y}%`;
         img.style.transform = `scale(${zoom / 100})`;
         img.style.display = "block";
         empty.style.display = "none";
+        hint.style.visibility = "visible";
+        sliders.style.opacity = "1";
+        sliders.style.pointerEvents = "";
       } else {
         img.style.display = "none";
         empty.style.display = "flex";
+        hint.style.visibility = "hidden";
+        sliders.style.opacity = "0.4";
+        sliders.style.pointerEvents = "none";
       }
     }
+
+    // Direct click-and-drag panning + scroll-to-zoom on the preview image itself, in addition to
+    // the sliders (kept as a precise/keyboard-accessible fallback, and both stay in sync since they
+    // read/write the same three inputs). Converting a drag distance into an object-position percent
+    // needs the image's own natural pixel size -- object-position's percentage is relative to how
+    // much the (cover-fit, then zoomed) image overflows the box, not the box size itself, so a
+    // fixed px-per-percent guess would drift for every image with a different aspect ratio.
+    let cropDrag = null;
+    function cropDragPoint(e) { return e.touches ? e.touches[0] : e; }
+    function cropPreviewDragStart(e) {
+      const img = document.getElementById("crop-preview-img");
+      if (!img.naturalWidth) return;
+      const box = document.getElementById("crop-preview-box").getBoundingClientRect();
+      const pt = cropDragPoint(e);
+      cropDrag = {
+        startX: pt.clientX, startY: pt.clientY,
+        startPanX: parseInt(document.getElementById("crop-x").value, 10) || 50,
+        startPanY: parseInt(document.getElementById("crop-y").value, 10) || 50,
+        natW: img.naturalWidth, natH: img.naturalHeight,
+        boxW: box.width, boxH: box.height,
+        zoom: (parseInt(document.getElementById("crop-zoom").value, 10) || 100) / 100
+      };
+      document.getElementById("crop-preview-box").style.cursor = "grabbing";
+      e.preventDefault();
+    }
+    function cropPreviewDragMove(e) {
+      if (!cropDrag) return;
+      const coverScale = Math.max(cropDrag.boxW / cropDrag.natW, cropDrag.boxH / cropDrag.natH);
+      const dispW = cropDrag.natW * coverScale * cropDrag.zoom;
+      const dispH = cropDrag.natH * coverScale * cropDrag.zoom;
+      const slackX = dispW - cropDrag.boxW;
+      const slackY = dispH - cropDrag.boxH;
+      const pt = cropDragPoint(e);
+      const dx = pt.clientX - cropDrag.startX;
+      const dy = pt.clientY - cropDrag.startY;
+      // Dragging the photo right should reveal more of its left side -- object-position moves the
+      // image the OPPOSITE direction from a rising percentage, hence the negative sign here.
+      if (slackX > 0) document.getElementById("crop-x").value = Math.round(Math.max(0, Math.min(100, cropDrag.startPanX - (dx / slackX) * 100)));
+      if (slackY > 0) document.getElementById("crop-y").value = Math.round(Math.max(0, Math.min(100, cropDrag.startPanY - (dy / slackY) * 100)));
+      cropUpdatePreview();
+      e.preventDefault();
+    }
+    function cropPreviewDragEnd() {
+      if (!cropDrag) return;
+      cropDrag = null;
+      document.getElementById("crop-preview-box").style.cursor = "grab";
+    }
+    function cropPreviewWheel(e) {
+      const img = document.getElementById("crop-preview-img");
+      if (!img.naturalWidth) return;
+      e.preventDefault();
+      const zoomInput = document.getElementById("crop-zoom");
+      const cur = parseInt(zoomInput.value, 10) || 100;
+      zoomInput.value = Math.max(100, Math.min(300, cur + (e.deltaY < 0 ? 10 : -10)));
+      cropUpdatePreview();
+    }
+    { const box = document.getElementById("crop-preview-box");
+      box.addEventListener("mousedown", cropPreviewDragStart);
+      box.addEventListener("touchstart", cropPreviewDragStart, { passive: false });
+      box.addEventListener("wheel", cropPreviewWheel, { passive: false });
+      document.addEventListener("mousemove", cropPreviewDragMove);
+      document.addEventListener("touchmove", cropPreviewDragMove, { passive: false });
+      document.addEventListener("mouseup", cropPreviewDragEnd);
+      document.addEventListener("touchend", cropPreviewDragEnd); }
     function saveCropEditor() {
       if (!cropTarget) return;
       const url = document.getElementById("crop-source-url").value.trim();
@@ -1913,6 +2022,57 @@
       if (!name || !mySavedMats[name]) return;
       document.getElementById("board-mat-url").value = mySavedMats[name];
       setBoardMat();
+    }
+
+    // ---------------- saved pile art (account-wide) ----------------
+    function deleteSavedPileMat(name) {
+      if (!confirm(`Delete saved pile art "${name}"?`)) return;
+      socket.emit("deletePileMat", name);
+    }
+    function renderSavedPileMatsList() {
+      const el = document.getElementById("saved-pile-mats-list");
+      if (!el) return;
+      const names = Object.keys(mySavedPileMats);
+      if (!names.length) { el.innerHTML = "<div style='color:#8a7a55;font-size:12px;'>No saved pile art yet.</div>"; return; }
+      el.innerHTML = "";
+      names.forEach((name) => {
+        const row = document.createElement("div");
+        row.className = "player-row";
+        row.innerHTML = `
+          <img src="${escapeHtml(mySavedPileMats[name].url)}" style="width:32px;height:32px;object-fit:cover;border-radius:4px;flex-shrink:0;">
+          <div style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(name)}</div>
+          <button class="mini-btn" style="background:#7a1f1f;" onclick="deleteSavedPileMat('${escapeHtml(name).replace(/'/g, "\\'")}')">Del</button>`;
+        el.appendChild(row);
+      });
+    }
+    function renderCropPresetSelect() {
+      const sel = document.getElementById("crop-preset-select");
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = '<option value="">-- saved pile art --</option>' +
+        Object.keys(mySavedPileMats).map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+      if (Object.keys(mySavedPileMats).includes(current)) sel.value = current;
+    }
+    function cropLoadPreset() {
+      const name = document.getElementById("crop-preset-select").value;
+      const preset = mySavedPileMats[name];
+      if (!preset) return;
+      document.getElementById("crop-source-url").value = preset.url;
+      document.getElementById("crop-zoom").value = Math.round(preset.scale * 100);
+      document.getElementById("crop-x").value = preset.x;
+      document.getElementById("crop-y").value = preset.y;
+      cropLastSrc = preset.url; // this IS the crop we want -- don't let cropSourceChanged reset it
+      cropUpdatePreview();
+    }
+    function cropSaveAsPreset() {
+      const url = document.getElementById("crop-source-url").value.trim();
+      if (!url) { alert("Add an image URL or upload a photo first."); return; }
+      const name = prompt("Name this pile art:");
+      if (!name || !name.trim()) return;
+      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || 100) / 100;
+      const xRaw = parseInt(document.getElementById("crop-x").value, 10);
+      const yRaw = parseInt(document.getElementById("crop-y").value, 10);
+      socket.emit("savePileMat", { name: name.trim(), url, scale, x: isNaN(xRaw) ? 50 : xRaw, y: isNaN(yRaw) ? 50 : yRaw });
     }
 
     // Shared by the Board Mat and Avatar "Upload..." buttons -- an alternative to pasting a URL,

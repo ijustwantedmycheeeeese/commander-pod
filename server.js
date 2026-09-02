@@ -38,6 +38,8 @@ function deleteUploadIfOrphaned(oldUrl, forUsername) {
   if (!oldUrl || !oldUrl.startsWith("/uploads/")) return;
   const savedMats = mats[forUsername] || {};
   if (Object.values(savedMats).includes(oldUrl)) return; // still referenced, keep it
+  const savedPileMats = pileMats[forUsername] || {};
+  if (Object.values(savedPileMats).some((m) => m && m.url === oldUrl)) return; // still a saved pile-art preset
   if (users[forUsername] && users[forUsername].avatar === oldUrl) return; // still the account avatar
   // The same account could have this same URL set as the ACTIVE mat on a different table (e.g.
   // applied a saved mat on two tables, then changed it on one) -- don't delete out from under it.
@@ -65,14 +67,17 @@ function saveJSON(file, data) {
 const USERS_FILE = DATA_DIR + "/users.json";
 const DECKS_FILE = DATA_DIR + "/decks.json";
 const MATS_FILE = DATA_DIR + "/mats.json";
+const PILE_MATS_FILE = DATA_DIR + "/pile_mats.json";
 const CARD_ARCHIVE_FILE = DATA_DIR + "/card_archive.json";
 let users = loadJSON(USERS_FILE, {});
 let decks = loadJSON(DECKS_FILE, {});
 let mats = loadJSON(MATS_FILE, {}); // username -> { matName: url } -- account-wide, unlike the per-table active boardMat
+let pileMats = loadJSON(PILE_MATS_FILE, {}); // username -> { presetName: {url,scale,x,y} } -- same idea, for pile art
 let cardArchive = loadJSON(CARD_ARCHIVE_FILE, {}); // lowercase card name -> full extracted card data
 function saveUsers() { saveJSON(USERS_FILE, users); }
 function saveDecks() { saveJSON(DECKS_FILE, decks); }
 function saveMats() { saveJSON(MATS_FILE, mats); }
+function savePileMats() { saveJSON(PILE_MATS_FILE, pileMats); }
 function saveCardArchive() { saveJSON(CARD_ARCHIVE_FILE, cardArchive); }
 function archiveKey(name) { return (name || "").toLowerCase().trim(); }
 function archiveCard(fields) {
@@ -751,7 +756,7 @@ function createLobbyState(id, name, hostUsername, password) {
 function lobbySummaries() {
   return Object.values(lobbies).map((l) => ({
     id: l.id, name: l.name, playerCount: Object.keys(l.players).length, spectatorCount: Object.keys(l.spectators || {}).length,
-    started: l.turn.started, locked: !!l.passwordHash
+    started: l.turn.started, locked: !!l.passwordHash, hostUsername: l.hostUsername
   }));
 }
 function broadcastSpectators(lobby) { io.to(lobby.id).emit("spectatorRoster", Object.values(lobby.spectators).map((s) => s.name)); }
@@ -2288,6 +2293,7 @@ io.on("connection", (socket) => {
   socket.emit("authOk", {
     username, decks: Object.keys(decks[username] || {}),
     mats: mats[username] || {},
+    pileMats: pileMats[username] || {},
     avatar: (users[username] && users[username].avatar) || null,
     defaultName: (users[username] && users[username].defaultName) || null,
     automatedCardNames: getAllAutomatedCardNames()
@@ -2466,6 +2472,26 @@ io.on("connection", (socket) => {
   socket.on("leaveLobby", leaveCurrentLobbyIfAny);
 
   socket.on("listLobbies", () => socket.emit("lobbyList", lobbySummaries()));
+
+  // Only the table's creator can tear it down outright -- everyone else uses Leave Table, which
+  // just vacates their own seat. Immediate, not a grace-period leave: the whole table is gone, not
+  // just one seat, so there's nothing to hold open for a reconnect.
+  socket.on("deleteLobby", (data) => {
+    const id = typeof data === "string" ? data : (data && data.id);
+    const lobby = lobbies[id];
+    if (!lobby) return;
+    if (lobby.hostUsername !== username) { socket.emit("actionError", "Only the table's creator can delete it."); return; }
+    for (const sid of lobbySocketIds(lobby)) {
+      const sock = io.sockets.sockets.get(sid);
+      if (!sock) continue;
+      sock.emit("lobbyDeleted", { name: lobby.name });
+      sock.leave(lobby.id);
+      sock.data.lobbyId = null;
+    }
+    delete lobbies[id];
+    saveLobbies();
+    broadcastLobbyList();
+  });
 
   socket.on("setName", (name) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
@@ -3253,6 +3279,29 @@ io.on("connection", (socket) => {
     saveMats();
     socket.emit("matList", mats[username]);
     if (url) deleteUploadIfOrphaned(url, username);
+  });
+
+  // ---- saved pile art (account-scoped, mirrors saved board mats above) -- stores the full crop
+  // (url + scale/x/y), not just a bare URL, since re-applying a pile-art preset should bring its
+  // framing back too, not force re-cropping the same photo again on every table. ----
+
+  socket.on("savePileMat", ({ name, url, scale, x, y } = {}) => {
+    name = (name || "").toString().trim().slice(0, 40);
+    const clean = sanitizeImgUrl(url);
+    if (!name || !clean || UNSAFE_OBJECT_KEYS.has(name)) return;
+    if (!pileMats[username]) pileMats[username] = {};
+    pileMats[username][name] = { url: clean, ...sanitizeImgFit({ scale, x, y }) };
+    savePileMats();
+    socket.emit("pileMatList", pileMats[username]);
+  });
+
+  socket.on("deletePileMat", (name) => {
+    if (!pileMats[username]) return;
+    const entry = pileMats[username][name];
+    delete pileMats[username][name];
+    savePileMats();
+    socket.emit("pileMatList", pileMats[username]);
+    if (entry && entry.url) deleteUploadIfOrphaned(entry.url, username);
   });
 
   socket.on("loadDeck", (name) => {
