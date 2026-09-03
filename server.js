@@ -687,15 +687,27 @@ const SPELL_ABILITIES = {
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
 }
-// Union of every card name with SOME automation -- a trigger, an activated ability, or a spell
-// effect. Sent once at auth time (see authOk) so the client can compute "how much of this deck is
+// Union of every card name with SOME automation -- a trigger, an activated ability, a spell
+// effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
+// this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
+// Sent once at auth time (see authOk) so the client can compute "how much of this deck is
 // automated" locally and instantly as a deck is built/imported, without a round trip per change.
+// NOTE: mechanisms detected by TEXT PATTERN rather than by name (shocklands' pay-life choice,
+// Command Tower-style commander-color-identity mana, Exotic Orchard-style opponent-land mana) are
+// NOT included here -- there's no fixed name list to enumerate for those, so a deck's real
+// automation coverage is always at least as high as this count suggests, never lower.
 function getAllAutomatedCardNames() {
-  return [...new Set([...Object.keys(CARD_ABILITIES), ...Object.keys(ACTIVATED_ABILITIES), ...Object.keys(SPELL_ABILITIES)])];
+  return [...new Set([
+    ...Object.keys(CARD_ABILITIES), ...Object.keys(ACTIVATED_ABILITIES), ...Object.keys(SPELL_ABILITIES),
+    ...ENTERS_TAPPED_FOR_OPPONENTS, ...ATTACK_ALONE_CARDS, ...DAMAGE_DOUBLING_CARDS,
+    ...GRAVEYARD_REDIRECT_CREATURE_ONLY, ...GRAVEYARD_REDIRECT_ANY_CARD
+  ])];
 }
 function isCardAutomated(cardName) {
   const key = archiveKey(cardName);
-  return !!(CARD_ABILITIES[key] || ACTIVATED_ABILITIES[key] || SPELL_ABILITIES[key]);
+  return !!(CARD_ABILITIES[key] || ACTIVATED_ABILITIES[key] || SPELL_ABILITIES[key]
+    || ENTERS_TAPPED_FOR_OPPONENTS.includes(key) || ATTACK_ALONE_CARDS.includes(key) || DAMAGE_DOUBLING_CARDS.includes(key)
+    || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key));
 }
 
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
@@ -1799,6 +1811,7 @@ function effectiveKeywords(lobby, card) {
       const anthem = anthemKeywordsFromText(c.text);
       if (!anthem.keywords.length) continue;
       if (id === card.id && !anthem.includesSelf) continue; // an "other creatures" anthem doesn't grant to its own source
+      if (anthem.keywordFilter && !(card.keywords || []).some((k) => (k || "").toLowerCase() === anthem.keywordFilter.toLowerCase())) continue;
       extra = extra.concat(anthem.keywords);
     }
   }
@@ -1895,11 +1908,21 @@ function anthemEffectsFromText(text) {
 // creature). Same untyped-only narrowing as the stat-bonus version.
 function anthemKeywordsFromText(text) {
   const t = text || "";
-  let m = t.match(/other (?:creatures|permanents) you control have ([^.]+)\./i);
-  if (m) return { keywords: parseKeywordList(m[1]), includesSelf: false };
+  // Sephara, Sky's Blade-style: "Other creatures you control WITH FLYING have indestructible" --
+  // a keyword-restricted grant (checked against the target's own PRINTED keywords only, not a
+  // recursive effectiveKeywords call -- a disclosed narrowing, same spirit as the color-restricted
+  // anthem work: won't catch a creature that only gained the qualifying keyword from another
+  // source).
+  let m = t.match(/other creatures you control with (\w+) have ([^.]+)\./i);
+  if (m) {
+    const keywordFilter = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === m[1].toLowerCase()) || null;
+    return { keywords: parseKeywordList(m[2]), includesSelf: false, keywordFilter };
+  }
+  m = t.match(/other (?:creatures|permanents) you control have ([^.]+)\./i);
+  if (m) return { keywords: parseKeywordList(m[1]), includesSelf: false, keywordFilter: null };
   m = t.match(/creatures you control have ([^.]+)\./i);
-  if (m) return { keywords: parseKeywordList(m[1]), includesSelf: true };
-  return { keywords: [], includesSelf: false };
+  if (m) return { keywords: parseKeywordList(m[1]), includesSelf: true, keywordFilter: null };
+  return { keywords: [], includesSelf: false, keywordFilter: null };
 }
 function parseKeywordList(raw) {
   return raw.split(/,| and /i).map((s) => s.trim())
@@ -2857,6 +2880,8 @@ function equipCostFromText(text) {
 // commanders (their owner already gets to choose the Command Zone instead, a strictly better
 // outcome than exile that this app already automates -- not worth the added complexity of
 // modeling a real choice between the two replacement effects).
+const GRAVEYARD_REDIRECT_CREATURE_ONLY = ["liesa, forgotten archangel"];
+const GRAVEYARD_REDIRECT_ANY_CARD = ["valgavoth, terror eater"];
 function graveyardRedirectFor(lobby, card) {
   if (card.isCommander) return false;
   for (const id in lobby.cards) {
@@ -2864,22 +2889,25 @@ function graveyardRedirectFor(lobby, card) {
     if (c.zoneType === "hand" || c.zoneType === "stack" || c.owner === card.owner) continue;
     const key = archiveKey(c.name);
     // Liesa only redirects CREATURES; Valgavoth redirects any card type ("from anywhere").
-    if (card.zoneType === "creature" && key === "liesa, forgotten archangel") return true;
-    if (key === "valgavoth, terror eater") return true;
+    if (card.zoneType === "creature" && GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key)) return true;
+    if (GRAVEYARD_REDIRECT_ANY_CARD.includes(key)) return true;
   }
   return false;
 }
-// Twinflame Tyrant: "If a source you control would deal damage to an opponent or a permanent an
-// opponent controls, it deals double that damage instead" -- CR 614 replacement effect. Scoped
-// here to damage a PLAYER directly takes (combat hits/trample-over and targeted damage
-// spells/abilities); doubling creature-vs-creature combat damage isn't modeled (would mean
-// touching the multi-blocker damage-assignment loop's lethal-toughness math, a much higher-risk
-// change for a less commonly relevant case) -- a disclosed narrowing, same precedent as every
-// other scope-limited card in this engine.
+// Twinflame Tyrant / Gisela, Blade of Goldnight: both read "if a source you control would deal
+// damage to an opponent (or their permanent), it deals double that damage instead" -- functionally
+// identical CR 614 replacement effects, so one shared check covers both. Scoped to damage a PLAYER
+// directly takes (combat hits/trample-over and targeted damage spells/abilities); doubling
+// creature-vs-creature combat damage isn't modeled (would mean touching the multi-blocker damage-
+// assignment loop's lethal-toughness math, a much higher-risk change for a less commonly relevant
+// case) -- a disclosed narrowing, same precedent as every other scope-limited card in this engine.
+// Gisela's OTHER half ("prevent half the damage that would be dealt to you") is a genuinely
+// separate damage-reduction mechanism this app doesn't have yet -- not modeled, disclosed.
+const DAMAGE_DOUBLING_CARDS = ["twinflame tyrant", "gisela, blade of goldnight"];
 function damageMultiplierFor(lobby, controllerId) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
-    if (c.owner === controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "twinflame tyrant") return 2;
+    if (c.owner === controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && DAMAGE_DOUBLING_CARDS.includes(archiveKey(c.name))) return 2;
   }
   return 1;
 }
