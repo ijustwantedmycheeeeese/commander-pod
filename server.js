@@ -304,7 +304,10 @@ const CARD_ABILITIES = {
   "ancient copper dragon": [{ trigger: "combatDamageToPlayer", label: "Ancient Copper Dragon — roll a d20, create that many Treasures", effects: [{ type: "rollD20CreateTreasures" }] }],
   "kaalia, zenith seeker": [{ trigger: "etb", label: "Kaalia, Zenith Seeker — look at top 6, take Angels/Demons/Dragons", effects: [{ type: "lookTopNRevealTypesToHand", amount: 6, types: ["Angel", "Demon", "Dragon"] }] }],
   "utvara hellkite": [{ trigger: "otherAttacks", typeFilter: ["Dragon"], label: "Utvara Hellkite — create a 6/6 flying Dragon token, tapped and attacking",
-    effects: [{ type: "createAttackingToken", name: "Dragon", tokenType: "Token Creature — Dragon", power: "6", toughness: "6", colors: ["R"], keywords: ["Flying"], img: "https://cards.scryfall.io/normal/front/1/1/11335886-a422-42ff-be14-226602202603.jpg" }] }]
+    effects: [{ type: "createAttackingToken", name: "Dragon", tokenType: "Token Creature — Dragon", power: "6", toughness: "6", colors: ["R"], keywords: ["Flying"], img: "https://cards.scryfall.io/normal/front/1/1/11335886-a422-42ff-be14-226602202603.jpg" }] }],
+  // amount is baked in dynamically by fireGlobalOtherCreatureEtbTriggers (the entering creature's
+  // own power) -- the {type:"damageTarget"} entry here carries no amount of its own.
+  "terror of the peaks": [{ trigger: "otherCreatureEtb", label: "Terror of the Peaks — deal damage equal to that creature's power to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -632,7 +635,13 @@ const SPELL_ABILITIES = {
     { label: "Rakdos Charm — exile target player's graveyard", requiresTarget: true, targetKind: "player", effects: [{ type: "exilePlayerGraveyard" }] },
     { label: "Rakdos Charm — destroy target artifact", requiresTarget: true, targetKind: "artifact", effects: [{ type: "destroyTarget" }] },
     { label: "Rakdos Charm — each creature deals 1 damage to its controller", requiresTarget: false, effects: [{ type: "eachCreatureDamagesController", amount: 1 }] }
-  ] }
+  ] },
+  // targetKind:"permanent" -- creature or artifact zoneType (which already covers artifacts,
+  // enchantments, AND planeswalkers, since classifyType folds all three into "artifact" -- see its
+  // own comment), plus minCmc for Despark's real "mana value 4 or greater" restriction. A generic
+  // addition, not a one-off: any future "destroy/exile target permanent [with condition]" card can
+  // reuse this same targetKind.
+  "despark": { label: "Despark — destroy target permanent with mana value 4 or greater", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "permanent", minCmc: 4 }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -1379,7 +1388,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     stack: lobby.stack.map((c) => maskCard(c, socketId)),
     priority: lobby.priority,
-    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null }; })() : null,
+    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null }; })() : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
     spectatorRoster: Object.values(lobby.spectators).map((s) => s.name),
@@ -2006,7 +2015,7 @@ function castSpell(lobby, card, casterId, logSuffix) {
       queueTargetChoice(lobby, {
         kind: "castSpell", controllerId: casterId, spellCard: card, sourceCard: card,
         label: spellAbility.label, effects: spellAbility.effects, targetKind: spellAbility.targetKind,
-        logSuffix: logSuffix || ""
+        minCmc: spellAbility.minCmc || null, logSuffix: logSuffix || ""
       });
       return;
     }
@@ -2055,7 +2064,7 @@ function promptTargetChoice(lobby, entry) {
   // what they were told to click got a confusing rejection with no way to tell what went wrong.
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
   const src = entry.spellCard || entry.sourceCard;
-  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null });
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null });
 }
 // Discards any pending target choices belonging to a departing controller (a real disconnect/leave
 // or an elimination) -- otherwise the table would be stuck forever waiting on a target that will
@@ -2087,6 +2096,13 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (lobby.players[targetId]) return { ok: true };
     const c = lobby.cards[targetId];
     if (!c || !(c.zoneType === "creature" || (c.type || "").toLowerCase().includes("planeswalker"))) return { ok: false, error: "Choose a creature, player, or planeswalker." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  if (targetKind === "permanent") {
+    const c = lobby.cards[targetId];
+    if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent." };
+    if (entry.minCmc && (c.cmc || 0) < entry.minCmc) return { ok: false, error: `${c.name || "That permanent"}'s mana value is too low to target with this.` };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
@@ -2169,6 +2185,34 @@ function fireTrigger(lobby, card, ability) {
 function fireEtbTriggers(lobby, card) {
   if (!lobby.turn.started) return;
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
+  fireGlobalOtherCreatureEtbTriggers(lobby, card);
+}
+
+// "Whenever ANOTHER creature enters the battlefield under your control" (Terror of the Peaks,
+// Warstorm Surge-style triggers) -- distinct from the self-only loop just above and needs the
+// entering creature's own power baked in dynamically (varies per creature and per any
+// equipment/anthem bonus already in play the instant it resolves), same "capture the dynamic bit
+// at fire time" approach fireCombatDamageToPlayerTriggers/fireGlobalAttackTypeTriggers already use.
+// Only fires for CREATURE permanents entering (a land/artifact entering doesn't count) and excludes
+// the entering card itself from the scan (the "another" in the wording).
+function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
+  if (!lobby.turn.started || enteringCard.zoneType !== "creature") return;
+  const bonus = attachedBonusFor(lobby, enteringCard);
+  const stat = staticBonusFor(lobby, enteringCard);
+  const power = Math.max(0, parsePT(enteringCard.power) + bonus.powerBonus + stat.powerBonus);
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.id === enteringCard.id || c.owner !== enteringCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "otherCreatureEtb").forEach((ability) => {
+      if (ability.condition && !ability.condition(c, lobby)) return;
+      const effects = (ability.effects || []).map((e) => ({ ...e, amount: power }));
+      if (ability.requiresTarget) {
+        queueTargetChoice(lobby, { controllerId: c.owner, sourceCard: c, label: ability.label, effects, targetKind: ability.targetKind });
+      } else {
+        pushAbilityToStack(lobby, { sourceCard: c, controllerId: c.owner, label: ability.label, effects });
+      }
+    });
+  }
 }
 
 // Fires every authored "dies" ability for `card` (self-referential only). Must be called BEFORE
