@@ -1085,6 +1085,12 @@ function createLobbyState(id, name, hostUsername, password) {
     id, name, hostUsername,
     passwordSalt, passwordHash,
     createdAt: Date.now(),
+    // Per-table rules toggles -- the seed of a future "casual/tournament/custom" ruleset picker.
+    // Only one flag for now: whether Protection/Hexproof/Ward/Shroud are actually enforced as
+    // targeting restrictions, or stay the cosmetic badges they've always been (this app's
+    // long-standing "anyone can target anything, players self-police" trust model). Host-only to
+    // change (see setLobbySetting), same precedent as deleteLobby.
+    settings: { enforceTargetingRestrictions: true },
     cards: {},        // battlefield/hand cards, keyed by id
     players: {},      // socket.id -> player state
     targets: {},      // cardId -> [playerId, ...]
@@ -1149,6 +1155,7 @@ function restoreLobbies() {
     if (!l.stack) l.stack = [];
     if (!l.priority) l.priority = { holderId: null, lastActorId: null };
     if (!l.pendingTargetChoices) l.pendingTargetChoices = [];
+    if (!l.settings) l.settings = { enforceTargetingRestrictions: true };
     // Nobody is actually connected right after a restart — mark every seated player as
     // disconnected so the normal reconnect-grace mechanism below picks up the cleanup/resume.
     for (const sid in l.players) {
@@ -1372,12 +1379,14 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     stack: lobby.stack.map((c) => maskCard(c, socketId)),
     priority: lobby.priority,
-    pendingTargetChoice: myPendingChoice ? { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null } : null,
+    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null }; })() : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
     spectatorRoster: Object.values(lobby.spectators).map((s) => s.name),
     spectator: !!lobby.spectators[socketId],
-    myId: socketId
+    myId: socketId,
+    settings: lobby.settings,
+    isHost: !!(lobby.players[socketId] && lobby.hostUsername === lobby.players[socketId].username)
   };
 }
 
@@ -1527,6 +1536,53 @@ function effectiveKeywords(lobby, card) {
     }
   }
   return [...new Set(extra)];
+}
+
+// Toggleable (lobby.settings.enforceTargetingRestrictions) targeting-legality checks for
+// Hexproof/Shroud/Ward/Protection -- see targetIsUntargetableBy's own comment for the actual
+// rules being modeled and what's deliberately simplified. Scoped to TARGETING only (not
+// Protection's other three DEBT facets -- damage prevention, can't-block, can't-enchant/equip --
+// which stay unmodeled, same "targeting is the one that matters most for an automated table"
+// narrowing as everywhere else in this file).
+function parsedProtectionQualities(card) {
+  // No trailing period required -- a card whose entire text is one keyword line (e.g. Baneslayer
+  // Angel: "Flying, first strike, lifelink, protection from Demons and from Dragons") has no
+  // period at all, since Magic's own convention omits one for keyword-only lines.
+  const m = (card.text || "").match(/protection from ([^.\n]+)/i);
+  if (!m) return [];
+  return m[1].split(/,| and /i).map((s) => s.replace(/^\s*from\s+/i, "").trim().toLowerCase()).filter(Boolean);
+}
+const PROTECTION_COLOR_WORDS = { white: "W", blue: "U", black: "B", red: "R", green: "G" };
+// Does `sourceCard` (the spell being cast, or the permanent whose ability is targeting) match any
+// of `targetCard`'s printed "protection from X" qualities? X can be a color ("from black") or a
+// creature type ("from Demons and from Dragons", matched via simple singular/plural stemming
+// against the source's own type line) -- "protection from everything" (Progenitus-style) always
+// matches. No sourceCard (e.g. a triggered ability with no real card object) never matches.
+function sourceMatchesProtection(targetCard, sourceCard) {
+  const qualities = parsedProtectionQualities(targetCard);
+  if (!qualities.length || !sourceCard) return false;
+  return qualities.some((q) => {
+    if (q === "everything") return true;
+    if (PROTECTION_COLOR_WORDS[q]) return (sourceCard.colors || []).includes(PROTECTION_COLOR_WORDS[q]);
+    const singular = q.replace(/s$/, "");
+    return (sourceCard.type || "").toLowerCase().includes(singular);
+  });
+}
+// The one check both resolveChosenTarget (spells/abilities) and declareBlockers (Protection's
+// can't-be-blocked-by facet is a natural extension of the same "does the source match?" question)
+// can share. `controllerId` is whoever is doing the targeting/blocking; Hexproof/Ward only stop
+// OPPONENTS, Shroud stops everyone including the target's own controller, Protection matches
+// against the SOURCE card's own color/type regardless of who controls it. Ward is simplified to
+// "the interaction just doesn't happen" rather than modeling its real "counter unless you pay a
+// cost" wording -- this app has no "pay an optional cost to push a spell through" prompt anywhere.
+function targetIsUntargetableBy(lobby, targetCard, controllerId, sourceCard) {
+  if (!lobby.settings || !lobby.settings.enforceTargetingRestrictions) return false;
+  const kw = effectiveKeywords(lobby, targetCard).map((k) => (k || "").toLowerCase());
+  if (kw.includes("shroud")) return true;
+  if (targetCard.owner === controllerId) return false; // Hexproof/Ward/Protection only ever restrict OPPONENTS
+  if (kw.includes("hexproof") || kw.includes("ward")) return true;
+  if (sourceMatchesProtection(targetCard, sourceCard)) return true;
+  return false;
 }
 
 // Parses a permanent's own oracle text for the single most common untyped anthem/lord pattern --
@@ -1998,7 +2054,8 @@ function promptTargetChoice(lobby, entry) {
   // battlefield-only instruction and lit up every card as clickable, so a player naturally clicking
   // what they were told to click got a confusing rejection with no way to tell what went wrong.
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
-  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, targetKind, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null });
+  const src = entry.spellCard || entry.sourceCard;
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null });
 }
 // Discards any pending target choices belonging to a departing controller (a real disconnect/leave
 // or an elimination) -- otherwise the table would be stuck forever waiting on a target that will
@@ -2029,8 +2086,9 @@ function resolveChosenTarget(lobby, entry, targetId) {
   if (targetKind === "any") {
     if (lobby.players[targetId]) return { ok: true };
     const c = lobby.cards[targetId];
-    if (c && (c.zoneType === "creature" || (c.type || "").toLowerCase().includes("planeswalker"))) return { ok: true };
-    return { ok: false, error: "Choose a creature, player, or planeswalker." };
+    if (!c || !(c.zoneType === "creature" || (c.type || "").toLowerCase().includes("planeswalker"))) return { ok: false, error: "Choose a creature, player, or planeswalker." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
   }
   if (targetKind === "mode") {
     const idx = parseInt(targetId, 10);
@@ -2047,6 +2105,7 @@ function resolveChosenTarget(lobby, entry, targetId) {
   // Existing behavior: a card whose zoneType matches (default "creature").
   const c = lobby.cards[targetId];
   if (!c || c.zoneType !== targetKind) return { ok: false, error: `Choose a ${targetKind === "creature" ? "creature" : targetKind}.` };
+  if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
   return { ok: true };
 }
 // Runs a spell's effects immediately (no target needed, or the target was already baked into
@@ -2500,30 +2559,38 @@ function resolveCombatDamage(lobby) {
   }
 
   const pairs = Object.entries(combat.attackers)
-    .map(([attackerId, defenderId]) => ({ attackerId, defenderId, blockerId: combat.blocks[attackerId] }))
+    .map(([attackerId, defenderId]) => ({ attackerId, defenderId, blockerIds: combat.blocks[attackerId] || [] }))
     .filter((p) => lobby.cards[p.attackerId]);
 
   function dealStepDamage(isFirstStrikeStep) {
-    for (const { attackerId, defenderId, blockerId } of pairs) {
+    for (const { attackerId, defenderId, blockerIds } of pairs) {
       const attacker = lobby.cards[attackerId];
       if (!attacker) continue; // died in an earlier sub-step
       const atkFS = hasKw(attacker, "first strike"), atkDS = hasKw(attacker, "double strike");
       const attackerActs = isFirstStrikeStep ? (atkFS || atkDS) : (!atkFS || atkDS);
-      const blocker = blockerId ? lobby.cards[blockerId] : null;
+      const blockers = blockerIds.map((id) => lobby.cards[id]).filter(Boolean); // drop any that died in an earlier sub-step
 
-      if (blocker) {
+      if (blockers.length > 0) {
         if (attackerActs) {
           const { power: atkPower } = effPT(attacker);
           const atkDeathtouch = hasKw(attacker, "deathtouch");
           const atkTrample = hasKw(attacker, "trample");
           if (atkPower > 0) {
-            let toBlocker = atkPower, toPlayer = 0;
-            if (atkTrample) {
-              const need = remainingToKill(blocker, atkDeathtouch);
-              toBlocker = Math.min(atkPower, need);
-              toPlayer = atkPower - toBlocker;
-            }
-            markDamage(blocker, toBlocker, atkDeathtouch);
+            // CR 510.1c: at least lethal to each blocker in order before the next gets any: without
+            // trample the LAST blocker just soaks whatever's left (nowhere else for it to go); with
+            // trample only the true leftover after every blocker has lethal spills to the player.
+            // The order itself is simplified to declaration order rather than a separate
+            // player-chosen damage-assignment-order UI -- only matters when multiple blockers are
+            // involved (Menace, or a deliberate double-block), the less common case.
+            let remaining = atkPower;
+            blockers.forEach((blocker, i) => {
+              if (remaining <= 0) return;
+              const isLast = i === blockers.length - 1;
+              const toThis = (isLast && !atkTrample) ? remaining : Math.min(remaining, remainingToKill(blocker, atkDeathtouch));
+              markDamage(blocker, toThis, atkDeathtouch);
+              remaining -= toThis;
+            });
+            const toPlayer = atkTrample ? remaining : 0;
             if (toPlayer > 0) {
               const defender = lobby.players[defenderId];
               if (defender) {
@@ -2539,19 +2606,24 @@ function resolveCombatDamage(lobby) {
                 fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
               }
             }
-            if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, toBlocker + toPlayer);
+            if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, atkPower);
           }
         }
-        const blkFS = hasKw(blocker, "first strike"), blkDS = hasKw(blocker, "double strike");
-        const blockerActs = isFirstStrikeStep ? (blkFS || blkDS) : (!blkFS || blkDS);
-        if (blockerActs && lobby.cards[blocker.id]) {
-          const { power: defPower } = effPT(blocker);
-          markDamage(attacker, defPower, hasKw(blocker, "deathtouch"));
-          if (defPower > 0 && hasKw(blocker, "lifelink")) applyLifeGain(lobby, blocker.owner, defPower);
-        }
-        if (attackerActs || blockerActs) {
-          const atkAfter = effPT(attacker), defAfter = effPT(blocker);
-          pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkAfter.power}/${atkAfter.toughness}) fights ${blocker.name || "a face-down creature"} (${defAfter.power}/${defAfter.toughness})`);
+        let anyBlockerActed = false;
+        blockers.forEach((blocker) => {
+          const blkFS = hasKw(blocker, "first strike"), blkDS = hasKw(blocker, "double strike");
+          const blockerActs = isFirstStrikeStep ? (blkFS || blkDS) : (!blkFS || blkDS);
+          if (blockerActs && lobby.cards[blocker.id]) {
+            anyBlockerActed = true;
+            const { power: defPower } = effPT(blocker);
+            markDamage(attacker, defPower, hasKw(blocker, "deathtouch"));
+            if (defPower > 0 && hasKw(blocker, "lifelink")) applyLifeGain(lobby, blocker.owner, defPower);
+          }
+        });
+        if (attackerActs || anyBlockerActed) {
+          const atkAfter = effPT(attacker);
+          const blockerDesc = blockers.map((b) => { const bpt = effPT(b); return `${b.name || "a face-down creature"} (${bpt.power}/${bpt.toughness})`; }).join(" and ");
+          pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkAfter.power}/${atkAfter.toughness}) fights ${blockerDesc}`);
         }
       } else if (attackerActs) {
         const { power: atkPower } = effPT(attacker);
@@ -3027,6 +3099,18 @@ io.on("connection", (socket) => {
     delete lobbies[id];
     saveLobbies();
     broadcastLobbyList();
+  });
+
+  // Host-only per-table rules toggle -- currently just enforceTargetingRestrictions, but keyed
+  // generically so more toggles (the eventual casual/tournament/custom ruleset picker) slot in
+  // here later without a new handler each time.
+  socket.on("setLobbySetting", ({ key, value } = {}) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    if (lobby.hostUsername !== username) { socket.emit("actionError", "Only the table's creator can change table rules."); return; }
+    if (!Object.prototype.hasOwnProperty.call(lobby.settings, key)) return;
+    lobby.settings[key] = !!value;
+    io.to(lobby.id).emit("lobbySettings", lobby.settings);
+    pushLog(lobby, `${username} set "${key}" to ${!!value}`);
   });
 
   socket.on("setName", (name) => {
@@ -4347,30 +4431,46 @@ io.on("connection", (socket) => {
     if (lobby.combat.step === "damage" && lobby.stack.length === 0 && lobby.pendingTargetChoices.length === 0) resolveCombatDamage(lobby);
   });
 
+  // lobby.combat.blocks[attackerId] is an ARRAY of blocker ids (possibly empty), not a single
+  // id|null -- real double-blocking (and Menace's requirement of it) needs more than one blocker
+  // per attacker to even be representable. `assignments` is {attackerId: [blockerId, ...]}; a
+  // bare string is still tolerated (wrapped into a 1-element array) so an older client payload
+  // shape doesn't hard-fail.
   socket.on("declareBlockers", (assignments) => {
     const lobby = currentLobby(); if (!lobby) return;
     if (lobby.stack.length > 0) return; // can't move combat forward with something pending
     if (lobby.combat.step !== "declareBlockers") return;
     if (!lobby.combat.defendersPending.includes(socket.id)) return;
-    const usedBlockers = new Set(Object.values(lobby.combat.blocks).filter(Boolean));
-    for (const [attackerId, blockerId] of Object.entries(assignments || {})) {
+    const usedBlockers = new Set();
+    Object.values(lobby.combat.blocks).forEach((arr) => (arr || []).forEach((id) => usedBlockers.add(id)));
+    for (const [attackerId, rawBlockerIds] of Object.entries(assignments || {})) {
       if (lobby.combat.attackers[attackerId] !== socket.id) continue;
-      if (blockerId) {
-        if (usedBlockers.has(blockerId)) continue;
+      const attackerCard = lobby.cards[attackerId];
+      const atkKw = attackerCard ? effectiveKeywords(lobby, attackerCard).map((k) => (k || "").toLowerCase()) : [];
+      const list = Array.isArray(rawBlockerIds) ? rawBlockerIds : (rawBlockerIds ? [rawBlockerIds] : []);
+      const validBlockers = [];
+      for (const blockerId of list) {
+        if (!blockerId || usedBlockers.has(blockerId) || validBlockers.includes(blockerId)) continue;
         const blockerCard = lobby.cards[blockerId];
         if (!blockerCard || blockerCard.owner !== socket.id || blockerCard.zoneType !== "creature" || blockerCard.tapped) continue;
         // CR 509.1b: a creature without flying or reach can't block a flying attacker. Checked via
         // effectiveKeywords (not the printed card.keywords) so a Reach/Flying grant from an aura,
         // equipment, or anthem correctly makes an otherwise-grounded creature a legal blocker too.
-        const attackerCard = lobby.cards[attackerId];
-        const atkKw = attackerCard ? effectiveKeywords(lobby, attackerCard).map((k) => (k || "").toLowerCase()) : [];
         const blkKw = effectiveKeywords(lobby, blockerCard).map((k) => (k || "").toLowerCase());
         if (atkKw.includes("flying") && !blkKw.includes("flying") && !blkKw.includes("reach")) continue;
-        lobby.combat.blocks[attackerId] = blockerId;
-        usedBlockers.add(blockerId);
-      } else {
-        lobby.combat.blocks[attackerId] = null;
+        // Protection's "can't be blocked by [quality]" facet -- the attacker has protection, so a
+        // blocker matching one of its protected qualities is illegal, symmetric to the targeting
+        // check in resolveChosenTarget (same toggle, same parsedProtectionQualities parsing).
+        if (attackerCard && sourceMatchesProtection(attackerCard, blockerCard)) continue;
+        validBlockers.push(blockerId);
       }
+      // CR 509.1c: Menace requires two or more blockers or none at all -- a single-blocker
+      // declaration against it is simply illegal. Rather than reject the whole action with an
+      // error round-trip, it silently drops to "no block", matching this handler's existing
+      // silent-skip-invalid-entries style for every other illegal case above.
+      const finalBlockers = (atkKw.includes("menace") && validBlockers.length === 1) ? [] : validBlockers;
+      finalBlockers.forEach((id) => usedBlockers.add(id));
+      lobby.combat.blocks[attackerId] = finalBlockers;
     }
     lobby.combat.defendersPending = lobby.combat.defendersPending.filter((id) => id !== socket.id);
     broadcastCombat(lobby);
