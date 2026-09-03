@@ -3960,11 +3960,18 @@
         const atkOwner = atk ? players[atk.owner] : null;
         const row = document.createElement("div");
         row.className = "zone-card-row";
-        const options = myCreatures.map((c) => `<option value="${c.id}">${escapeHtml(c.name || '')} (${effectivePT(c)})</option>`).join("");
+        // CR 509.1b: a creature without flying or reach can't legally block a flying attacker --
+        // filtered out here (not just rejected server-side) so the dropdown never offers an illegal
+        // choice in the first place, matching this app's rule of never letting a player pick
+        // something that will silently do nothing on Confirm.
+        const atkFlying = atk && effectiveKeywords(atk).some((k) => (k || "").toLowerCase() === "flying");
+        const legalBlockers = myCreatures.filter((c) => !atkFlying || effectiveKeywords(c).some((k) => (k || "").toLowerCase() === "flying" || (k || "").toLowerCase() === "reach"));
+        const options = legalBlockers.map((c) => `<option value="${c.id}">${escapeHtml(c.name || '')} (${effectivePT(c)})</option>`).join("");
         const visibleName = atk && !atk.faceDown ? escapeHtml(atk.name || '') : "Face-down attacker";
+        const flyingHint = atkFlying && legalBlockers.length < myCreatures.length ? ` <span style="color:#8a7a55;font-size:11px;">(flying -- only creatures with flying/reach can block)</span>` : "";
         row.innerHTML = `
           <img src="${escapeHtml(atk && !atk.faceDown ? atk.img : '')}" class="zone-card-thumb">
-          <div class="zone-card-name">${visibleName} (${atk ? effectivePT(atk) : "0/0"}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}</div>
+          <div class="zone-card-name">${visibleName} (${atk ? effectivePT(atk) : "0/0"}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}${flyingHint}</div>
           <select class="blk-select" data-attacker="${attackerId}"><option value="">No block</option>${options}</select>`;
         body.appendChild(row);
       });
