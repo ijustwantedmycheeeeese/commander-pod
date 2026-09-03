@@ -2480,6 +2480,8 @@ io.on("connection", (socket) => {
     pileMats: pileMats[username] || {},
     avatar: (users[username] && users[username].avatar) || null,
     defaultName: (users[username] && users[username].defaultName) || null,
+    defaultBoardMat: (users[username] && users[username].defaultBoardMat) || null,
+    defaultPileArt: (users[username] && users[username].defaultPileArt) || null,
     automatedCardNames: getAllAutomatedCardNames()
   });
 
@@ -2540,12 +2542,24 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // A fresh seat starts from this account's saved defaults (if any) rather than always blank --
+    // same "account-wide preference, applied per new table" shape defaultName already used, just
+    // for board mat / pile art instead of nickname.
+    const acctDefaults = users[username] || {};
+    const defaultBoardMat = acctDefaults.defaultBoardMat || null;
+    const defaultPileArt = acctDefaults.defaultPileArt || {};
     lobby.players[socket.id] = {
       username,
-      name: (users[username] && users[username].defaultName) || username,
+      name: acctDefaults.defaultName || username,
       color: nextColor(),
-      life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0, boardMat: null, boardMatFit: null,
-      pileArt: { library: null, graveyard: null, exile: null },
+      life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0,
+      boardMat: defaultBoardMat ? defaultBoardMat.url : null,
+      boardMatFit: defaultBoardMat ? sanitizeImgFit(defaultBoardMat) : null,
+      pileArt: {
+        library: defaultPileArt.library || null,
+        graveyard: defaultPileArt.graveyard || null,
+        exile: defaultPileArt.exile || null
+      },
       library: [], graveyard: [], exile: [],
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
@@ -2727,6 +2741,28 @@ io.on("connection", (socket) => {
     p.pileArt[zone] = clean ? { url: clean, ...sanitizeImgFit({ scale, x, y }) } : null;
     broadcastPlayers(lobby);
     if (oldEntry && oldEntry.url && oldEntry.url !== clean) deleteUploadIfOrphaned(oldEntry.url, username);
+  });
+
+  // Account-wide defaults, applied to a fresh seat at ANY future table (see joinLobbyInternal) --
+  // distinct from the existing named saved-mats/saved-pile-art libraries, which have to be picked
+  // and applied by hand each time. Not swept by deleteUploadIfOrphaned's reference check (that only
+  // looks at the named libraries) -- a known, small gap: an uploaded photo used ONLY as a default
+  // and later replaced won't get cleaned up automatically. Acceptable for a small trusted pod.
+  socket.on("setDefaultBoardMat", ({ url, scale, x, y } = {}) => {
+    if (!users[username]) return;
+    const clean = sanitizeImgUrl(url);
+    users[username].defaultBoardMat = clean ? { url: clean, ...sanitizeImgFit({ scale, x, y }) } : null;
+    saveUsers();
+    socket.emit("defaultArtUpdated", { boardMat: users[username].defaultBoardMat, pileArt: users[username].defaultPileArt || null });
+  });
+
+  socket.on("setDefaultPileArt", ({ zone, url, scale, x, y } = {}) => {
+    if (!users[username] || !["library", "graveyard", "exile"].includes(zone)) return;
+    if (!users[username].defaultPileArt) users[username].defaultPileArt = { library: null, graveyard: null, exile: null };
+    const clean = sanitizeImgUrl(url);
+    users[username].defaultPileArt[zone] = clean ? { url: clean, ...sanitizeImgFit({ scale, x, y }) } : null;
+    saveUsers();
+    socket.emit("defaultArtUpdated", { boardMat: users[username].defaultBoardMat || null, pileArt: users[username].defaultPileArt });
   });
 
   socket.on("statChange", ({ key, val }) => {

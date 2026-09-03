@@ -221,12 +221,13 @@
     #main-menu-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 32px; width: 440px; box-shadow: 0 0 40px rgba(212,175,55,0.08); text-align: center; }
     #main-menu-box h2 { margin-top: 0; }
     #main-menu-box > button, #main-menu-box .mm-section > button { width: 100%; margin-top: 10px; padding: 12px; font-size: 14px; }
-    #main-menu-box .mm-hint { font-size: 11px; color: #8a7a55; margin-top: 4px; margin-bottom: 4px; }
-    /* Each block of related controls (Play, Decks, Account) reads as its own bordered card
-       instead of blending into one continuous stack -- the whole menu used to be a single flat
-       column with no visual break between "join/host a game" and "build a deck." */
-    #main-menu-box .mm-section { text-align: left; margin: 18px 0; padding: 14px; background: #1c170f; border: 1px solid #2e2618; border-radius: 8px; }
-    #main-menu-box .mm-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8a7a55; margin-bottom: 10px; }
+    .mm-hint { font-size: 11px; color: #8a7a55; margin-top: 4px; margin-bottom: 4px; }
+    /* Each block of related controls reads as its own bordered card instead of blending into one
+       continuous stack -- shared by the Main Menu and the in-table ⚙ Menu, both of which used to
+       be one flat column with no visual break between unrelated groups of controls. */
+    .mm-section { text-align: left; margin: 14px 0; padding: 12px 14px; background: #1c170f; border: 1px solid #2e2618; border-radius: 8px; }
+    .mm-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8a7a55; margin-bottom: 10px; }
+    #main-menu-box .mm-section { margin: 18px 0; padding: 14px; }
     #main-menu-box .mm-account-row { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2e2618; }
     #lobby-list { max-height: 220px; overflow-y: auto; border: 1px solid #2e2618; border-radius: 6px; background: #100c08; }
     .lobby-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #1c170f; font-size: 13px; }
@@ -351,6 +352,8 @@
       <div class="flex-row">
         <strong class="mtg-title">Deck Editor</strong>
         <input type="text" id="de-name" placeholder="Deck name" style="width:260px;">
+        <select id="de-edit-existing-select" style="max-width:180px;"><option value="">Edit existing deck...</option></select>
+        <button class="mini-btn secondary" onclick="deEditSelectedDeck()" title="Load one of your saved decks into the editor">Edit</button>
       </div>
       <div class="flex-row">
         <button class="secondary" onclick="closeDeckEditor()">Close</button>
@@ -406,6 +409,7 @@
           <span style="font-size:12px;color:#a89a70;">Zoom</span>
           <input type="range" id="zoom-slider" min="25" max="200" value="100" oninput="setZoom(this.value)">
           <button class="mini-btn secondary" onclick="fitZoomToScreen()" title="Zoom to fit the whole board in view">Fit</button>
+          <button class="mini-btn secondary" id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen">⛶</button>
         </div>
         <button id="settings-menu-btn" onclick="openSettingsModal()" class="secondary">⚙ Menu</button>
       </div>
@@ -671,83 +675,98 @@
     </div>
 
     <div class="modal-overlay" id="settings-modal">
-      <div class="modal-box" style="max-width:420px;">
+      <div class="modal-box" style="max-width:420px;max-height:85vh;overflow-y:auto;">
         <button class="modal-close-x" onclick="closeSettingsModal()" title="Close">✕</button>
         <h2>Menu</h2>
 
-        <div class="mm-label">Game</div>
-        <div class="flex-row" style="margin-bottom:6px;flex-wrap:wrap;">
-          <select id="diceType"><option value="20">D20</option><option value="6">D6</option><option value="2">Coin Flip</option></select>
-          <button onclick="rollDice()" style="background:linear-gradient(180deg,#5b3a8a,#3a2560);">Roll</button>
-          <button id="untap-all-btn" onclick="untapAll()" class="secondary">Untap All</button>
-          <button id="new-game-btn" onclick="triggerClear()" class="danger">New Game</button>
+        <div class="mm-section">
+          <div class="mm-label">Game</div>
+          <div class="flex-row" style="flex-wrap:wrap;">
+            <select id="diceType"><option value="20">D20</option><option value="6">D6</option><option value="2">Coin Flip</option></select>
+            <button onclick="rollDice()" style="background:linear-gradient(180deg,#5b3a8a,#3a2560);">Roll</button>
+            <button id="untap-all-btn" onclick="untapAll()" class="secondary">Untap All</button>
+            <button id="new-game-btn" onclick="triggerClear()" class="danger">New Game</button>
+          </div>
         </div>
 
-        <div class="mm-label">Voice Chat <span style="font-weight:400;text-transform:none;font-size:10px;color:#e0a030;">(experimental)</span></div>
-        <div class="flex-row" style="margin-bottom:4px;">
-          <button class="mini-btn" id="voice-join-btn" onclick="joinVoice()">Join Voice</button>
-          <button class="mini-btn" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
-        </div>
-        <div id="voice-roster" style="font-size:11px;color:#a89a70;margin-bottom:6px;">No one in voice.</div>
-
-        <div class="mm-label">Profile</div>
-        <input type="text" id="playerName" placeholder="Set Nickname (this table only)..." onchange="updateName()" style="width:100%;margin-bottom:6px;">
-        <button class="secondary" onclick="openAccountModal()" style="margin-bottom:6px;">Account Settings</button>
-
-        <div class="mm-label">Board Mat</div>
-        <input type="text" id="board-mat-url" placeholder="Image URL for your board background..." style="width:100%;margin-bottom:6px;">
-        <input type="file" id="board-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'board-mat-url')">
-        <div class="flex-row" style="margin-bottom:6px;">
-          <button class="mini-btn" onclick="setBoardMat()">Set</button>
-          <button class="mini-btn secondary" onclick="clearBoardMat()">Clear</button>
-          <button class="mini-btn secondary" onclick="document.getElementById('board-mat-file').click()">Upload...</button>
-          <button class="mini-btn secondary" onclick="openCropEditor('boardMat')" title="Crop, zoom, and pan the board mat image">Crop...</button>
-        </div>
-        <div class="flex-row" style="margin-bottom:6px;">
-          <select id="saved-mat-select"><option value="">-- saved mats --</option></select>
-          <button class="mini-btn secondary" onclick="applySavedMat()">Apply</button>
+        <div class="mm-section">
+          <div class="mm-label">Voice Chat <span style="font-weight:400;text-transform:none;font-size:10px;color:#e0a030;">(experimental)</span></div>
+          <div class="flex-row" style="margin-bottom:4px;">
+            <button class="mini-btn" id="voice-join-btn" onclick="joinVoice()">Join Voice</button>
+            <button class="mini-btn" id="voice-leave-btn" onclick="leaveVoice()" style="display:none;">Leave Voice</button>
+          </div>
+          <div id="voice-roster" style="font-size:11px;color:#a89a70;">No one in voice.</div>
         </div>
 
-        <div class="mm-label">Pile Art</div>
-        <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Set a custom photo behind each pile's icon, with its own crop and zoom.</div>
-        <div class="flex-row" style="margin-bottom:6px;">
-          <button class="mini-btn secondary" onclick="openCropEditor('pile', 'library')">Library</button>
-          <button class="mini-btn secondary" onclick="openCropEditor('pile', 'graveyard')">Graveyard</button>
-          <button class="mini-btn secondary" onclick="openCropEditor('pile', 'exile')">Exile</button>
-        </div>
-        <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;margin-bottom:6px;font-size:12px;">
-          <span title="How solid the creature/artifact/mana/hand zone fills look -- turn this up if a busy board mat makes them hard to see (piles aren't affected)">Zone Opacity</span>
-          <input type="range" id="zone-opacity-slider" min="0" max="100" value="8" oninput="setZoneOpacity(this.value)">
-          <span id="zone-opacity-label" style="width:32px;text-align:right;color:#a89a70;">100%</span>
+        <div class="mm-section">
+          <div class="mm-label">Profile</div>
+          <input type="text" id="playerName" placeholder="Set Nickname (this table only)..." onchange="updateName()" style="width:100%;margin-bottom:6px;">
+          <button class="secondary" onclick="openAccountModal()">Account Settings</button>
         </div>
 
-        <div class="mm-label">Audio</div>
-        <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;margin-bottom:6px;font-size:12px;">
-          <span title="Lobby music -- only audible on the Main Menu">🎵 Music</span>
-          <input type="range" id="settings-music-volume-slider" min="0" max="100" value="50" oninput="setMusicVolume(this.value)">
-          <span id="settings-music-volume-label" style="width:28px;text-align:right;color:#a89a70;">50%</span>
+        <div class="mm-section">
+          <div class="mm-label">Appearance</div>
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Board Mat</div>
+          <input type="text" id="board-mat-url" placeholder="Image URL for your board background..." style="width:100%;margin-bottom:6px;">
+          <input type="file" id="board-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'board-mat-url')">
+          <div class="flex-row" style="margin-bottom:6px;">
+            <button class="mini-btn" onclick="setBoardMat()">Set</button>
+            <button class="mini-btn secondary" onclick="clearBoardMat()">Clear</button>
+            <button class="mini-btn secondary" onclick="document.getElementById('board-mat-file').click()">Upload...</button>
+            <button class="mini-btn secondary" onclick="openCropEditor('boardMat')" title="Crop, zoom, and pan the board mat image -- also where you can set it as your default for new tables">Crop...</button>
+          </div>
+          <div class="flex-row" style="margin-bottom:12px;">
+            <select id="saved-mat-select"><option value="">-- saved mats --</option></select>
+            <button class="mini-btn secondary" onclick="applySavedMat()">Apply</button>
+          </div>
 
-          <span title="Plays when it becomes your turn">🔔 Your Turn</span>
-          <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('turn', this.value)">
-          <span id="sfx-volume-turn-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Pile Art</div>
+          <div class="mm-hint" style="margin-top:0;margin-bottom:6px;">Set a custom photo behind each pile's icon, with its own crop and zoom.</div>
+          <div class="flex-row" style="margin-bottom:12px;">
+            <button class="mini-btn secondary" onclick="openCropEditor('pile', 'library')">Library</button>
+            <button class="mini-btn secondary" onclick="openCropEditor('pile', 'graveyard')">Graveyard</button>
+            <button class="mini-btn secondary" onclick="openCropEditor('pile', 'exile')">Exile</button>
+          </div>
+          <div class="mm-hint" style="margin-top:-8px;">Board mat and pile art each have a "★ Set as My Default" button in their Crop editor, so they auto-apply the next time you join a table.</div>
 
-          <span title="Plays when you take combat damage">⚔ Combat Damage</span>
-          <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('damage', this.value)">
-          <span id="sfx-volume-damage-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
-
-          <span title="Plays when a triggered ability needs you to choose a target">🎯 Target Needed</span>
-          <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('target', this.value)">
-          <span id="sfx-volume-target-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
+          <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-size:12px;">
+            <span title="How solid the creature/artifact/mana/hand zone fills look -- turn this up if a busy board mat makes them hard to see (piles aren't affected)">Zone Opacity</span>
+            <input type="range" id="zone-opacity-slider" min="0" max="100" value="8" oninput="setZoneOpacity(this.value)">
+            <span id="zone-opacity-label" style="width:32px;text-align:right;color:#a89a70;">100%</span>
+          </div>
         </div>
 
-        <div class="mm-label">Table</div>
-        <div class="flex-row" style="flex-wrap:wrap;">
-          <button class="secondary" onclick="openDeckEditor()">Deck Editor</button>
-          <button class="secondary" onclick="openHelpModal()">? Help</button>
-          <button class="secondary" onclick="openBugReportModal()" title="Copy diagnostic info to report a bug">🐛 Bug Report</button>
-          <button class="danger" onclick="concede()" title="Marks you eliminated -- your board stays on the table, you can keep watching, and the game continues for everyone else">Concede</button>
-          <button class="secondary" onclick="showMainMenu()">Leave Table</button>
-          <button class="secondary" onclick="logout()">Log Out</button>
+        <div class="mm-section">
+          <div class="mm-label">Audio</div>
+          <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-size:12px;">
+            <span title="Lobby music -- only audible on the Main Menu">🎵 Music</span>
+            <input type="range" id="settings-music-volume-slider" min="0" max="100" value="50" oninput="setMusicVolume(this.value)">
+            <span id="settings-music-volume-label" style="width:28px;text-align:right;color:#a89a70;">50%</span>
+
+            <span title="Plays when it becomes your turn">🔔 Your Turn</span>
+            <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('turn', this.value)">
+            <span id="sfx-volume-turn-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
+
+            <span title="Plays when you take combat damage">⚔ Combat Damage</span>
+            <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('damage', this.value)">
+            <span id="sfx-volume-damage-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
+
+            <span title="Plays when a triggered ability needs you to choose a target">🎯 Target Needed</span>
+            <input type="range" min="0" max="100" value="70" oninput="setSfxVolume('target', this.value)">
+            <span id="sfx-volume-target-label" style="width:28px;text-align:right;color:#a89a70;">70%</span>
+          </div>
+        </div>
+
+        <div class="mm-section">
+          <div class="mm-label">Table</div>
+          <div class="flex-row" style="flex-wrap:wrap;">
+            <button class="secondary" onclick="openDeckEditor()">Deck Editor</button>
+            <button class="secondary" onclick="openHelpModal()">? Help</button>
+            <button class="secondary" onclick="openBugReportModal()" title="Copy diagnostic info to report a bug">🐛 Bug Report</button>
+            <button class="danger" onclick="concede()" title="Marks you eliminated -- your board stays on the table, you can keep watching, and the game continues for everyone else">Concede</button>
+            <button class="secondary" onclick="showMainMenu()">Leave Table</button>
+            <button class="secondary" onclick="logout()">Log Out</button>
+          </div>
         </div>
       </div>
     </div>
@@ -898,9 +917,14 @@
         <button class="mini-btn secondary" onclick="cropLoadPreset()">Load</button>
         <button class="mini-btn secondary" onclick="cropSaveAsPreset()">Save As...</button>
       </div>
+      <div class="flex-row" style="margin-top:10px;">
+        <button class="mini-btn secondary" onclick="setCropAsDefault()" title="Auto-applies this photo and framing to every new table you join">★ Set as My Default</button>
+        <button class="mini-btn secondary" onclick="clearCropDefault()">Clear My Default</button>
+      </div>
+      <div id="crop-default-status" style="font-size:11px;color:#8a7a55;margin-top:4px;"></div>
       <div class="flex-row" style="margin-top:12px;">
         <button onclick="saveCropEditor()">Apply</button>
-        <button class="secondary" onclick="clearCropTarget()">Clear (use default)</button>
+        <button class="secondary" onclick="clearCropTarget()" title="Removes the photo entirely, reverting to the app's plain built-in look">Remove Photo</button>
       </div>
     </div>
   </div>
@@ -1223,6 +1247,8 @@
     let myAccountDefaultName = null;
     let mySavedMats = {}; // name -> url, account-wide (distinct from the per-table active boardMat)
     let mySavedPileMats = {}; // name -> {url,scale,x,y}, account-wide (distinct from the per-table active pileArt)
+    let myDefaultBoardMat = null; // {url,scale,x,y}|null -- auto-applied to every NEW table, distinct from mySavedMats (a named library you apply by hand)
+    let myDefaultPileArt = { library: null, graveyard: null, exile: null }; // same idea, one slot per zone
     let automatedCardNames = new Set(); // lowercase card names with some automation, sent once at auth time -- see deckAutomationCoverage
 
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
@@ -1237,6 +1263,8 @@
       if (usernameHidden) usernameHidden.value = data.username;
       myAccountAvatar = data.avatar || null;
       myAccountDefaultName = data.defaultName || null;
+      myDefaultBoardMat = data.defaultBoardMat || null;
+      myDefaultPileArt = data.defaultPileArt || { library: null, graveyard: null, exile: null };
       mySavedMats = data.mats || {};
       mySavedPileMats = data.pileMats || {};
       automatedCardNames = new Set(data.automatedCardNames || []);
@@ -1312,6 +1340,12 @@
         pendingTargetChoiceId = null;
         document.getElementById("target-choice-banner").style.display = "none";
       }
+
+      // Auto-fit the whole board into view on load, instead of always starting at a fixed 100%
+      // zoom that may not match this table's actual card count or the viewer's window size. A
+      // brief timeout, not immediate -- the playmat's real on-screen width/height (which
+      // fitZoomToScreen reads) isn't settled until the layout above has actually painted.
+      setTimeout(fitZoomToScreen, 50);
     });
 
     socket.on("players", (data) => {
@@ -1457,6 +1491,12 @@
       status.innerText = res.success
         ? `Loaded ${res.found}/${res.requested} cards into your library (shuffled).`
         : "Error: " + res.error;
+    });
+
+    socket.on("defaultArtUpdated", (d) => {
+      myDefaultBoardMat = d.boardMat || null;
+      myDefaultPileArt = d.pileArt || { library: null, graveyard: null, exile: null };
+      if (document.getElementById("crop-modal").style.display === "flex") renderCropDefaultStatus();
     });
 
     socket.on("deckSaved", () => { document.getElementById("deck-status").innerText = "Deck saved!"; });
@@ -1646,6 +1686,7 @@
     function renderDeckList(names) {
       myDeckNames = names || [];
       renderLoadDeckSelect();
+      deRenderEditExistingSelect();
       const el = document.getElementById("deck-list");
       el.innerHTML = "";
       if (!names || names.length === 0) {
@@ -1924,6 +1965,7 @@
       cropLastSrc = current ? current.url : "";
       document.getElementById("crop-preset-row").style.display = kind === "pile" ? "flex" : "none";
       if (kind === "pile") renderCropPresetSelect();
+      renderCropDefaultStatus();
       cropUpdatePreview();
       document.getElementById("crop-modal").style.display = "flex";
     }
@@ -2166,6 +2208,30 @@
       socket.emit("savePileMat", { name: name.trim(), url, scale, x: isNaN(xRaw) ? 50 : xRaw, y: isNaN(yRaw) ? 50 : yRaw });
     }
 
+    // ---------------- default board mat / pile art (account-wide, auto-applied to new tables) ----------------
+    function setCropAsDefault() {
+      if (!cropTarget) return;
+      const url = document.getElementById("crop-source-url").value.trim();
+      if (!url) { alert("Add an image URL or upload a photo first."); return; }
+      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || 100) / 100;
+      const xRaw = parseInt(document.getElementById("crop-x").value, 10);
+      const yRaw = parseInt(document.getElementById("crop-y").value, 10);
+      const payload = { url, scale, x: isNaN(xRaw) ? 50 : xRaw, y: isNaN(yRaw) ? 50 : yRaw };
+      if (cropTarget.kind === "boardMat") socket.emit("setDefaultBoardMat", payload);
+      else socket.emit("setDefaultPileArt", { zone: cropTarget.zone, ...payload });
+    }
+    function clearCropDefault() {
+      if (!cropTarget) return;
+      if (cropTarget.kind === "boardMat") socket.emit("setDefaultBoardMat", { url: "" });
+      else socket.emit("setDefaultPileArt", { zone: cropTarget.zone, url: "" });
+    }
+    function renderCropDefaultStatus() {
+      const el = document.getElementById("crop-default-status");
+      if (!el || !cropTarget) return;
+      const current = cropTarget.kind === "boardMat" ? myDefaultBoardMat : (myDefaultPileArt || {})[cropTarget.zone];
+      el.innerText = current ? "✓ This is your default for new tables." : "No default set for new tables yet.";
+    }
+
     // Shared by the Board Mat and Avatar "Upload..." buttons -- an alternative to pasting a URL,
     // not a replacement: this just fills the same text field the URL flow already writes to, so
     // nothing downstream (setBoardMat/saveAccountProfile, renderVisibleBoard's background handling,
@@ -2271,6 +2337,17 @@
       document.getElementById("zoom-slider").value = pct;
       setZoom(pct);
     }
+    function toggleFullscreen() {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen().catch(() => {});
+    }
+    document.addEventListener("fullscreenchange", () => {
+      const btn = document.getElementById("fullscreen-btn");
+      if (!btn) return;
+      const isFull = !!document.fullscreenElement;
+      btn.innerText = isFull ? "⛶ Exit" : "⛶";
+      btn.title = isFull ? "Exit fullscreen" : "Enter fullscreen";
+    });
     function addMana(c) { socket.emit("addMana", c); }
     function removeMana(c) { socket.emit("removeMana", c); }
 
@@ -2858,6 +2935,19 @@
     }
 
     function editDeck(name) { socket.emit("getDeckData", name); }
+    // Reachable from inside the Deck Editor itself (not just the Main Menu's My Decks list), so
+    // switching to editing a different saved deck works the same whether the editor was opened
+    // from the Main Menu or from a live table's ⚙ Menu -- the latter has no deck list of its own.
+    function deRenderEditExistingSelect() {
+      const sel = document.getElementById("de-edit-existing-select");
+      if (!sel) return;
+      sel.innerHTML = '<option value="">Edit existing deck...</option>' + myDeckNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+    }
+    function deEditSelectedDeck() {
+      const name = document.getElementById("de-edit-existing-select").value;
+      if (!name) return;
+      editDeck(name);
+    }
 
     function deRenderCommanders() {
       updateDeckAutomationCoverage();
