@@ -334,7 +334,13 @@ const CARD_ABILITIES = {
   ],
   "reya dawnbringer": [{ trigger: "upkeep", label: "Reya Dawnbringer — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
-  "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }]
+  "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }],
+  // Kardur's "attack each combat if able and attack a player other than you if able" half is
+  // enforced as a declareAttackers validation (see lobby.kardurForcedAttackControllers), not a
+  // fireTrigger effect -- this ETB entry only starts that duration. The death half fires from
+  // fireKardurDoomscourgeDeathTrigger, since it needs to scan for ANY attacking creature dying
+  // table-wide, not just this card's own trigger/target machinery.
+  "kardur, doomscourge": [{ trigger: "etb", label: "Kardur, Doomscourge — opponents' creatures attack each combat, if able, until your next turn", requiresTarget: false, effects: [{ type: "startKardurForcedAttack" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -741,6 +747,13 @@ const EFFECTS = {
   },
   gainLife(lobby, ctx, params) {
     effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => applyLifeGain(lobby, id, params.amount || 0));
+  },
+  // Kardur, Doomscourge -- starts the "until your next turn" forced-attack duration for this
+  // permanent's controller. The actual enforcement lives in declareAttackers (see
+  // lobby.kardurForcedAttackControllers); this just begins the window.
+  startKardurForcedAttack(lobby, ctx) {
+    if (!lobby.kardurForcedAttackControllers) lobby.kardurForcedAttackControllers = [];
+    if (!lobby.kardurForcedAttackControllers.includes(ctx.controllerId)) lobby.kardurForcedAttackControllers.push(ctx.controllerId);
   },
   loseLife(lobby, ctx, params) {
     effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
@@ -1425,7 +1438,10 @@ function createLobbyState(id, name, hostUsername, password) {
     pendingOptionalPayments: [],
     // "At the beginning of the next end step" (or any other named phase) one-shot triggers -- see
     // queueDelayedTrigger.
-    delayedTriggers: []
+    delayedTriggers: [],
+    // Kardur, Doomscourge -- playerIds of controllers whose Kardur is currently forcing opponents
+    // to attack "until your next turn." Cleared for a controller when their own next turn begins.
+    kardurForcedAttackControllers: []
   };
 }
 function lobbySummaries() {
@@ -1477,6 +1493,7 @@ function restoreLobbies() {
     if (!l.pendingTargetChoices) l.pendingTargetChoices = [];
     if (!l.pendingOptionalPayments) l.pendingOptionalPayments = [];
     if (!l.delayedTriggers) l.delayedTriggers = [];
+    if (!l.kardurForcedAttackControllers) l.kardurForcedAttackControllers = [];
     if (!l.settings) l.settings = { enforceTargetingRestrictions: true };
     if (l.creaturesCantAttack === undefined) l.creaturesCantAttack = false;
     // Nobody is actually connected right after a restart — mark every seated player as
@@ -2839,6 +2856,28 @@ function fireDeathTriggers(lobby, card) {
   getAutomatedAbilities(card.name, "death").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalTrigger(lobby, "deathYouControl", card.owner);
   fireLiesaReturnToHandTrigger(lobby, card);
+  fireKardurDoomscourgeDeathTrigger(lobby, card);
+}
+// Kardur, Doomscourge -- "whenever an attacking creature dies, each opponent loses 1 life and you
+// gain 1 life." Unlike deathYouControl (Zulaport Cutthroat, Venerated Stormsinger), this cares
+// about ANY attacking creature dying table-wide, not just ones its own controller controls --
+// Kardur is usually watching an OPPONENT's forced attacker die, per its own other half -- so this
+// scans every Kardur on the battlefield directly instead of routing through fireGlobalTrigger's
+// "one player's own permanents" model. Must run before the card leaves lobby.combat.attackers,
+// same "called before removal" contract as the rest of fireDeathTriggers.
+function fireKardurDoomscourgeDeathTrigger(lobby, dyingCard) {
+  if (dyingCard.zoneType !== "creature") return;
+  if (!lobby.combat || lobby.combat.attackers[dyingCard.id] === undefined) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType !== "creature") continue;
+    if (archiveKey(c.name) !== "kardur, doomscourge") continue;
+    pushAbilityToStack(lobby, {
+      sourceCard: c, controllerId: c.owner,
+      label: `${dyingCard.name || "An attacking creature"} died — each opponent loses 1 life, you gain 1 life (Kardur, Doomscourge)`,
+      effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }, { type: "gainLife", target: "controller", amount: 1 }]
+    });
+  }
 }
 // Liesa, Forgotten Archangel -- "Whenever another nontoken creature you control dies, return that
 // card to its owner's hand at the beginning of the next end step." Aristocrats-style (scans the
@@ -3213,6 +3252,12 @@ function advanceOnePhase(lobby) {
     turn.turnNumber++;
     turn.extraCombatsPending = 0;
     cleanupTemporaryKeywords(lobby);
+    // Kardur, Doomscourge -- "until your next turn" ends exactly when the new active player IS
+    // that Kardur's own controller (their next turn has now begun).
+    const newActiveId = turn.order[turn.activeIndex];
+    if (lobby.kardurForcedAttackControllers && lobby.kardurForcedAttackControllers.includes(newActiveId)) {
+      lobby.kardurForcedAttackControllers = lobby.kardurForcedAttackControllers.filter((id) => id !== newActiveId);
+    }
   }
   turn.phase = PHASES[idx];
   turn.phaseStartedAt = Date.now(); // purely informational -- drives a passive client-side "how long has this phase been going" indicator, never used to auto-act for anyone
@@ -5271,6 +5316,36 @@ io.on("connection", (socket) => {
     if (lobby.creaturesCantAttack && Object.keys(assignments || {}).length > 0) {
       socket.emit("actionError", "Creatures can't attack this turn.");
       return;
+    }
+    // Kardur, Doomscourge -- "until your next turn, creatures your opponents control attack each
+    // combat if able and attack a player other than you if able." Enforced the same way every
+    // other restriction in this engine is: reject the WHOLE declaration (nothing tapped yet) if it
+    // violates the rule, rather than silently forcing an attack choice for the player -- they still
+    // choose WHO to attack, they just can't decline to attack at all, or aim at Kardur's own
+    // controller when a different defender is available.
+    const activeKardurControllers = (lobby.kardurForcedAttackControllers || []).filter((id) => id !== socket.id && lobby.players[id]);
+    if (activeKardurControllers.length) {
+      const eligibleIds = Object.values(lobby.cards).filter((c) => {
+        if (c.owner !== socket.id || c.zoneType !== "creature" || c.tapped) return false;
+        const hasHaste = effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "haste");
+        return !(c.controllerSince === lobby.turn.turnNumber && !hasHaste);
+      }).map((c) => c.id);
+      const submittedIds = Object.keys(assignments || {});
+      const missing = eligibleIds.filter((id) => !submittedIds.includes(id));
+      if (missing.length) {
+        const names = missing.map((id) => (lobby.cards[id] && lobby.cards[id].name) || "A creature").join(", ");
+        socket.emit("actionError", `${names} must attack this combat (Kardur, Doomscourge).`);
+        return;
+      }
+      for (const kardurControllerId of activeKardurControllers) {
+        const otherDefenders = Object.keys(lobby.players).filter((pid) => pid !== socket.id && pid !== kardurControllerId);
+        if (otherDefenders.length === 0) continue; // no OTHER legal defender exists -- attacking Kardur's controller is fine
+        const attacksKardurController = Object.values(assignments || {}).includes(kardurControllerId);
+        if (attacksKardurController) {
+          socket.emit("actionError", `Your creatures must attack a player other than ${(lobby.players[kardurControllerId] || {}).name || "Kardur's controller"} this combat, if able (Kardur, Doomscourge).`);
+          return;
+        }
+      }
     }
     // First pass: which submitted assignments are even legal attackers at all (unchanged checks),
     // without mutating/tapping anything yet -- the attack-tax total right after needs the FULL
