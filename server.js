@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const multer = require("multer");
+const { execFile } = require("child_process");
 const app = express();
 const http = require("http").createServer(app);
 const io = require("socket.io")(http);
@@ -3593,56 +3594,97 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Moxfield sits behind Cloudflare bot-detection that specifically fingerprints (almost
+  // certainly via TLS/JA3, not headers -- an identical request with an identical User-Agent
+  // succeeds from curl and gets a Cloudflare "Attention Required" 403 from Node's own fetch)
+  // Node's own HTTP client and blocks it outright, confirmed via direct testing. Shelling out to
+  // the system's real `curl` binary (installed in the Docker image specifically for this) routes
+  // around that fingerprint since it presents curl's own TLS handshake instead of Node's. `url` is
+  // untrusted (comes straight from the player's paste), so it's passed as its own execFile argument
+  // -- never interpolated into a shell string -- to rule out command injection.
+  function curlJson(url, headers) {
+    return new Promise((resolve, reject) => {
+      const args = ["-s", "-L", "--max-time", "10"];
+      for (const k in headers) args.push("-H", `${k}: ${headers[k]}`);
+      args.push(url);
+      execFile("curl", args, { maxBuffer: 20 * 1024 * 1024 }, (err, stdout) => {
+        if (err) { reject(err); return; }
+        try { resolve(JSON.parse(stdout)); } catch (e) { reject(e); }
+      });
+    });
+  }
+
   // Best-effort import from a Moxfield or Archidekt deck URL. Both are unofficial, undocumented
-  // endpoints that could change or break without notice -- Archidekt's has been confirmed reachable
-  // from a plain server-side fetch, but Moxfield's sits behind bot-detection that blocks non-browser
-  // clients regardless of headers (confirmed via direct testing: identical requests succeed from curl
-  // but are rejected for a Node fetch), so it will often fall through to the error message below.
-  // Feeds the resulting card names into the exact same pipeline as resolveDeckPaste above, and reuses
-  // its result event so the client needs no new handler.
+  // endpoints that could change or break without notice. Feeds the resulting card names into the
+  // exact same pipeline as resolveDeckPaste above, and reuses its result event so the client needs
+  // no new handler -- with one addition, `commanders`, since (unlike a plain paste, which has no
+  // structured commander info at all) both sites DO tell us exactly which card(s) are the
+  // commander, and the client uses that to auto-fill the Commander slots instead of dumping them
+  // into the library like every other found card.
   socket.on("importDeckFromUrl", async (rawUrl) => {
     const fallbackMsg = "Couldn't import from that URL — try pasting the decklist directly instead.";
     try {
       const url = new URL((rawUrl || "").trim());
       const host = url.hostname.replace(/^www\./, "").toLowerCase();
-      const wanted = [];
+      const commanderNames = [], libraryNames = [];
       if (host === "archidekt.com") {
         const m = url.pathname.match(/\/decks\/(\d+)/);
         if (!m) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
         const r = await fetch(`https://archidekt.com/api/decks/${m[1]}/`, { headers: { "User-Agent": "Archon/1.0" } });
         if (!r.ok) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
         const data = await r.json();
+        // Archidekt lets a deck define its own categories (Sideboard, Maybeboard, custom labels
+        // like "Ramp"/"Removal", ...), each independently flagged includedInDeck true/false --
+        // that flag, not the category NAME, is the real signal for "is this actually part of the
+        // deck." A card tagged into ANY excluded category (Maybeboard being the common one) is
+        // left out entirely, even if it's also tagged into an included category. Previously this
+        // pulled every single card regardless of category, which silently mixed maybeboard/cut
+        // cards into the import.
+        const excludedCategories = new Set((data.categories || []).filter((c) => c.includedInDeck === false).map((c) => c.name));
         (data.cards || []).forEach((entry) => {
+          const cats = entry.categories || [];
+          if (cats.some((c) => excludedCategories.has(c))) return;
           const name = entry.card && entry.card.oracleCard && entry.card.oracleCard.name;
+          if (!name) return;
           const qty = entry.quantity || 1;
-          if (name) for (let i = 0; i < qty; i++) wanted.push(name);
+          const bucket = cats.includes("Commander") ? commanderNames : libraryNames;
+          for (let i = 0; i < qty; i++) bucket.push(name);
         });
       } else if (host === "moxfield.com") {
         const m = url.pathname.match(/\/decks\/([A-Za-z0-9_-]+)/);
         if (!m) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
-        const r = await fetch(`https://api2.moxfield.com/v3/decks/all/${m[1]}`, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", "Accept": "application/json" }
-        });
-        if (!r.ok) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
-        const data = await r.json();
+        let data;
+        try {
+          data = await curlJson(`https://api2.moxfield.com/v3/decks/all/${m[1]}`, {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            "Accept": "application/json"
+          });
+        } catch (e) {
+          socket.emit("deckPasteResult", { success: false, error: fallbackMsg });
+          return;
+        }
         const boards = data.boards || {};
-        for (const boardName of ["mainboard", "commanders"]) {
+        for (const boardName of ["commanders", "mainboard"]) {
           const cards = (boards[boardName] && boards[boardName].cards) || {};
+          const bucket = boardName === "commanders" ? commanderNames : libraryNames;
           for (const key in cards) {
             const entry = cards[key];
             const name = entry.card && entry.card.name;
             const qty = entry.quantity || 1;
-            if (name) for (let i = 0; i < qty; i++) wanted.push(name);
+            if (name) for (let i = 0; i < qty; i++) bucket.push(name);
           }
         }
       } else {
         socket.emit("deckPasteResult", { success: false, error: "Only Moxfield and Archidekt deck URLs are supported — try pasting the decklist directly instead." });
         return;
       }
-      if (wanted.length === 0) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
-      if (wanted.length > 99) wanted.length = 99;
-      const found = await resolveCardNames(wanted);
-      socket.emit("deckPasteResult", { success: true, requested: wanted.length, found });
+      if (commanderNames.length === 0 && libraryNames.length === 0) { socket.emit("deckPasteResult", { success: false, error: fallbackMsg }); return; }
+      // The 99-card cap only ever applies to the library -- commanders live in their own slots on
+      // the client and were never counted against it anywhere else in this app either.
+      const trueTotal = libraryNames.length;
+      if (libraryNames.length > 99) libraryNames.length = 99;
+      const [commanders, found] = await Promise.all([resolveCardNames(commanderNames.slice(0, 2)), resolveCardNames(libraryNames)]);
+      socket.emit("deckPasteResult", { success: true, requested: libraryNames.length, found, commanders, truncatedFrom: trueTotal > 99 ? trueTotal : null });
     } catch (e) {
       socket.emit("deckPasteResult", { success: false, error: fallbackMsg });
     }
