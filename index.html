@@ -1295,6 +1295,7 @@
     let pendingTargetChoiceModes = null; // [label, label, ...] when kind is "mode" (a modal spell)
     let pendingTargetChoiceHandFilter = null; // [type, type, ...] when kind is "handCard" (Kaalia's ability)
     let pendingTargetChoiceSource = null; // {colors, type} of the spell/ability doing the targeting -- for client-side Protection pre-filtering
+    let pendingTargetChoiceMinCmc = null; // minimum mana value required (Despark-style) when kind is "permanent"
 
     let myAccountAvatar = null;
     let myAccountDefaultName = null;
@@ -1394,6 +1395,7 @@
         pendingTargetChoiceModes = data.pendingTargetChoice.modes || null;
         pendingTargetChoiceHandFilter = data.pendingTargetChoice.handTypeFilter || null;
         pendingTargetChoiceSource = { colors: data.pendingTargetChoice.sourceColors || [], type: data.pendingTargetChoice.sourceType || "" };
+        pendingTargetChoiceMinCmc = data.pendingTargetChoice.minCmc || null;
         showTargetChoiceBanner();
       } else {
         pendingTargetChoiceId = null;
@@ -1479,6 +1481,7 @@
       pendingTargetChoiceModes = data.modes || null;
       pendingTargetChoiceHandFilter = data.handTypeFilter || null;
       pendingTargetChoiceSource = { colors: data.sourceColors || [], type: data.sourceType || "" };
+      pendingTargetChoiceMinCmc = data.minCmc || null;
       showTargetChoiceBanner();
       playTargetNeededCue();
       // Which cards/stack items/players light up as legal-looking targets depends on the kind that
@@ -1501,6 +1504,7 @@
       if (kind === "player") return "Click a player to target them.";
       if (kind === "spell") return "Click a spell or ability on the Stack to target it.";
       if (kind === "any") return "Click a creature, player, or spell/ability on the Stack to target it.";
+      if (kind === "permanent") return `Click a creature, artifact, enchantment, or planeswalker${pendingTargetChoiceMinCmc ? ` with mana value ${pendingTargetChoiceMinCmc}+` : ""} to target it.`;
       if (kind === "mode") return "Choose one:";
       if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
@@ -1518,6 +1522,11 @@
       // principle as the blocker checklist). myId is who's doing the targeting.
       if (targetIsUntargetableBy(card, myId, pendingTargetChoiceSource)) return false;
       if (kind === "any") return card.zoneType === "creature" || (card.type || "").toLowerCase().includes("planeswalker");
+      if (kind === "permanent") {
+        if (!(card.zoneType === "creature" || card.zoneType === "artifact")) return false;
+        if (pendingTargetChoiceMinCmc && (card.cmc || 0) < pendingTargetChoiceMinCmc) return false;
+        return true;
+      }
       return card.zoneType === kind;
     }
     function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }
