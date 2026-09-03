@@ -872,6 +872,12 @@ const EFFECTS = {
     const card = lobby.cards[params.chosenTargetId];
     if (card) { card.tapped = true; broadcastCard(lobby, card); }
   },
+  // A shockland declining to pay its life cost (see checkShockLandChoice) -- taps the SOURCE
+  // itself, not a chosen target.
+  tapSelf(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (card) { card.tapped = true; broadcastCard(lobby, card); }
+  },
   // Dragon Tempest's "it gains haste until end of turn" -- enteringCardId is baked in by
   // fireGlobalOtherCreatureEtbTriggers at fire time (the target here is fixed by the trigger
   // itself, not a player choice). Granted PERMANENTLY rather than truly until-end-of-turn, same
@@ -1620,6 +1626,21 @@ function entersTapped(card) {
 function dependsOnOpponentLands(card) {
   const text = (card.text || "").toLowerCase();
   return text.includes("opponent controls could produce") || text.includes("opponent controls can produce");
+}
+
+// Command Tower and its functional cousins: "Add one mana of any color in your commander's color
+// identity." Scryfall's own producedMana field lists all five colors for this card (it can't know
+// your deck), so without this it always offered a full 5-color choice regardless of what your
+// actual commander(s) could cast -- narrows to the real color identity instead, same
+// narrow-the-raw-producedMana-list pattern dependsOnOpponentLands/opponentLandColors already use.
+function dependsOnCommanderColorIdentity(card) {
+  return (card.text || "").toLowerCase().includes("commander's color identity");
+}
+function commanderColorIdentity(lobby, ownerId) {
+  const p = lobby.players[ownerId];
+  const colors = new Set();
+  if (p) (p.commanders || []).forEach((cmd) => { if (cmd && Array.isArray(cmd.colorIdentity)) cmd.colorIdentity.forEach((c) => colors.add(c)); });
+  return Array.from(colors);
 }
 
 // The actual set of colors any opponent's lands could currently produce, for a source like
@@ -2418,8 +2439,31 @@ function fireTrigger(lobby, card, ability) {
 function fireEtbTriggers(lobby, card) {
   if (!lobby.turn.started) return;
   applyEntersTappedByOpponentEffect(lobby, card);
+  checkShockLandChoice(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
+}
+// Shocklands ("As this land enters, you may pay 2 life. If you don't, it enters tapped.") -- a
+// real ETB choice, previously just silently always-untapped-for-free (entersTapped() deliberately
+// excludes this wording, since a real choice exists and the app can't resolve it automatically --
+// see its own comment). Reuses the optional-payment engine built for Smothering Tithe/Esper
+// Sentinel/Rakdos with a new cost.life shape -- the "payer" here is the land's OWN controller, not
+// an opponent, which the engine already supports (playerId is just whoever answers the prompt).
+// Skipped if the land is ALREADY tapped from something else (Blind Obedience, etc.) -- no reason
+// to offer paying life for nothing.
+function shockLandLifeCost(card) {
+  const m = (card.text || "").match(/pay (\d+) life\.\s*if you don't,\s*it enters tapped/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+function checkShockLandChoice(lobby, card) {
+  if (card.tapped) return;
+  const lifeCost = shockLandLifeCost(card);
+  if (!lifeCost) return;
+  queueOptionalPayment(lobby, {
+    playerId: card.owner, controllerId: card.owner, sourceCard: card,
+    label: `${card.name} — pay ${lifeCost} life to have it enter untapped`, costLabel: `Pay ${lifeCost} life`,
+    cost: { life: lifeCost }, declinedEffects: [{ type: "tapSelf" }]
+  });
 }
 // "Artifacts and creatures your opponents control enter tapped" (Blind Obedience) -- a static
 // replacement effect (CR 614), checked at the same single fireEtbTriggers choke point every real
@@ -3757,6 +3801,10 @@ io.on("connection", (socket) => {
       // Exotic Orchard and the like: narrow to what opponents' lands could actually produce
       // right now, instead of the card's raw (all-five) producedMana list.
       options = opponentLandColors(lobby, socket.id);
+    } else if (dependsOnCommanderColorIdentity(card)) {
+      // Command Tower and the like: narrow to the real commander's color identity instead of the
+      // raw (all-five) producedMana list Scryfall reports.
+      options = commanderColorIdentity(lobby, socket.id);
     }
     let color = options ? (options.length === 1 ? options[0] : null) : basicLandColor(card.type);
     if (!color && !options && Array.isArray(card.producedMana) && card.producedMana.length === 1) {
@@ -3771,7 +3819,8 @@ io.on("connection", (socket) => {
       const finalOptions = (options || card.producedMana).filter((c) => ["W", "U", "B", "R", "G", "C"].includes(c));
       if (finalOptions.length) socket.emit("chooseMana", { cardId: card.id, cardName: card.name, options: finalOptions });
     } else if (options && options.length === 0) {
-      socket.emit("actionError", `No opponent controls a land right now, so ${card.name} can't produce mana.`);
+      const reason = dependsOnCommanderColorIdentity(card) ? "your commander has no color identity right now" : "no opponent controls a land right now";
+      socket.emit("actionError", `${reason.charAt(0).toUpperCase() + reason.slice(1)}, so ${card.name} can't produce mana.`);
     }
   });
 
@@ -4124,6 +4173,13 @@ io.on("connection", (socket) => {
       const remaining = canAffordAndPay(p.mana, parseManaCost(entry.cost.mana), 0);
       if (!remaining) { socket.emit("actionError", "Not enough mana to pay this cost."); return; }
       p.mana = remaining;
+      broadcastPlayers(lobby);
+    }
+    if (entry.cost && entry.cost.life) {
+      // Real Magic never blocks paying life as a cost, even at 1 or below -- same precedent as
+      // fetchlands' cost.life.
+      p.life -= entry.cost.life;
+      checkEliminations(lobby);
       broadcastPlayers(lobby);
     }
     lobby.pendingOptionalPayments.splice(idx, 1);
