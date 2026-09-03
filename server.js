@@ -3621,10 +3621,19 @@ io.on("connection", (socket) => {
   // Not lobby-scoped — the editor works whether or not you're at a table.
   socket.on("resolveDeckPaste", async (text) => {
     try {
-      const wanted = parseDecklistNames(text, 99);
+      // Uncapped first, THEN trimmed here (rather than passing 99 straight to parseDecklistNames,
+      // which truncates internally with no way to tell afterward how many there really were) --
+      // a pasted list frequently still has its commander header line still in it despite the
+      // textarea's own placeholder saying not to (a real full decklist export naturally starts
+      // with one), which silently pushed the true count to 100 and dropped the very LAST card with
+      // zero indication anything was cut. Same truncation-visibility fix as importDeckFromUrl (PR
+      // #86) for the same reason.
+      const wanted = parseDecklistNames(text, 9999);
       if (wanted.length === 0) { socket.emit("deckPasteResult", { success: false, error: "Nothing parsed from that list." }); return; }
+      const trueTotal = wanted.length;
+      if (wanted.length > 99) wanted.length = 99;
       const found = await resolveCardNames(wanted);
-      socket.emit("deckPasteResult", { success: true, requested: wanted.length, found });
+      socket.emit("deckPasteResult", { success: true, requested: wanted.length, found, truncatedFrom: trueTotal > 99 ? trueTotal : null });
     } catch (e) {
       socket.emit("deckPasteResult", { success: false, error: "Resolve failed — check your connection and try again." });
     }
