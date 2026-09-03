@@ -298,7 +298,11 @@ const CARD_ABILITIES = {
     effects: [{ type: "grantExtraCombatPhase", stampCard: true }] }],
   "combat celebrant": [{ trigger: "attack", label: "Combat Celebrant — untap other creatures, additional combat phase",
     condition: (c, lobby) => c.lastExtraCombatTurn !== lobby.turn.turnNumber,
-    effects: [{ type: "grantExtraCombatPhase", stampCard: true, excludeSelf: true }] }]
+    effects: [{ type: "grantExtraCombatPhase", stampCard: true, excludeSelf: true }] }],
+  "balefire dragon": [{ trigger: "combatDamageToPlayer", label: "Balefire Dragon — damage each creature they control", effects: [{ type: "damageAllCreaturesOfPlayer" }] }],
+  "demon of loathing": [{ trigger: "combatDamageToPlayer", label: "Demon of Loathing — they sacrifice a creature", effects: [{ type: "sacrificeACreatureOfPlayer" }] }],
+  "ancient copper dragon": [{ trigger: "combatDamageToPlayer", label: "Ancient Copper Dragon — roll a d20, create that many Treasures", effects: [{ type: "rollD20CreateTreasures" }] }],
+  "kaalia, zenith seeker": [{ trigger: "etb", label: "Kaalia, Zenith Seeker — look at top 6, take Angels/Demons/Dragons", effects: [{ type: "lookTopNRevealTypesToHand", amount: 6, types: ["Angel", "Demon", "Dragon"] }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -920,6 +924,73 @@ const EFFECTS = {
     if (!p) return;
     p.exile.push(...p.graveyard);
     p.graveyard = [];
+    broadcastPlayers(lobby);
+  },
+  // Balefire Dragon -- "whenever this creature deals combat damage to a player, it deals that much
+  // damage to each creature that player controls." Same simple amount>=toughness lethality check
+  // damageTarget already uses (no indestructible check there either -- only real COMBAT damage
+  // checks it, per the existing dealtLethal precedent; this is non-combat damage from an ability).
+  damageAllCreaturesOfPlayer(lobby, ctx, params) {
+    const defenderId = params.dealtToPlayerId;
+    const amount = params.dealtToPlayerAmount;
+    if (!defenderId || !amount) return;
+    Object.values(lobby.cards).filter((c) => c.owner === defenderId && c.zoneType === "creature").forEach((c) => {
+      const bonus = attachedBonusFor(lobby, c);
+      const stat = staticBonusFor(lobby, c);
+      const effToughness = parsePT(c.toughness) + (c.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
+      if (amount >= effToughness) { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); }
+    });
+  },
+  // Demon of Loathing -- "whenever this creature deals combat damage to a player, that player
+  // sacrifices a creature of their choice." WHICH creature is auto-picked (their own first
+  // creature found) rather than prompted -- a real, disclosed simplification, same shape as Lord
+  // of the Void's reanimation target above, not worth a whole new choice-UI for one clause.
+  sacrificeACreatureOfPlayer(lobby, ctx, params) {
+    const defenderId = params.dealtToPlayerId;
+    if (!defenderId) return;
+    const victim = Object.values(lobby.cards).find((c) => c.owner === defenderId && c.zoneType === "creature");
+    if (!victim) return;
+    fireDeathTriggers(lobby, victim);
+    sendToGraveyardInternal(lobby, victim);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${lobby.players[defenderId] ? lobby.players[defenderId].name : "?"} sacrificed ${victim.name} to ${ctx.sourceCard ? (lobby.cards[ctx.sourceCard.id] || {}).name || "" : ""}`.trim());
+  },
+  // Ancient Copper Dragon -- "whenever this creature deals combat damage to a player, roll a d20.
+  // You create a number of Treasure tokens equal to the result." Real d20 roll (Math.random, not
+  // player-chosen), real tokens -- but a plain artifact token, not a fully-modeled Treasure (no
+  // "{T}, Sacrifice: Add one mana of any color" activated ability exists on created tokens
+  // anywhere in this app), same disclosed-simplification precedent as everywhere else a token's
+  // real activated ability isn't representable.
+  rollD20CreateTreasures(lobby, ctx, params) {
+    const roll = 1 + Math.floor(Math.random() * 20);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "?"} rolls a d20 for ${(ctx.sourceCard && lobby.cards[ctx.sourceCard.id] && lobby.cards[ctx.sourceCard.id].name) || "Ancient Copper Dragon"}: ${roll} -- creating ${roll} Treasure token${roll === 1 ? "" : "s"}`);
+    for (let i = 0; i < roll; i++) {
+      spawnBattlefieldCard(lobby, {
+        name: "Treasure", type: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg",
+        owner: ctx.controllerId, zoneType: "artifact"
+      });
+    }
+  },
+  // Kaalia, Zenith Seeker -- "When Kaalia enters, look at the top six cards of your library. You
+  // may reveal an Angel card, a Demon card, and/or a Dragon card from among them and put them into
+  // your hand. Put the rest on the bottom of your library in a random order." No real CHOICE here
+  // (every matching card is taken, not one among several) -- deterministic reveal-and-sort, unlike
+  // a real tutor. "Bottom in a random order" simplifies to "shuffled back into the library"
+  // (this app's library has no concept of top/bottom ordering beyond draw-from-top).
+  lookTopNRevealTypesToHand(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const n = params.amount || 6;
+    const types = params.types || [];
+    const seen = [];
+    for (let i = 0; i < n && p.library.length > 0; i++) seen.push(p.library.shift());
+    const matched = seen.filter((e) => types.some((t) => (e.type || "").toLowerCase().includes(t.toLowerCase())));
+    const rest = seen.filter((e) => !matched.includes(e));
+    matched.forEach((e) => spawnBattlefieldCard(lobby, { ...e, owner: ctx.controllerId, faceDown: true, zoneType: "hand" }));
+    rest.forEach((e) => p.library.push(e));
+    shuffle(p.library);
+    pushLog(lobby, `${p.name} reveals the top ${seen.length} card${seen.length === 1 ? "" : "s"} of their library: ${matched.length} matching card${matched.length === 1 ? "" : "s"} go to hand, the rest are shuffled back in`);
     broadcastPlayers(lobby);
   },
   // Lord of the Void -- "exile the top seven cards of that player's library, then put a creature
@@ -2073,11 +2144,11 @@ function fireAttackTriggers(lobby, card) {
 // has already reset lobby.combat back to empty). Bypasses fireTrigger/queueTargetChoice entirely
 // and bakes `dealtToPlayerId` directly into a cloned effects array instead -- same "bake the
 // dynamic bit in at fire time" approach chooseTargetFor already uses for chosenTargetId.
-function fireCombatDamageToPlayerTriggers(lobby, card, defenderId) {
+function fireCombatDamageToPlayerTriggers(lobby, card, defenderId, amount) {
   if (!lobby.turn.started) return;
   getAutomatedAbilities(card.name, "combatDamageToPlayer").forEach((ability) => {
     if (ability.condition && !ability.condition(card)) return;
-    const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId }));
+    const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId, dealtToPlayerAmount: amount }));
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   });
 }
@@ -2422,7 +2493,7 @@ function resolveCombatDamage(lobby) {
                 else { defender.life -= toPlayer; }
                 dmgEvents.push({ targetId: defenderId, amount: toPlayer });
                 pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
-                fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId);
+                fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
               }
             }
             if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, toBlocker + toPlayer);
@@ -2456,7 +2527,7 @@ function resolveCombatDamage(lobby) {
           pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
           dmgEvents.push({ targetId: defenderId, amount: atkPower });
           if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, atkPower);
-          fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId);
+          fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, atkPower);
         }
       }
     }
