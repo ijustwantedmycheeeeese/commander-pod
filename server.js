@@ -662,7 +662,8 @@ const SPELL_ABILITIES = {
   // own comment), plus minCmc for Despark's real "mana value 4 or greater" restriction. A generic
   // addition, not a one-off: any future "destroy/exile target permanent [with condition]" card can
   // reuse this same targetKind.
-  "despark": { label: "Despark — destroy target permanent with mana value 4 or greater", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "permanent", minCmc: 4 }
+  "despark": { label: "Despark — destroy target permanent with mana value 4 or greater", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "permanent", minCmc: 4 },
+  "chaos warp": { label: "Chaos Warp — shuffle target permanent into its owner's library, they reveal the top card and may put a permanent onto the battlefield", effects: [{ type: "chaosWarpTarget" }], requiresTarget: true, targetKind: "permanent" }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -824,6 +825,44 @@ const EFFECTS = {
     const recipientId = card.owner;
     exileCardInternal(lobby, card);
     if (power > 0) applyLifeGain(lobby, recipientId, power);
+  },
+  // Chaos Warp: "The owner of target permanent shuffles it into their library, then reveals the top
+  // card of their library. If it's a permanent card, they put it onto the battlefield." A real
+  // shuffle (this app's existing shuffle() helper), not a fake/simplified reorder -- and a genuine
+  // reveal-and-conditionally-play off the ACTUAL post-shuffle top card, not a scripted outcome.
+  chaosWarpTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const ownerId = card.originalOwner || card.owner;
+    const owner = lobby.players[ownerId];
+    if (!owner) return;
+    delete lobby.cards[card.id];
+    if (lobby.targets[card.id]) delete lobby.targets[card.id];
+    io.to(lobby.id).emit("cardRemove", card.id);
+    clearCommanderRef(lobby, card);
+    detachDependents(lobby, card);
+    // Same Command Zone replacement as sendToGraveyardInternal/exileCardInternal (CR 903.9a covers
+    // library moves too, not just graveyard/exile) -- skip the shuffle-into-library entirely.
+    if (card.isCommander) {
+      pushLog(lobby, `${owner.name}'s ${card.name || "commander"} returned to the Command Zone instead of being shuffled away`);
+      broadcastPlayers(lobby);
+      return;
+    }
+    const entry = toEntry(card);
+    owner.library.push(entry);
+    shuffle(owner.library);
+    pushLog(lobby, `Chaos Warp shuffles ${entry.name || "a permanent"} into ${owner.name}'s library`);
+    const revealed = owner.library.shift();
+    if (!revealed) { broadcastPlayers(lobby); return; }
+    if (isInstantOrSorcery(revealed.type)) {
+      owner.library.unshift(revealed); // not a permanent card -- stays on top, per the real text
+      pushLog(lobby, `${owner.name} reveals ${revealed.name || "a card"} off the top of their library — not a permanent, it stays there`);
+    } else {
+      const newCard = spawnBattlefieldCard(lobby, { ...revealed, owner: ownerId, faceDown: false, zoneType: classifyType(revealed.type) });
+      pushLog(lobby, `${owner.name} reveals ${revealed.name || "a card"} off the top of their library — a permanent, put onto the battlefield`);
+      if (lobby.turn.started) fireEtbTriggers(lobby, newCard);
+    }
+    broadcastPlayers(lobby);
   },
   bounceTargetToHand(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
