@@ -489,6 +489,7 @@
     <div id="target-choice-banner">
       <div id="target-choice-banner-text"></div>
       <div id="target-choice-banner-hint" style="font-size:11px;color:#a89a70;margin-top:2px;"></div>
+      <div id="target-choice-mode-buttons" style="display:none;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
       <button class="mini-btn secondary" style="margin-top:6px;" onclick="cancelTargetChoice()" title="No legal target, or you just want out -- this makes it not happen">Cancel</button>
     </div>
 
@@ -1242,6 +1243,8 @@
     // tells you to click, instead of every card/stack item/player unconditionally becoming a target
     // candidate regardless of what resolveChosenTarget will actually accept.
     let pendingTargetChoiceKind = "creature";
+    let pendingTargetChoiceModes = null; // [label, label, ...] when kind is "mode" (a modal spell)
+    let pendingTargetChoiceHandFilter = null; // [type, type, ...] when kind is "handCard" (Kaalia's ability)
 
     let myAccountAvatar = null;
     let myAccountDefaultName = null;
@@ -1335,6 +1338,8 @@
         pendingTargetChoiceId = data.pendingTargetChoice.id;
         pendingTargetChoiceLabel = data.pendingTargetChoice.label;
         pendingTargetChoiceKind = data.pendingTargetChoice.targetKind || "creature";
+        pendingTargetChoiceModes = data.pendingTargetChoice.modes || null;
+        pendingTargetChoiceHandFilter = data.pendingTargetChoice.handTypeFilter || null;
         showTargetChoiceBanner();
       } else {
         pendingTargetChoiceId = null;
@@ -1417,6 +1422,8 @@
       pendingTargetChoiceId = data.id;
       pendingTargetChoiceLabel = data.label;
       pendingTargetChoiceKind = data.targetKind || "creature";
+      pendingTargetChoiceModes = data.modes || null;
+      pendingTargetChoiceHandFilter = data.handTypeFilter || null;
       showTargetChoiceBanner();
       playTargetNeededCue();
       // Which cards/stack items/players light up as legal-looking targets depends on the kind that
@@ -1439,18 +1446,32 @@
       if (kind === "player") return "Click a player to target them.";
       if (kind === "spell") return "Click a spell or ability on the Stack to target it.";
       if (kind === "any") return "Click a creature, player, or spell/ability on the Stack to target it.";
+      if (kind === "mode") return "Choose one:";
+      if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
       if (kind === "any") return card.zoneType === "creature" || (card.type || "").toLowerCase().includes("planeswalker");
-      if (kind === "player" || kind === "spell") return false; // battlefield cards are never legal for these
+      if (kind === "player" || kind === "spell" || kind === "mode") return false; // battlefield cards are never legal for these
+      if (kind === "handCard") {
+        if (card.zoneType !== "hand") return false;
+        const filter = pendingTargetChoiceHandFilter || [];
+        return !filter.length || filter.some((t) => (card.type || "").toLowerCase().includes(t.toLowerCase()));
+      }
       return card.zoneType === kind;
     }
     function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }
     function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any"; }
+    function renderTargetChoiceModeButtons() {
+      const el = document.getElementById("target-choice-mode-buttons");
+      if (pendingTargetChoiceKind !== "mode" || !pendingTargetChoiceModes) { el.style.display = "none"; el.innerHTML = ""; return; }
+      el.style.display = "flex";
+      el.innerHTML = pendingTargetChoiceModes.map((label, i) => `<button class="mini-btn" onclick="chooseTargetFor('${i}')">${escapeHtml(label)}</button>`).join("");
+    }
     function showTargetChoiceBanner() {
       document.getElementById("target-choice-banner-text").innerText = `Choose a target for: ${pendingTargetChoiceLabel}`;
       document.getElementById("target-choice-banner-hint").innerText = targetKindLabel(pendingTargetChoiceKind);
+      renderTargetChoiceModeButtons();
       document.getElementById("target-choice-banner").style.display = "flex";
     }
     // Called from renderCard's onclick -- any card, regardless of owner, same "anyone can Target
@@ -3392,7 +3413,7 @@
       // unrelated action entirely, like free-casting something from hand) either silently errored or
       // just seemed to do nothing when clicked.
       div.onclick = (e) => {
-        if (pendingTargetChoiceId && card.zoneType !== "hand" && targetKindMatchesCard(pendingTargetChoiceKind, card)) {
+        if (pendingTargetChoiceId && (card.zoneType !== "hand" || pendingTargetChoiceKind === "handCard") && targetKindMatchesCard(pendingTargetChoiceKind, card)) {
           e.stopPropagation();
           chooseTargetFor(card.id);
         }
