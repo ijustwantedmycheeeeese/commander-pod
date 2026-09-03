@@ -218,12 +218,16 @@
     .mana-pool-cell button.mini-btn.remove-mana { color: #f0a0a0; }
 
     #main-menu { position: fixed; inset: 0; background: radial-gradient(ellipse at top, #1c1611 0%, #0a0806 100%); display: none; align-items: center; justify-content: center; z-index: 400; }
-    #main-menu-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 32px; width: 420px; box-shadow: 0 0 40px rgba(212,175,55,0.08); text-align: center; }
+    #main-menu-box { background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 32px; width: 440px; box-shadow: 0 0 40px rgba(212,175,55,0.08); text-align: center; }
     #main-menu-box h2 { margin-top: 0; }
-    #main-menu-box > button { width: 100%; margin-top: 10px; padding: 12px; font-size: 14px; }
+    #main-menu-box > button, #main-menu-box .mm-section > button { width: 100%; margin-top: 10px; padding: 12px; font-size: 14px; }
     #main-menu-box .mm-hint { font-size: 11px; color: #8a7a55; margin-top: 4px; margin-bottom: 4px; }
-    #main-menu-box .mm-section { text-align: left; margin: 16px 0; }
-    #main-menu-box .mm-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8a7a55; margin-bottom: 6px; }
+    /* Each block of related controls (Play, Decks, Account) reads as its own bordered card
+       instead of blending into one continuous stack -- the whole menu used to be a single flat
+       column with no visual break between "join/host a game" and "build a deck." */
+    #main-menu-box .mm-section { text-align: left; margin: 18px 0; padding: 14px; background: #1c170f; border: 1px solid #2e2618; border-radius: 8px; }
+    #main-menu-box .mm-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8a7a55; margin-bottom: 10px; }
+    #main-menu-box .mm-account-row { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2e2618; }
     #lobby-list { max-height: 220px; overflow-y: auto; border: 1px solid #2e2618; border-radius: 6px; background: #100c08; }
     .lobby-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #1c170f; font-size: 13px; }
     .lobby-row:last-child { border-bottom: none; }
@@ -246,17 +250,29 @@
     #de-preview-body .de-prev-text { font-size: 12px; white-space: pre-line; line-height: 1.5; margin-top: 8px; }
     #de-preview-empty { color: #8a7a55; font-size: 12px; }
     .de-columns { display: flex; gap: 16px; flex-wrap: wrap; }
-    .de-commanders { display: flex; gap: 10px; flex: 1; min-width: 260px; }
-    .de-cmdr-slot { flex: 1; background: #1c170f; border: 1px solid #3a2e18; border-radius: 6px; padding: 8px; min-height: 90px; cursor: pointer; }
-    .de-cmdr-slot img { width: 100%; border-radius: 5px; margin-bottom: 4px; }
-    .de-cmdr-slot .de-cmdr-name { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
-    .de-library { flex: 1.3; min-width: 280px; display: flex; flex-direction: column; margin-top: 16px; }
+    .de-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8a7a55; margin: 0 0 8px; }
+    /* Fixed-height row, not a flex-growing one -- commander art used to render full-size and
+       uncapped, so setting a commander could balloon this to 400px+ tall and shove the actually-
+       useful part of the editor (search/library/paste) off-screen below the fold. */
+    .de-commanders { display: flex; gap: 10px; flex: 0 0 auto; min-width: 260px; margin-bottom: 18px; }
+    .de-cmdr-slot { flex: 1; display: flex; align-items: center; gap: 10px; background: #1c170f; border: 1px solid #3a2e18; border-radius: 6px; padding: 10px; min-height: 90px; cursor: pointer; }
+    .de-cmdr-slot img { width: 56px; height: 78px; object-fit: cover; object-position: top; border-radius: 4px; flex-shrink: 0; }
+    .de-cmdr-slot .de-cmdr-info { flex: 1; min-width: 0; }
+    .de-cmdr-slot .de-cmdr-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .de-cmdr-slot .de-cmdr-empty-label { font-size: 11px; color: #8a7a55; margin-bottom: 6px; }
+    /* The only flex-growing element in the column now -- gets all the space the (fixed-height)
+       commander row doesn't use. */
+    .de-library { flex: 1; min-width: 280px; display: flex; flex-direction: column; }
     .de-library-count { font-size: 12px; color: #a89a70; margin: 6px 0; }
-    .de-library-list { flex: 1; min-height: 200px; overflow-y: auto; border: 1px solid #2e2618; border-radius: 6px; padding: 4px 8px; background: #100c08; }
+    .de-library-list { flex: 1; min-height: 160px; overflow-y: auto; border: 1px solid #2e2618; border-radius: 6px; padding: 4px 8px; background: #100c08; }
     .de-library-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1c170f; font-size: 12px; cursor: pointer; }
     .de-library-row:last-child { border-bottom: none; }
     .de-library-row .de-lr-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #de-paste { width: 100%; margin-top: 8px; }
+    /* Visually separates the three alternative ways to add cards (search / paste / import) so
+       they read as distinct options instead of one continuous, undifferentiated form. */
+    .de-add-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b5d42; }
+    .de-add-divider::before, .de-add-divider::after { content: ""; flex: 1; height: 1px; background: #2e2618; }
+    #de-paste { width: 100%; }
   </style>
   <script src="/socket.io/socket.io.js"></script>
 </head>
@@ -305,6 +321,7 @@
         </div>
       </div>
       <div class="mm-section">
+        <div class="mm-label">Play</div>
         <div class="flex-row">
           <input type="text" id="lobby-name-input" placeholder="Table name (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
         </div>
@@ -312,19 +329,17 @@
           <input type="password" id="lobby-password-input" placeholder="Password (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
           <button class="mini-btn" onclick="createLobby()">Create Table</button>
         </div>
-      </div>
-      <div class="mm-section">
-        <div class="mm-label">Open Tables</div>
+        <div class="mm-label" style="margin-top:14px;">Open Tables</div>
         <div id="lobby-list"></div>
       </div>
-      <button onclick="openDeckEditor()">Deck Editor</button>
-      <div class="mm-hint">Build or edit a deck — up to 99 cards, up to 2 commanders</div>
       <div class="mm-section">
-        <div class="mm-label">My Decks</div>
-        <div id="deck-list"></div>
+        <div class="mm-label">Decks</div>
+        <button onclick="openDeckEditor()">Deck Editor</button>
+        <div class="mm-hint">Build or edit a deck — up to 99 cards, up to 2 commanders</div>
+        <div id="deck-list" style="margin-top:10px;"></div>
         <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
       </div>
-      <div class="flex-row">
+      <div class="flex-row mm-account-row">
         <button class="secondary" onclick="openAccountModal()">Account</button>
         <button class="secondary" onclick="logout()">Log Out</button>
       </div>
@@ -339,28 +354,32 @@
       </div>
       <div class="flex-row">
         <button class="secondary" onclick="closeDeckEditor()">Close</button>
-        <button class="secondary" onclick="deSaveDeck()">Save Deck</button>
-        <button onclick="deLoadIntoGame()">Load Into Current Game</button>
+        <button class="secondary" onclick="deLoadIntoGame()">Load Into Current Game</button>
+        <button onclick="deSaveDeck()">Save Deck</button>
       </div>
     </div>
     <div id="de-body">
       <div id="de-main-col">
+        <div class="de-section-label">Commanders</div>
         <div class="de-commanders">
           <div class="de-cmdr-slot" id="de-cmdr-slot-0"></div>
           <div class="de-cmdr-slot" id="de-cmdr-slot-1"></div>
         </div>
         <div class="de-library">
+          <div class="de-section-label">Cards</div>
           <div class="flex-row">
             <input type="text" id="de-card-search" placeholder="Add a card by name..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)" style="flex:1;" onkeydown="if(event.key==='Enter'){deAddCardFromSearch();}">
             <button class="mini-btn" onclick="deAddCardFromSearch()">Add</button>
           </div>
           <div class="de-library-count">Library: <strong id="de-count">0</strong> / 99 <span id="de-automation-count" style="color:#8a7a55;"></span></div>
           <div class="de-library-list" id="de-library-list"></div>
-          <textarea id="de-paste" rows="5" placeholder="Or paste a decklist to bulk-add: 1 Sol Ring&#10;1 Arcane Signet&#10;...  (commanders go in the slots above, not here)"></textarea>
+          <div class="de-add-divider">or paste a list</div>
+          <textarea id="de-paste" rows="4" placeholder="1 Sol Ring&#10;1 Arcane Signet&#10;...  (commanders go in the slots above, not here)"></textarea>
           <button class="mini-btn secondary" style="margin-top:6px;" onclick="deResolvePaste()">Add Pasted List</button>
-          <div class="flex-row" style="margin-top:10px;">
-            <input type="text" id="de-import-url" placeholder="Or import from a Moxfield/Archidekt deck URL..." style="flex:1;" onkeydown="if(event.key==='Enter'){deImportFromUrl();}">
-            <button class="mini-btn secondary" onclick="deImportFromUrl()" title="Best-effort — unofficial APIs, may not always work. Paste the decklist directly if it fails.">Import from URL</button>
+          <div class="de-add-divider">or import from a URL</div>
+          <div class="flex-row">
+            <input type="text" id="de-import-url" placeholder="Moxfield or Archidekt deck URL..." style="flex:1;" onkeydown="if(event.key==='Enter'){deImportFromUrl();}">
+            <button class="mini-btn secondary" onclick="deImportFromUrl()" title="Best-effort — unofficial APIs, may not always work. Paste the decklist directly if it fails.">Import</button>
           </div>
         </div>
         <div id="de-status" style="font-size:12px;color:#a89a70;margin-top:10px;"></div>
@@ -2835,15 +2854,19 @@
           el.onmouseenter = () => dePreviewByIndex("cmd", slot);
           el.innerHTML = `
             <img src="${escapeHtml(cmd.img || "")}">
-            <div class="de-cmdr-name">${escapeHtml(cmd.name)}</div>
-            <div style="font-size:10px;margin-bottom:6px;">${manaCostPips(cmd.manaCost)}</div>
-            <button class="mini-btn" style="width:100%;" onclick="deClearCommanderSlot(${slot})">Clear</button>`;
+            <div class="de-cmdr-info">
+              <div class="de-cmdr-name">${escapeHtml(cmd.name)}</div>
+              <div style="font-size:10px;margin-bottom:6px;">${manaCostPips(cmd.manaCost)}</div>
+              <button class="mini-btn" onclick="deClearCommanderSlot(${slot})">Clear</button>
+            </div>`;
         } else {
           el.onmouseenter = null;
           el.innerHTML = `
-            <div style="font-size:11px;color:#8a7a55;margin-bottom:6px;">Commander ${slot + 1}${slot === 1 ? " (partner/background)" : ""}</div>
-            <input type="text" id="de-cmdr-input-${slot}" placeholder="Commander name" list="cardSuggestions" autocomplete="off" style="width:100%;" oninput="handleAutocompleteInput(event)">
-            <button class="mini-btn" style="width:100%;margin-top:4px;" onclick="deSetCommanderSlot(${slot})">Set</button>`;
+            <div class="de-cmdr-info">
+              <div class="de-cmdr-empty-label">Commander ${slot + 1}${slot === 1 ? " (partner/background)" : ""}</div>
+              <input type="text" id="de-cmdr-input-${slot}" placeholder="Commander name" list="cardSuggestions" autocomplete="off" style="width:100%;" oninput="handleAutocompleteInput(event)">
+              <button class="mini-btn" style="width:100%;margin-top:4px;" onclick="deSetCommanderSlot(${slot})">Set</button>
+            </div>`;
         }
       }
     }
