@@ -2417,8 +2417,28 @@ function fireTrigger(lobby, card, ability) {
 // "pregame is unrestricted" convention -- there's no meaningful turn.order/priority system yet.
 function fireEtbTriggers(lobby, card) {
   if (!lobby.turn.started) return;
+  applyEntersTappedByOpponentEffect(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
+}
+// "Artifacts and creatures your opponents control enter tapped" (Blind Obedience) -- a static
+// replacement effect (CR 614), checked at the same single fireEtbTriggers choke point every real
+// battlefield entry already reaches. Extort (Blind Obedience's other half -- "whenever you cast a
+// spell, you may pay {W/B}...") is a genuinely different shape (an optional cost offered to
+// YOURSELF, not an opponent, unlike the pendingOptionalPayments engine built for Smothering
+// Tithe/Esper Sentinel/Rakdos) and isn't modeled here.
+const ENTERS_TAPPED_FOR_OPPONENTS = ["blind obedience"];
+function applyEntersTappedByOpponentEffect(lobby, enteringCard) {
+  if (enteringCard.tapped || !(enteringCard.zoneType === "creature" || enteringCard.zoneType === "artifact")) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === enteringCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (ENTERS_TAPPED_FOR_OPPONENTS.includes(archiveKey(c.name))) {
+      enteringCard.tapped = true;
+      broadcastCard(lobby, enteringCard);
+      return;
+    }
+  }
 }
 
 // "Whenever ANOTHER creature enters the battlefield under your control" (Terror of the Peaks,
