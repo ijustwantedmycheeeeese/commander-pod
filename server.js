@@ -302,7 +302,9 @@ const CARD_ABILITIES = {
   "balefire dragon": [{ trigger: "combatDamageToPlayer", label: "Balefire Dragon — damage each creature they control", effects: [{ type: "damageAllCreaturesOfPlayer" }] }],
   "demon of loathing": [{ trigger: "combatDamageToPlayer", label: "Demon of Loathing — they sacrifice a creature", effects: [{ type: "sacrificeACreatureOfPlayer" }] }],
   "ancient copper dragon": [{ trigger: "combatDamageToPlayer", label: "Ancient Copper Dragon — roll a d20, create that many Treasures", effects: [{ type: "rollD20CreateTreasures" }] }],
-  "kaalia, zenith seeker": [{ trigger: "etb", label: "Kaalia, Zenith Seeker — look at top 6, take Angels/Demons/Dragons", effects: [{ type: "lookTopNRevealTypesToHand", amount: 6, types: ["Angel", "Demon", "Dragon"] }] }]
+  "kaalia, zenith seeker": [{ trigger: "etb", label: "Kaalia, Zenith Seeker — look at top 6, take Angels/Demons/Dragons", effects: [{ type: "lookTopNRevealTypesToHand", amount: 6, types: ["Angel", "Demon", "Dragon"] }] }],
+  "utvara hellkite": [{ trigger: "otherAttacks", typeFilter: ["Dragon"], label: "Utvara Hellkite — create a 6/6 flying Dragon token, tapped and attacking",
+    effects: [{ type: "createAttackingToken", name: "Dragon", tokenType: "Token Creature — Dragon", power: "6", toughness: "6", colors: ["R"], keywords: ["Flying"], img: "https://cards.scryfall.io/normal/front/1/1/11335886-a422-42ff-be14-226602202603.jpg" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -861,6 +863,25 @@ const EFFECTS = {
     pushLog(lobby, `${p ? p.name : "?"} put ${card.name || "a card"} onto the battlefield tapped and attacking`);
     fireEtbTriggers(lobby, card);
     fireAttackTriggers(lobby, card);
+    fireGlobalAttackTypeTriggers(lobby, card);
+  },
+  // Utvara Hellkite -- "whenever a Dragon you control attacks, create a 6/6 red Dragon creature
+  // token with flying that's tapped and attacking." attackerDefenderId (baked in by
+  // fireGlobalAttackTypeTriggers) is who the ORIGINAL attacking Dragon is attacking -- the new
+  // token joins that same attack, exactly like Kaalia's putFromHandAttacking above.
+  createAttackingToken(lobby, ctx, params) {
+    const token = spawnBattlefieldCard(lobby, {
+      name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
+      power: params.power, toughness: params.toughness, colors: params.colors || [],
+      keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature")
+    });
+    token.tapped = true;
+    broadcastCard(lobby, token);
+    if (params.attackerDefenderId) {
+      lobby.combat.attackers[token.id] = params.attackerDefenderId;
+      broadcastCombat(lobby);
+      fireAttackTriggers(lobby, token);
+    }
   },
   // Hellkite Tyrant -- "gain control of all artifacts that player controls." dealtToPlayerId is
   // baked in by fireCombatDamageToPlayerTriggers at the moment damage actually landed, since this
@@ -2135,6 +2156,28 @@ function applyLifeGain(lobby, playerId, amount) {
 function fireAttackTriggers(lobby, card) {
   if (!lobby.turn.started) return;
   getAutomatedAbilities(card.name, "attack").forEach((ability) => fireTrigger(lobby, card, ability));
+}
+
+// The non-self-referential counterpart to fireAttackTriggers (Utvara Hellkite: "whenever a DRAGON
+// you control attacks", not just itself) -- scans every OTHER permanent the attacker's controller
+// owns for a matching "otherAttacks" entry, same aristocrats-style shape fireGlobalTrigger already
+// uses for death/life-gain/cast events, just keyed by the attacking card's TYPE LINE (typeFilter)
+// instead of a fixed event name. Bakes the attacker's own defender id into the effects (same
+// "capture the dynamic bit at fire time" pattern as fireCombatDamageToPlayerTriggers), since a
+// token this creates might itself need to join the SAME attack.
+function fireGlobalAttackTypeTriggers(lobby, attackingCard) {
+  if (!lobby.turn.started) return;
+  const defenderId = lobby.combat.attackers[attackingCard.id];
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== attackingCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "otherAttacks").forEach((ability) => {
+      if (ability.condition && !ability.condition(c, lobby)) return;
+      if (ability.typeFilter && !ability.typeFilter.some((t) => (attackingCard.type || "").toLowerCase().includes(t.toLowerCase()))) return;
+      const effects = (ability.effects || []).map((e) => ({ ...e, attackerDefenderId: defenderId }));
+      pushAbilityToStack(lobby, { sourceCard: c, controllerId: c.owner, label: ability.label, effects });
+    });
+  }
 }
 
 // "Whenever this creature deals combat damage to a PLAYER" (Hellkite Tyrant, Lord of the Void) --
@@ -4295,7 +4338,7 @@ io.on("connection", (socket) => {
     pushLog(lobby, `${activeName} declared ${Object.keys(validAttackers).length} attacker(s)`);
     Object.keys(validAttackers).forEach((cardId) => {
       const card = lobby.cards[cardId];
-      if (card) fireAttackTriggers(lobby, card);
+      if (card) { fireAttackTriggers(lobby, card); fireGlobalAttackTypeTriggers(lobby, card); }
     });
     // If any attack trigger actually fired, it's now either sitting on the stack (handled by
     // resolveStackTop's own combat.step check once the stack drains) or -- for a target-requiring
