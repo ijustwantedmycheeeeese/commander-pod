@@ -322,7 +322,16 @@ const CARD_ABILITIES = {
   "smothering tithe": [{ trigger: "opponentDraws", label: "Smothering Tithe — pay {2} or its controller creates a Treasure", costLabel: "{2}", cost: { mana: "{2}" }, declinedEffects: [{ type: "createTreasureToken" }] }],
   "esper sentinel": [{ trigger: "opponentFirstNoncreatureSpell", label: "Esper Sentinel — pay {X} or its controller draws a card", xFromPower: true, declinedEffects: [{ type: "drawCards", amount: 1 }] }],
   "rakdos, patron of chaos": [{ trigger: "endStep", label: "Rakdos, Patron of Chaos — target opponent may sacrifice two nonland permanents or you draw two cards", requiresTarget: true, targetKind: "player", effects: [{ type: "offerSacrificeOrDraw", sacrificeCount: 2, declinedDraw: 2 }] }],
-  "serra's emissary": [{ trigger: "etb", label: "Serra's Emissary — choose a card type for protection", requiresTarget: true, targetKind: "cardType", effects: [{ type: "grantPlayerProtectionFromCardType" }] }]
+  "serra's emissary": [{ trigger: "etb", label: "Serra's Emissary — choose a card type for protection", requiresTarget: true, targetKind: "cardType", effects: [{ type: "grantPlayerProtectionFromCardType" }] }],
+  // Two independent youCastSpell triggers, each gated by its own colorFilter (fireGlobalTrigger)
+  // -- casting a spell that's BOTH red and white (a rare gold spell) correctly fires both. "any"
+  // is the closest existing targetKind to the real "target player or planeswalker" wording (no
+  // dedicated "player or planeswalker" kind exists) -- same approximate-the-common-case precedent
+  // already used elsewhere in this table, so it also (slightly over-permissively) allows a creature.
+  "balefire liege": [
+    { trigger: "youCastSpell", colorFilter: "R", label: "Balefire Liege — deal 3 damage to target player or planeswalker", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget", amount: 3 }] },
+    { trigger: "youCastSpell", colorFilter: "W", label: "Balefire Liege — gain 3 life", requiresTarget: false, effects: [{ type: "gainLife", target: "controller", amount: 3 }] }
+  ]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -1860,16 +1869,25 @@ function cardTypeProtectionBlocks(lobby, protectedPlayerId, sourceCard) {
   return (sourceCard.type || "").toLowerCase().includes(p.protectionFromCardType.toLowerCase());
 }
 
-// Parses a permanent's own oracle text for the single most common untyped anthem/lord pattern --
-// "Other creatures you control get +X/+Y". Deliberately not attempting color/creature-type-restricted
-// anthems ("Elves you control get...", "Angels you control get..."), which stay manual via the
-// existing Manage Keywords tool -- same narrowing precedent as equipEffectsFromText above.
+// Parses a permanent's own oracle text for the anthem/lord pattern -- "Other [color] creatures you
+// control get +X/+Y", with an optional COLOR restriction ("Other red creatures...", "Other white
+// creatures..."). A single card can carry more than one such clause (Balefire Liege has two, one
+// per color), so this returns an ARRAY of clauses instead of a single flat bonus -- each with its
+// own colorFilter (null for the plain untyped "Other creatures..." wording, unrestricted).
+// Deliberately not attempting CREATURE-TYPE-restricted anthems ("Elves you control get...",
+// "Angels you control get..."), which stay manual via the existing Manage Keywords tool -- the
+// literal color-word alternation below means anything else (a creature-type word, "Legendary",
+// etc.) simply doesn't match at all rather than being mis-treated as unrestricted.
 function anthemEffectsFromText(text) {
   const t = text || "";
-  let powerBonus = 0, toughnessBonus = 0;
-  const m = t.match(/other creatures you control get ([+-]\d+)\/([+-]\d+)/i);
-  if (m) { powerBonus = parseInt(m[1], 10) || 0; toughnessBonus = parseInt(m[2], 10) || 0; }
-  return { powerBonus, toughnessBonus };
+  const clauses = [];
+  const re = /other (?:(red|white|blue|black|green) )?creatures you control get ([+-]\d+)\/([+-]\d+)/gi;
+  let m;
+  while ((m = re.exec(t))) {
+    const colorFilter = m[1] ? PROTECTION_COLOR_WORDS[m[1].toLowerCase()] : null;
+    clauses.push({ powerBonus: parseInt(m[2], 10) || 0, toughnessBonus: parseInt(m[3], 10) || 0, colorFilter });
+  }
+  return clauses;
 }
 // The keyword-granting counterpart to anthemEffectsFromText -- "Other creatures/permanents you
 // control have X[, Y and Z]." (Avacyn, Angel of Hope) or the self-inclusive "Creatures you control
@@ -1895,13 +1913,16 @@ function parseKeywordList(raw) {
 function staticBonusFor(lobby, card) {
   let powerBonus = 0, toughnessBonus = 0;
   if (card.zoneType !== "creature") return { powerBonus, toughnessBonus };
+  const cardColors = card.colors || [];
   for (const id in lobby.cards) {
     if (id === card.id) continue;
     const c = lobby.cards[id];
     if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
-    const eff = anthemEffectsFromText(c.text);
-    powerBonus += eff.powerBonus;
-    toughnessBonus += eff.toughnessBonus;
+    anthemEffectsFromText(c.text).forEach((eff) => {
+      if (eff.colorFilter && !cardColors.includes(eff.colorFilter)) return;
+      powerBonus += eff.powerBonus;
+      toughnessBonus += eff.toughnessBonus;
+    });
   }
   return { powerBonus, toughnessBonus };
 }
@@ -2283,7 +2304,7 @@ function pushToStack(lobby, card, casterId) {
   // TOP of it (LIFO) and resolves first -- matches real Magic's "cast trigger resolves before the
   // spell it triggered off of" ordering. Lands never reach this function (see the doc comment
   // above), so this can't misfire for a land drop.
-  fireGlobalTrigger(lobby, "youCastSpell", casterId);
+  fireGlobalTrigger(lobby, "youCastSpell", casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
 }
 // Esper Sentinel: "Whenever an opponent casts their FIRST noncreature spell each turn, draw a card
@@ -2659,12 +2680,18 @@ function fireDeathTriggers(lobby, card) {
 // player the event actually happened to (the dying creature's controller, the player who gained
 // life, the caster) -- only THEIR permanents are scanned, matching "you"/"you control" in the
 // oracle text these trigger types exist to cover.
-function fireGlobalTrigger(lobby, eventType, forPlayerId) {
+// eventCard is optional context for the event that just happened -- currently only used by
+// "youCastSpell" abilities carrying a colorFilter (Balefire Liege: two separate triggers, one per
+// color of spell cast), everything else ignores it exactly as before.
+function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
   if (!lobby.turn.started) return;
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner !== forPlayerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
-    getAutomatedAbilities(c.name, eventType).forEach((ability) => fireTrigger(lobby, c, ability));
+    getAutomatedAbilities(c.name, eventType).forEach((ability) => {
+      if (ability.colorFilter && !(eventCard && (eventCard.colors || []).includes(ability.colorFilter))) return;
+      fireTrigger(lobby, c, ability);
+    });
   }
 }
 
