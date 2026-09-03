@@ -881,21 +881,19 @@ const EFFECTS = {
   },
   // Dragon Tempest's "it gains haste until end of turn" -- enteringCardId is baked in by
   // fireGlobalOtherCreatureEtbTriggers at fire time (the target here is fixed by the trigger
-  // itself, not a player choice). Granted PERMANENTLY rather than truly until-end-of-turn, same
-  // disclosed simplification PR#82's Windcrag Siege token used -- this app has no duration/cleanup
-  // effect system, and haste stops mattering once the turn's attacks are done anyway.
+  // itself, not a player choice). Genuinely "until end of turn" now (see grantTemporaryKeyword) --
+  // no longer the permanent-grant simplification this used before that mechanism existed.
   grantHasteToEnteringCreature(lobby, ctx, params) {
     const card = lobby.cards[params.enteringCardId];
     if (!card) return;
-    if (!(card.keywords || []).includes("Haste")) { card.keywords = [...(card.keywords || []), "Haste"]; broadcastCard(lobby, card); }
+    grantTemporaryKeyword(lobby, card, "Haste");
   },
-  // Skithiryx's "{B}: gains haste until end of turn" -- same permanent-grant simplification as
-  // grantHasteToEnteringCreature (no duration/cleanup system exists), just self-targeted off an
-  // activated ability instead of a trigger.
+  // Skithiryx's "{B}: gains haste until end of turn" -- self-targeted off an activated ability
+  // instead of a trigger, otherwise identical to grantHasteToEnteringCreature.
   grantHasteToSelf(lobby, ctx, params) {
     const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
     if (!card) return;
-    if (!(card.keywords || []).includes("Haste")) { card.keywords = [...(card.keywords || []), "Haste"]; broadcastCard(lobby, card); }
+    grantTemporaryKeyword(lobby, card, "Haste");
   },
   // Skithiryx's "{B}{B}: Regenerate" -- see the regenerationShield checks in destroyTarget and
   // resolveCombatDamage's processDeaths for where the shield actually gets spent.
@@ -905,13 +903,19 @@ const EFFECTS = {
     card.regenerationShield = (card.regenerationShield || 0) + 1;
     broadcastCard(lobby, card);
   },
-  // Deathless Angel's "target creature gains indestructible" -- a genuinely reusable primitive
-  // (not a one-off), for any future "target creature gains keyword" card. Same permanent-grant
-  // simplification as every other "until end of turn" effect in this app.
+  // Deathless Angel's "target creature gains indestructible UNTIL END OF TURN" -- a genuinely
+  // reusable primitive (not a one-off) for any future "target creature gains keyword" card.
+  // params.permanent opts into a real permanent grant instead (a future aura-shaped card, say) --
+  // defaults to temporary since "until end of turn" combat tricks are the far more common real
+  // wording for this shape of effect.
   grantKeywordToTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (!card || !params.keyword) return;
-    if (!(card.keywords || []).includes(params.keyword)) { card.keywords = [...(card.keywords || []), params.keyword]; broadcastCard(lobby, card); }
+    if (params.permanent) {
+      if (!(card.keywords || []).includes(params.keyword)) { card.keywords = [...(card.keywords || []), params.keyword]; broadcastCard(lobby, card); }
+    } else {
+      grantTemporaryKeyword(lobby, card, params.keyword);
+    }
   },
   // Serra's Emissary -- chosenTargetId here is the chosen CARD TYPE STRING (e.g. "Creature"), not
   // a real card/player id, reusing the same chosenTargetId-baking chooseTargetFor already does for
@@ -1712,13 +1716,37 @@ function attachedBonusFor(lobby, card) {
   }
   return { powerBonus, toughnessBonus, keywords };
 }
+// A real "until end of turn" keyword grant -- distinct from mutating card.keywords directly
+// (permanent), which is what every prior "until end of turn" effect in this app used as a
+// disclosed simplification (no duration/cleanup system existed at all). Expires automatically at
+// cleanup (see cleanupTemporaryKeywords), so callers no longer need to disclose "granted
+// permanently instead" for new cards using this.
+function grantTemporaryKeyword(lobby, card, keyword) {
+  if (!card.temporaryKeywords) card.temporaryKeywords = [];
+  if (!card.temporaryKeywords.some((tk) => tk.keyword === keyword)) {
+    card.temporaryKeywords.push({ keyword });
+    broadcastCard(lobby, card);
+  }
+}
+// Called once per real new turn (the End Step -> next Untap wraparound in advanceOnePhase) --
+// every temporary keyword granted at any point during the turn that just ended is now expired,
+// same real-Magic cleanup-step timing (CR 514) "until end of turn" effects actually follow.
+function cleanupTemporaryKeywords(lobby) {
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.temporaryKeywords && c.temporaryKeywords.length) {
+      c.temporaryKeywords = [];
+      broadcastCard(lobby, c);
+    }
+  }
+}
 // A card's keywords plus whatever any attached equipment/aura grants, plus whatever any OTHER
 // permanent's static keyword-anthem grants it -- the one thing that matters for gameplay
 // (Haste-gated summoning sickness, Indestructible in dealtLethal/destroyTarget, and anything else
 // that reads keywords).
 function effectiveKeywords(lobby, card) {
   const bonus = attachedBonusFor(lobby, card);
-  let extra = [...(card.keywords || []), ...bonus.keywords];
+  let extra = [...(card.keywords || []), ...bonus.keywords, ...(card.temporaryKeywords || []).map((tk) => tk.keyword)];
   if (card.zoneType === "creature") {
     for (const id in lobby.cards) {
       const c = lobby.cards[id];
@@ -2890,6 +2918,7 @@ function advanceOnePhase(lobby) {
     turn.activeIndex = (turn.activeIndex + 1) % turn.order.length;
     turn.turnNumber++;
     turn.extraCombatsPending = 0;
+    cleanupTemporaryKeywords(lobby);
   }
   turn.phase = PHASES[idx];
   turn.phaseStartedAt = Date.now(); // purely informational -- drives a passive client-side "how long has this phase been going" indicator, never used to auto-act for anyone
