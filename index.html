@@ -230,7 +230,6 @@
     .mm-section { text-align: left; margin: 14px 0; padding: 12px 14px; background: #1c170f; border: 1px solid #2e2618; border-radius: 8px; }
     .mm-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8a7a55; margin-bottom: 10px; }
     #main-menu-box .mm-section { margin: 18px 0; padding: 14px; }
-    #main-menu-box .mm-account-row { margin-top: 20px; padding-top: 16px; border-top: 1px solid #2e2618; }
     #lobby-list { max-height: 220px; overflow-y: auto; border: 1px solid #2e2618; border-radius: 6px; background: #100c08; }
     .lobby-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #1c170f; font-size: 13px; }
     .lobby-row:last-child { border-bottom: none; }
@@ -342,9 +341,12 @@
         <div id="deck-list" style="margin-top:10px;"></div>
         <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
       </div>
-      <div class="flex-row mm-account-row">
-        <button class="secondary" onclick="openAccountModal()">Account</button>
-        <button class="secondary" onclick="logout()">Log Out</button>
+      <div class="mm-section">
+        <div class="mm-label" style="margin-top:0;">Account</div>
+        <div class="flex-row">
+          <button class="secondary" onclick="openAccountModal()">Account Settings</button>
+          <button class="secondary" onclick="logout()">Log Out</button>
+        </div>
       </div>
     </div>
   </div>
@@ -424,20 +426,20 @@
           <div id="stack-list"></div>
         </div>
         <div class="panel" id="my-status-panel">
-          <h3>My Status</h3>
+          <h3 id="my-status-header">My Status</h3>
           <div class="stat-widget">
-            <div class="stat-row"><span>Life</span><div><button class="stat-btn" onclick="changeStat('life',-1)">-</button> <strong id="lbl-life">40</strong> <button class="stat-btn" onclick="changeStat('life',1)">+</button></div></div>
-            <div class="stat-row"><span>Cmdr Dmg</span><div><button class="stat-btn" onclick="changeStat('cmdr',-1)">-</button> <strong id="lbl-cmdr">0</strong> <button class="stat-btn" onclick="changeStat('cmdr',1)">+</button></div></div>
-            <div class="stat-row" id="poison-row" style="display:none;"><span>Poison</span><div><button class="stat-btn" onclick="changeStat('poison',-1)">-</button> <strong id="lbl-poison">0</strong> <button class="stat-btn" onclick="changeStat('poison',1)">+</button></div></div>
+            <div class="stat-row"><span>Life</span><div><button class="stat-btn focused-self-only" onclick="changeStat('life',-1)">-</button> <strong id="lbl-life">40</strong> <button class="stat-btn focused-self-only" onclick="changeStat('life',1)">+</button></div></div>
+            <div class="stat-row"><span>Cmdr Dmg</span><div><button class="stat-btn focused-self-only" onclick="changeStat('cmdr',-1)">-</button> <strong id="lbl-cmdr">0</strong> <button class="stat-btn focused-self-only" onclick="changeStat('cmdr',1)">+</button></div></div>
+            <div class="stat-row" id="poison-row" style="display:none;"><span>Poison</span><div><button class="stat-btn focused-self-only" onclick="changeStat('poison',-1)">-</button> <strong id="lbl-poison">0</strong> <button class="stat-btn focused-self-only" onclick="changeStat('poison',1)">+</button></div></div>
           </div>
           <div id="cmdr-damage-breakdown" style="margin-top:8px;"></div>
         </div>
         <div class="panel" id="mana-pool-panel">
-          <h3>Mana Pool</h3>
+          <h3 id="mana-pool-header">Mana Pool</h3>
           <div id="mana-pool-total" style="font-size:12px;margin-bottom:6px;">Total: <strong>0</strong></div>
           <div id="mana-pool-display" class="mana-pool-grid"></div>
-          <div style="font-size:11px;color:#a89a70;margin-top:8px;">Land drops: <span id="land-drop-info"></span></div>
-          <div class="flex-row" style="margin-top:4px;">
+          <div style="font-size:11px;color:#a89a70;margin-top:8px;" class="focused-self-only">Land drops: <span id="land-drop-info"></span></div>
+          <div class="flex-row focused-self-only" style="margin-top:4px;">
             <button class="mini-btn" onclick="landDropBonus(1)">+1 extra drop</button>
             <button class="mini-btn" onclick="landDropBonus(-1)">-1</button>
           </div>
@@ -733,12 +735,17 @@
             <button class="mini-btn" onclick="setBoardMat()">Set</button>
             <button class="mini-btn secondary" onclick="clearBoardMat()">Clear</button>
             <button class="mini-btn secondary" onclick="document.getElementById('board-mat-file').click()">Upload...</button>
-            <button class="mini-btn secondary" onclick="openCropEditor('boardMat')" title="Crop, zoom, and pan the board mat image -- also where you can set it as your default for new tables">Crop...</button>
+            <button class="mini-btn secondary" onclick="openCropEditor('boardMat')" title="Crop, zoom, and pan the board mat image">Crop...</button>
           </div>
-          <div class="flex-row" style="margin-bottom:12px;">
+          <div class="flex-row" style="margin-bottom:4px;">
             <select id="saved-mat-select"><option value="">-- saved mats --</option></select>
             <button class="mini-btn secondary" onclick="applySavedMat()">Apply</button>
           </div>
+          <div class="flex-row" style="margin-bottom:2px;">
+            <button class="mini-btn secondary" onclick="setBoardMatAsDefaultDirect()" title="Auto-applies your CURRENT board mat to every new table you join">★ Set as My Default</button>
+            <button class="mini-btn secondary" onclick="clearBoardMatDefault()">Clear My Default</button>
+          </div>
+          <div id="board-mat-default-status" style="font-size:11px;color:#8a7a55;margin-bottom:12px;"></div>
 
           <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Pile Art</div>
           <div class="mm-hint" style="margin-top:0;margin-bottom:6px;">Set a custom photo behind each pile's icon, with its own crop and zoom.</div>
@@ -856,50 +863,59 @@
       <button class="modal-close-x" onclick="closeAccountModal()" title="Close">✕</button>
       <h2>Account</h2>
 
-      <div class="mm-label" style="margin-top:0;">Avatar</div>
-      <div class="flex-row" style="align-items:center;margin-bottom:6px;">
-        <img id="account-avatar-preview" src="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;background:#2a2a30;display:none;border:2px solid #5a4423;">
-        <input type="text" id="account-avatar-url" placeholder="Avatar image URL..." oninput="previewAccountAvatar()" style="flex:1;">
-        <input type="file" id="account-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'account-avatar-url', previewAccountAvatar)">
-        <button class="mini-btn secondary" onclick="document.getElementById('account-avatar-file').click()">Upload...</button>
-      </div>
-
-      <div class="mm-label">Default Nickname</div>
-      <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Used whenever you join a new table, instead of your username.</div>
-      <input type="text" id="account-default-name" placeholder="Default nickname..." style="width:100%;margin-bottom:6px;">
-
-      <div class="flex-row" style="margin-bottom:10px;">
-        <button onclick="saveAccountProfile()">Save Profile</button>
-      </div>
-      <div id="account-profile-status" style="font-size:12px;color:#a89a70;margin-bottom:10px;"></div>
-
-      <div class="mm-label">Saved Board Mats</div>
-      <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Save a mat once, then pick it from any table's Board Mat menu instead of pasting the URL again.</div>
-      <div class="flex-row" style="align-items:center;margin-bottom:6px;">
-        <input type="text" id="new-mat-url" placeholder="Mat image URL..." style="flex:1;">
-        <input type="file" id="new-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'new-mat-url')">
-        <button class="mini-btn secondary" onclick="document.getElementById('new-mat-file').click()">Upload...</button>
-      </div>
-      <div class="flex-row" style="margin-bottom:10px;">
-        <button class="mini-btn" onclick="saveNewMat()">Save As...</button>
-      </div>
-      <div id="saved-mats-list" style="margin-bottom:10px;"></div>
-
-      <div class="mm-label">Saved Pile Art</div>
-      <div class="mm-hint" style="margin-top:-4px;margin-bottom:6px;">Save a photo (with its crop) from the pile art editor's "Save As..." button, then load it onto any pile on any table.</div>
-      <div id="saved-pile-mats-list" style="margin-bottom:10px;"></div>
-
-      <div class="mm-label">Change Password</div>
-      <form id="change-password-form" autocomplete="on" onsubmit="changeAccountPassword(); return false;">
-        <input type="text" id="account-username-hidden" name="username" autocomplete="username" style="display:none;" aria-hidden="true">
-        <input type="password" id="account-current-password" name="current-password" autocomplete="current-password" placeholder="Current password" style="width:100%;margin-bottom:6px;">
-        <input type="password" id="account-new-password" name="new-password" autocomplete="new-password" placeholder="New password" style="width:100%;margin-bottom:6px;">
-        <input type="password" id="account-confirm-password" name="new-password" autocomplete="new-password" placeholder="Confirm new password" style="width:100%;margin-bottom:6px;">
-        <div class="flex-row" style="margin-bottom:6px;">
-          <button type="submit" class="secondary">Change Password</button>
+      <div class="mm-section">
+        <div class="mm-label" style="margin-top:0;">Profile</div>
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Avatar</div>
+        <div class="flex-row" style="align-items:center;margin-bottom:10px;">
+          <img id="account-avatar-preview" src="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;background:#2a2a30;display:none;border:2px solid #5a4423;">
+          <input type="text" id="account-avatar-url" placeholder="Avatar image URL..." oninput="previewAccountAvatar()" style="flex:1;">
+          <input type="file" id="account-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'account-avatar-url', previewAccountAvatar)">
+          <button class="mini-btn secondary" onclick="document.getElementById('account-avatar-file').click()">Upload...</button>
         </div>
-      </form>
-      <div id="account-password-status" style="font-size:12px;color:#a89a70;"></div>
+
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Default Nickname</div>
+        <div class="mm-hint" style="margin-top:0;margin-bottom:6px;">Used whenever you join a new table, instead of your username.</div>
+        <input type="text" id="account-default-name" placeholder="Default nickname..." style="width:100%;margin-bottom:10px;">
+
+        <div class="flex-row" style="margin-bottom:6px;">
+          <button onclick="saveAccountProfile()">Save Profile</button>
+        </div>
+        <div id="account-profile-status" style="font-size:12px;color:#a89a70;"></div>
+      </div>
+
+      <div class="mm-section">
+        <div class="mm-label" style="margin-top:0;">Saved Board Mats</div>
+        <div class="mm-hint" style="margin-top:-6px;margin-bottom:6px;">Save a mat once, then pick it from any table's Board Mat menu instead of pasting the URL again.</div>
+        <div class="flex-row" style="align-items:center;margin-bottom:6px;">
+          <input type="text" id="new-mat-url" placeholder="Mat image URL..." style="flex:1;">
+          <input type="file" id="new-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'new-mat-url')">
+          <button class="mini-btn secondary" onclick="document.getElementById('new-mat-file').click()">Upload...</button>
+        </div>
+        <div class="flex-row" style="margin-bottom:10px;">
+          <button class="mini-btn" onclick="saveNewMat()">Save As...</button>
+        </div>
+        <div id="saved-mats-list"></div>
+      </div>
+
+      <div class="mm-section">
+        <div class="mm-label" style="margin-top:0;">Saved Pile Art</div>
+        <div class="mm-hint" style="margin-top:-6px;margin-bottom:6px;">Save a photo (with its crop) from the pile art editor's "Save As..." button, then load it onto any pile on any table.</div>
+        <div id="saved-pile-mats-list"></div>
+      </div>
+
+      <div class="mm-section">
+        <div class="mm-label" style="margin-top:0;">Change Password</div>
+        <form id="change-password-form" autocomplete="on" onsubmit="changeAccountPassword(); return false;">
+          <input type="text" id="account-username-hidden" name="username" autocomplete="username" style="display:none;" aria-hidden="true">
+          <input type="password" id="account-current-password" name="current-password" autocomplete="current-password" placeholder="Current password" style="width:100%;margin-bottom:6px;">
+          <input type="password" id="account-new-password" name="new-password" autocomplete="new-password" placeholder="New password" style="width:100%;margin-bottom:6px;">
+          <input type="password" id="account-confirm-password" name="new-password" autocomplete="new-password" placeholder="Confirm new password" style="width:100%;margin-bottom:6px;">
+          <div class="flex-row" style="margin-bottom:6px;">
+            <button type="submit" class="secondary">Change Password</button>
+          </div>
+        </form>
+        <div id="account-password-status" style="font-size:12px;color:#a89a70;"></div>
+      </div>
     </div>
   </div>
 
@@ -1644,6 +1660,7 @@
       myDefaultBoardMat = d.boardMat || null;
       myDefaultPileArt = d.pileArt || { library: null, graveyard: null, exile: null };
       if (document.getElementById("crop-modal").style.display === "flex") renderCropDefaultStatus();
+      if (document.getElementById("settings-modal").style.display === "flex") renderBoardMatDefaultStatus();
     });
 
     socket.on("deckSaved", () => { document.getElementById("deck-status").innerText = "Deck saved!"; });
@@ -1723,14 +1740,23 @@
 
     // "My Status" widget (life/cmdr/poison) had its own <strong> labels that nothing ever
     // updated after the initial HTML — only the Players panel below was wired to live updates.
+    // Shows whichever player's board TAB is currently focused (activeBoardOwner), not always your
+    // own -- switching to look at someone else's battlefield previously left this panel stuck
+    // showing your own numbers, unrelated to whatever you were actually looking at. The +/- edit
+    // buttons (.focused-self-only) only make sense for your OWN stats -- the server only ever lets
+    // you change your own life/cmdr/poison anyway -- so they're hidden while looking at someone else.
     function renderMyStatus() {
-      const me = players[myId];
-      if (!me) return;
-      document.getElementById("lbl-life").innerText = me.life;
-      document.getElementById("lbl-cmdr").innerText = me.cmdr;
-      document.getElementById("lbl-poison").innerText = me.poison;
-      updatePoisonVisibility();
-      renderCmdrDamageBreakdown(me);
+      const focusedId = activeBoardOwner || myId;
+      const focused = players[focusedId];
+      if (!focused) return;
+      const isSelf = focusedId === myId;
+      document.getElementById("my-status-header").innerText = isSelf ? "My Status" : `${focused.name}'s Status`;
+      document.getElementById("lbl-life").innerText = focused.life;
+      document.getElementById("lbl-cmdr").innerText = focused.cmdr;
+      document.getElementById("lbl-poison").innerText = focused.poison;
+      document.querySelectorAll("#my-status-panel .focused-self-only").forEach((el) => { el.style.visibility = isSelf ? "visible" : "hidden"; });
+      updatePoisonVisibility(focused);
+      renderCmdrDamageBreakdown(focused);
     }
 
     // One row per opposing commander that's actually dealt you damage -- scales naturally with
@@ -1755,39 +1781,49 @@
     // battlefield card (public to everyone already), so the row appears the moment it becomes
     // relevant instead of cluttering every game with a stat nobody's using. Purely a display
     // toggle -- the server keeps tracking poison unconditionally regardless.
-    function deckHasPoisonSynergy() {
+    function deckHasPoisonSynergy(forPlayer) {
       const isPoisonCard = (c) => {
         if (!c) return false;
         if (Array.isArray(c.keywords) && c.keywords.some((k) => ["infect", "toxic"].includes((k || "").toLowerCase()))) return true;
         return (c.text || "").toLowerCase().includes("poison");
       };
+      const p = forPlayer || players[myId];
+      // A library is only visible to its own owner -- only checked for the local viewer's own
+      // deck, same as before; a focused OTHER player's commanders (public) still count.
+      if (p && Array.isArray(p.commanders) && p.commanders.some(isPoisonCard)) return true;
       const me = players[myId];
-      if (me && Array.isArray(me.commanders) && me.commanders.some(isPoisonCard)) return true;
       if (me && Array.isArray(me.library) && me.library.some(isPoisonCard)) return true;
       return Object.values(allCards).some(isPoisonCard);
     }
-    function updatePoisonVisibility() {
+    function updatePoisonVisibility(forPlayer) {
       const row = document.getElementById("poison-row");
-      if (row) row.style.display = deckHasPoisonSynergy() ? "flex" : "none";
+      if (row) row.style.display = deckHasPoisonSynergy(forPlayer) ? "flex" : "none";
     }
 
+    // Same "follows the focused board tab" treatment as renderMyStatus -- the +/- pip buttons
+    // (add/removeMana) only ever affect YOUR OWN pool server-side, so they're omitted entirely
+    // while looking at someone else's, rather than shown-but-nonfunctional.
     function renderManaPool() {
-      const me = players[myId];
+      const focusedId = activeBoardOwner || myId;
+      const focused = players[focusedId];
       const el = document.getElementById("mana-pool-display");
-      if (!me || !el) return;
-      const m = me.mana || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+      if (!focused || !el) return;
+      const isSelf = focusedId === myId;
+      document.getElementById("mana-pool-header").innerText = isSelf ? "Mana Pool" : `${focused.name}'s Mana Pool`;
+      const m = focused.mana || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
       const total = Object.values(m).reduce((a, b) => a + b, 0);
       document.getElementById("mana-pool-total").innerHTML = `Total: <strong>${total}</strong>`;
       el.innerHTML = ["W", "U", "B", "R", "G", "C"].map((c) => `
         <div class="mana-pool-cell">
           ${manaPip(c, m[c] || 0)}
-          <div class="pip-btn-row">
+          ${isSelf ? `<div class="pip-btn-row">
             <button class="mini-btn remove-mana" onclick="removeMana('${c}')" title="Subtract a mistaken ${c}">−</button>
             <button class="mini-btn" onclick="addMana('${c}')" title="Add ${c}">+</button>
-          </div>
+          </div>` : ""}
         </div>`).join("");
-      const allowed = 1 + (me.landDropBonus || 0);
-      document.getElementById("land-drop-info").innerText = `${me.landsPlayedThisTurn || 0} / ${allowed} used`;
+      document.querySelectorAll("#mana-pool-panel .focused-self-only").forEach((elx) => { elx.style.display = isSelf ? "" : "none"; });
+      const allowed = 1 + (focused.landDropBonus || 0);
+      document.getElementById("land-drop-info").innerText = `${focused.landsPlayedThisTurn || 0} / ${allowed} used`;
     }
 
     function renderOpeningHandStatus() {
@@ -1908,7 +1944,7 @@
         tab.className = "board-tab" + (pid === activeBoardOwner ? " active" : "");
         tab.style.borderBottomColor = p.color;
         tab.innerText = p.name + (pid === myId ? " (you)" : "");
-        tab.onclick = () => { activeBoardOwner = pid; renderBoardTabs(); renderVisibleBoard(); };
+        tab.onclick = () => { activeBoardOwner = pid; renderBoardTabs(); renderVisibleBoard(); renderMyStatus(); renderManaPool(); };
         bar.appendChild(tab);
       });
     }
@@ -2087,6 +2123,25 @@
     function updateName() { socket.emit("setName", document.getElementById("playerName").value || "Player"); }
     function setBoardMat() { socket.emit("setBoardMat", document.getElementById("board-mat-url").value || ""); }
     function clearBoardMat() { document.getElementById("board-mat-url").value = ""; socket.emit("setBoardMat", ""); }
+
+    // Direct "set as default" button on the main Board Mat row -- the crop editor's own version
+    // (setCropAsDefault) still works too, but making a player open a whole second modal just to
+    // find a tiny star button was the actual reason this was hard to discover at all.
+    function setBoardMatAsDefaultDirect() {
+      const me = players[myId];
+      if (!me || !me.boardMat) { alert("Set a board mat first (the Set button above), then you can save it as your default."); return; }
+      const fit = me.boardMatFit || { scale: 1, x: 50, y: 50 };
+      socket.emit("setDefaultBoardMat", { url: me.boardMat, ...fit });
+    }
+    function clearBoardMatDefault() { socket.emit("setDefaultBoardMat", { url: "" }); }
+    function renderBoardMatDefaultStatus() {
+      const el = document.getElementById("board-mat-default-status");
+      if (!el) return;
+      const me = players[myId];
+      if (!myDefaultBoardMat) { el.innerText = "No default set for new tables yet."; return; }
+      const matches = me && me.boardMat && myDefaultBoardMat.url === me.boardMat;
+      el.innerText = matches ? "✓ This is your default for new tables." : "You have a default set, but it's a different photo than your current mat.";
+    }
 
     // ---------------- crop/zoom editor (board mat + pile art) ----------------
     // One shared modal for both targets -- cropTarget tracks which one Apply/Clear should act on.
@@ -3211,7 +3266,7 @@
     function openHelpModal() { document.getElementById("help-modal").style.display = "flex"; }
     function closeHelpModal() { document.getElementById("help-modal").style.display = "none"; }
 
-    function openSettingsModal() { document.getElementById("settings-modal").style.display = "flex"; }
+    function openSettingsModal() { document.getElementById("settings-modal").style.display = "flex"; renderBoardMatDefaultStatus(); }
     function closeSettingsModal() { document.getElementById("settings-modal").style.display = "none"; }
 
     function generateBugReport() {
