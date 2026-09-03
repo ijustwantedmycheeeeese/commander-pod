@@ -1473,9 +1473,23 @@
         deckEditor.library.push(card);
         added++;
       });
+      // Only a URL import sends this -- a plain paste has no structured commander info, which is
+      // why its textarea says "commanders go in the slots above, not here." Fills whichever slots
+      // are still empty, left to right, without clobbering a commander the user already set by hand.
+      let commandersFilled = 0;
+      if (Array.isArray(res.commanders) && res.commanders.length) {
+        const emptySlots = [0, 1].filter((slot) => !deckEditor.commanders[slot]);
+        res.commanders.slice(0, emptySlots.length).forEach((card, i) => {
+          deckEditor.commanders[emptySlots[i]] = card;
+          commandersFilled++;
+        });
+        if (commandersFilled) deRenderCommanders();
+      }
       deRenderLibrary();
-      status.innerText = `Added ${added} card${added === 1 ? "" : "s"}` + (skipped ? ` — ${skipped} skipped (99 limit reached).` : ".") +
-        (res.found.length < res.requested ? ` (${res.requested - res.found.length} not found.)` : "");
+      status.innerText = `Added ${added} card${added === 1 ? "" : "s"}` + (commandersFilled ? ` + ${commandersFilled} commander${commandersFilled === 1 ? "" : "s"}` : "") +
+        (skipped ? ` — ${skipped} skipped (99 limit reached).` : ".") +
+        (res.found.length < res.requested ? ` (${res.requested - res.found.length} not found.)` : "") +
+        (res.truncatedFrom ? ` The source had ${res.truncatedFrom} cards after filtering — only the first 99 were imported.` : "");
     });
 
     socket.on("deckData", ({ name, data }) => {

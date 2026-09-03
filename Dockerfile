@@ -1,5 +1,11 @@
 FROM node:20-alpine
 
+# Real curl, not Node's own fetch -- Moxfield's deck-import API sits behind Cloudflare bot-detection
+# that fingerprints Node's HTTP client specifically and blocks it (confirmed: an identical request
+# succeeds from curl, gets a Cloudflare challenge page from Node fetch), so server.js shells out to
+# this binary for that one call. See the curlJson() comment in server.js for the full story.
+RUN apk add --no-cache curl
+
 WORKDIR /app
 
 COPY package.json ./
