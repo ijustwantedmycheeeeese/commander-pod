@@ -307,7 +307,14 @@ const CARD_ABILITIES = {
     effects: [{ type: "createAttackingToken", name: "Dragon", tokenType: "Token Creature — Dragon", power: "6", toughness: "6", colors: ["R"], keywords: ["Flying"], img: "https://cards.scryfall.io/normal/front/1/1/11335886-a422-42ff-be14-226602202603.jpg" }] }],
   // amount is baked in dynamically by fireGlobalOtherCreatureEtbTriggers (the entering creature's
   // own power) -- the {type:"damageTarget"} entry here carries no amount of its own.
-  "terror of the peaks": [{ trigger: "otherCreatureEtb", label: "Terror of the Peaks — deal damage equal to that creature's power to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget" }] }]
+  "terror of the peaks": [{ trigger: "otherCreatureEtb", label: "Terror of the Peaks — deal damage equal to that creature's power to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget" }] }],
+  // Two separate otherCreatureEtb entries on one card, gated by different filters -- keywordFilter
+  // for the haste grant (any flier, no target needed), typeFilter + amountSource:"count" for the
+  // damage trigger (Dragons only, X = current Dragon count).
+  "dragon tempest": [
+    { trigger: "otherCreatureEtb", keywordFilter: ["Flying"], label: "Dragon Tempest — that creature gains haste", requiresTarget: false, effects: [{ type: "grantHasteToEnteringCreature" }] },
+    { trigger: "otherCreatureEtb", typeFilter: ["Dragon"], amountSource: "count", countTypeFilter: ["Dragon"], label: "Dragon Tempest — deal damage equal to Dragons you control to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget" }] }
+  ]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -774,6 +781,16 @@ const EFFECTS = {
   tapTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (card) { card.tapped = true; broadcastCard(lobby, card); }
+  },
+  // Dragon Tempest's "it gains haste until end of turn" -- enteringCardId is baked in by
+  // fireGlobalOtherCreatureEtbTriggers at fire time (the target here is fixed by the trigger
+  // itself, not a player choice). Granted PERMANENTLY rather than truly until-end-of-turn, same
+  // disclosed simplification PR#82's Windcrag Siege token used -- this app has no duration/cleanup
+  // effect system, and haste stops mattering once the turn's attacks are done anyway.
+  grantHasteToEnteringCreature(lobby, ctx, params) {
+    const card = lobby.cards[params.enteringCardId];
+    if (!card) return;
+    if (!(card.keywords || []).includes("Haste")) { card.keywords = [...(card.keywords || []), "Haste"]; broadcastCard(lobby, card); }
   },
   // For "any target"/"creature" spells that deal damage. chosenTargetId can resolve to either a
   // player or a creature -- check players first since a player id never collides with a card id.
@@ -2194,18 +2211,35 @@ function fireEtbTriggers(lobby, card) {
 // equipment/anthem bonus already in play the instant it resolves), same "capture the dynamic bit
 // at fire time" approach fireCombatDamageToPlayerTriggers/fireGlobalAttackTypeTriggers already use.
 // Only fires for CREATURE permanents entering (a land/artifact entering doesn't count) and excludes
-// the entering card itself from the scan (the "another" in the wording).
+// the entering card itself from the scan (the "another" in the wording) -- EXCEPT when
+// ability.selfInclusive is set, for wording like Dragon Tempest's "whenever a Dragon you control
+// enters" (no "another"), where the entering creature can itself be what's being watched for.
+// ability.typeFilter/keywordFilter narrow WHICH entering creature qualifies (Dragon Tempest has two
+// abilities on one card watching for two different things: any flier, and specifically Dragons).
+// ability.amountSource picks what gets baked into the effects as `amount`: "power" (default, Terror
+// of the Peaks) or "count" (Dragon Tempest's X = how many creatures matching countTypeFilter the
+// controller has, counted AFTER the entering creature is already on the battlefield).
 function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
   if (!lobby.turn.started || enteringCard.zoneType !== "creature") return;
   const bonus = attachedBonusFor(lobby, enteringCard);
   const stat = staticBonusFor(lobby, enteringCard);
   const power = Math.max(0, parsePT(enteringCard.power) + bonus.powerBonus + stat.powerBonus);
+  const enteringType = (enteringCard.type || "").toLowerCase();
+  const enteringKeywords = effectiveKeywords(lobby, enteringCard).map((k) => (k || "").toLowerCase());
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
-    if (c.id === enteringCard.id || c.owner !== enteringCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (c.owner !== enteringCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
     getAutomatedAbilities(c.name, "otherCreatureEtb").forEach((ability) => {
+      if (c.id === enteringCard.id && !ability.selfInclusive) return;
+      if (ability.typeFilter && !ability.typeFilter.some((t) => enteringType.includes(t.toLowerCase()))) return;
+      if (ability.keywordFilter && !ability.keywordFilter.some((k) => enteringKeywords.includes(k.toLowerCase()))) return;
       if (ability.condition && !ability.condition(c, lobby)) return;
-      const effects = (ability.effects || []).map((e) => ({ ...e, amount: power }));
+      let amount = power;
+      if (ability.amountSource === "count") {
+        const filter = ability.countTypeFilter || [];
+        amount = Object.values(lobby.cards).filter((x) => x.owner === enteringCard.owner && x.zoneType === "creature" && filter.some((t) => (x.type || "").toLowerCase().includes(t.toLowerCase()))).length;
+      }
+      const effects = (ability.effects || []).map((e) => ({ ...e, amount, enteringCardId: enteringCard.id }));
       if (ability.requiresTarget) {
         queueTargetChoice(lobby, { controllerId: c.owner, sourceCard: c, label: ability.label, effects, targetKind: ability.targetKind });
       } else {
