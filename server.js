@@ -498,6 +498,8 @@ function getActivatedAbilities(cardName) {
 // included -- same "narrow to the common, unconditional case" precedent as everywhere else in this
 // file that draws a line around what's automatable.
 const ATTACK_TAX_EFFECTS = { "propaganda": 2, "ghostly prison": 2, "windborn muse": 2 };
+// "This creature can only attack alone" -- checked in declareAttackers before anything gets tapped.
+const ATTACK_ALONE_CARDS = ["master of cruelties"];
 
 // What a cast instant/sorcery spell actually DOES, for the narrow set of real cards authored here --
 // one entry per card (unlike CARD_ABILITIES/ACTIVATED_ABILITIES, a spell only ever resolves once,
@@ -798,11 +800,17 @@ const EFFECTS = {
   // between separate actions (combat damage is likewise computed fresh and instantaneous each time,
   // never stored on the card), so there's nothing to represent short of destroying it outright.
   damageTarget(lobby, ctx, params) {
-    const amount = params.amount || 0;
+    let amount = params.amount || 0;
+    // Twinflame Tyrant doubling only applies to an OPPONENT (or their permanent) -- never to the
+    // controller's own life total or creatures, matching its real "an opponent" wording.
     const p = lobby.players[params.chosenTargetId];
-    if (p) { p.life -= amount; return; }
+    if (p) {
+      if (params.chosenTargetId !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
+      p.life -= amount; return;
+    }
     const card = lobby.cards[params.chosenTargetId];
     if (!card) return;
+    if (card.owner !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
     const bonus = attachedBonusFor(lobby, card);
     const stat = staticBonusFor(lobby, card);
     const effToughness = parsePT(card.toughness) + (card.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
@@ -2427,7 +2435,44 @@ function equipCostFromText(text) {
   return parseManaCost(m[1]);
 }
 
+// Liesa, Forgotten Archangel / Valgavoth, Terror Eater -- both read "if [some card] would die /
+// be put into a graveyard, exile it instead," a real Magic replacement effect (CR 614) that
+// intercepts a zone change BEFORE it happens rather than moving the card afterward. This app has
+// no general replacement-effect layer, so this is scoped narrowly to the one shared shape both
+// these cards need: checked once, at the single real choke point every "goes to graveyard" path
+// already funnels through (sendToGraveyardInternal), same "one function, not every call site"
+// precedent the commander-to-command-zone special case just below already established. Skips
+// commanders (their owner already gets to choose the Command Zone instead, a strictly better
+// outcome than exile that this app already automates -- not worth the added complexity of
+// modeling a real choice between the two replacement effects).
+function graveyardRedirectFor(lobby, card) {
+  if (card.isCommander) return false;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack" || c.owner === card.owner) continue;
+    const key = archiveKey(c.name);
+    // Liesa only redirects CREATURES; Valgavoth redirects any card type ("from anywhere").
+    if (card.zoneType === "creature" && key === "liesa, forgotten archangel") return true;
+    if (key === "valgavoth, terror eater") return true;
+  }
+  return false;
+}
+// Twinflame Tyrant: "If a source you control would deal damage to an opponent or a permanent an
+// opponent controls, it deals double that damage instead" -- CR 614 replacement effect. Scoped
+// here to damage a PLAYER directly takes (combat hits/trample-over and targeted damage
+// spells/abilities); doubling creature-vs-creature combat damage isn't modeled (would mean
+// touching the multi-blocker damage-assignment loop's lethal-toughness math, a much higher-risk
+// change for a less commonly relevant case) -- a disclosed narrowing, same precedent as every
+// other scope-limited card in this engine.
+function damageMultiplierFor(lobby, controllerId) {
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "twinflame tyrant") return 2;
+  }
+  return 1;
+}
 function sendToGraveyardInternal(lobby, card) {
+  if (graveyardRedirectFor(lobby, card)) { exileCardInternal(lobby, card); return; }
   delete lobby.cards[card.id];
   if (lobby.targets[card.id]) delete lobby.targets[card.id];
   io.to(lobby.id).emit("cardRemove", card.id);
@@ -2668,7 +2713,8 @@ function resolveCombatDamage(lobby) {
               markDamage(blocker, toThis, atkDeathtouch);
               remaining -= toThis;
             });
-            const toPlayer = atkTrample ? remaining : 0;
+            const toPlayerBase = atkTrample ? remaining : 0;
+            const toPlayer = toPlayerBase * damageMultiplierFor(lobby, attacker.owner);
             if (toPlayer > 0) {
               const defender = lobby.players[defenderId];
               if (defender) {
@@ -2703,24 +2749,35 @@ function resolveCombatDamage(lobby) {
           const blockerDesc = blockers.map((b) => { const bpt = effPT(b); return `${b.name || "a face-down creature"} (${bpt.power}/${bpt.toughness})`; }).join(" and ");
           pushLog(lobby, `${attacker.name || "A face-down creature"} (${atkAfter.power}/${atkAfter.toughness}) fights ${blockerDesc}`);
         }
+      } else if (attackerActs && archiveKey(attacker.name) === "master of cruelties") {
+        // "Whenever this creature attacks a player and isn't blocked, that player's life total
+        // becomes 1. This creature assigns no combat damage this combat" -- a life-total-SET
+        // effect, not damage (so no lifelink/cmdr-damage/dmgEvents/combatDamageToPlayer trigger --
+        // real Magic is explicit this creature deals no combat damage at all this combat).
+        const defender = lobby.players[defenderId];
+        if (defender && defender.life > 1) {
+          defender.life = 1;
+          pushLog(lobby, `${attacker.name} sets ${defender.name}'s life total to 1`);
+        }
       } else if (attackerActs) {
         const { power: atkPower } = effPT(attacker);
         const defender = lobby.players[defenderId];
         if (defender && atkPower > 0) {
-          if (hasKw(attacker, "infect")) defender.poison = (defender.poison || 0) + atkPower;
-          else defender.life -= atkPower;
+          const dealt = atkPower * damageMultiplierFor(lobby, attacker.owner);
+          if (hasKw(attacker, "infect")) defender.poison = (defender.poison || 0) + dealt;
+          else defender.life -= dealt;
           if (attacker.isCommander) {
-            defender.cmdr = (defender.cmdr || 0) + atkPower; // kept as the quick-glance total
+            defender.cmdr = (defender.cmdr || 0) + dealt; // kept as the quick-glance total
             const key = commanderSlotKey(lobby, attacker);
             if (key) {
               if (!defender.cmdrDamage) defender.cmdrDamage = {};
-              defender.cmdrDamage[key] = (defender.cmdrDamage[key] || 0) + atkPower;
+              defender.cmdrDamage[key] = (defender.cmdrDamage[key] || 0) + dealt;
             }
           }
-          pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
-          dmgEvents.push({ targetId: defenderId, amount: atkPower });
-          if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, atkPower);
-          fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, atkPower);
+          pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${dealt}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
+          dmgEvents.push({ targetId: defenderId, amount: dealt });
+          if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, dealt);
+          fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, dealt);
         }
       }
     }
@@ -4457,6 +4514,15 @@ io.on("connection", (socket) => {
       if (card.controllerSince === lobby.turn.turnNumber && !hasHaste) continue; // summoning sick
       if (!lobby.players[defenderId] || defenderId === socket.id) continue;
       candidateAttackers[cardId] = defenderId;
+    }
+    // Master of Cruelties and its functional cousins -- "This creature can only attack alone."
+    // Rejects the WHOLE declaration (nothing tapped/paid yet at this point) rather than silently
+    // dropping either the restricted creature or its co-attackers, so the player gets a clear
+    // reason and can resubmit rather than being surprised by a partial attack.
+    const attackAloneId = Object.keys(candidateAttackers).find((id) => ATTACK_ALONE_CARDS.includes(archiveKey(lobby.cards[id].name)));
+    if (attackAloneId && Object.keys(candidateAttackers).length > 1) {
+      socket.emit("actionError", `${lobby.cards[attackAloneId].name} can only attack alone.`);
+      return;
     }
     // Attack-tax effects (Propaganda and its functional cousins) -- a real static cost to declare
     // an attacker against a player who controls one, owed once per attacking creature per effect.
