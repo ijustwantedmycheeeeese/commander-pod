@@ -321,7 +321,8 @@ const CARD_ABILITIES = {
   // queueOptionalPayment.
   "smothering tithe": [{ trigger: "opponentDraws", label: "Smothering Tithe — pay {2} or its controller creates a Treasure", costLabel: "{2}", cost: { mana: "{2}" }, declinedEffects: [{ type: "createTreasureToken" }] }],
   "esper sentinel": [{ trigger: "opponentFirstNoncreatureSpell", label: "Esper Sentinel — pay {X} or its controller draws a card", xFromPower: true, declinedEffects: [{ type: "drawCards", amount: 1 }] }],
-  "rakdos, patron of chaos": [{ trigger: "endStep", label: "Rakdos, Patron of Chaos — target opponent may sacrifice two nonland permanents or you draw two cards", requiresTarget: true, targetKind: "player", effects: [{ type: "offerSacrificeOrDraw", sacrificeCount: 2, declinedDraw: 2 }] }]
+  "rakdos, patron of chaos": [{ trigger: "endStep", label: "Rakdos, Patron of Chaos — target opponent may sacrifice two nonland permanents or you draw two cards", requiresTarget: true, targetKind: "player", effects: [{ type: "offerSacrificeOrDraw", sacrificeCount: 2, declinedDraw: 2 }] }],
+  "serra's emissary": [{ trigger: "etb", label: "Serra's Emissary — choose a card type for protection", requiresTarget: true, targetKind: "cardType", effects: [{ type: "grantPlayerProtectionFromCardType" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -911,6 +912,16 @@ const EFFECTS = {
     const card = lobby.cards[params.chosenTargetId];
     if (!card || !params.keyword) return;
     if (!(card.keywords || []).includes(params.keyword)) { card.keywords = [...(card.keywords || []), params.keyword]; broadcastCard(lobby, card); }
+  },
+  // Serra's Emissary -- chosenTargetId here is the chosen CARD TYPE STRING (e.g. "Creature"), not
+  // a real card/player id, reusing the same chosenTargetId-baking chooseTargetFor already does for
+  // every other target kind. See cardTypeProtectionBlocks for where this actually gets enforced.
+  grantPlayerProtectionFromCardType(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p || !params.chosenTargetId) return;
+    p.protectionFromCardType = params.chosenTargetId;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} and their creatures gain protection from ${params.chosenTargetId}`);
   },
   // For "any target"/"creature" spells that deal damage. chosenTargetId can resolve to either a
   // player or a creature -- check players first since a player id never collides with a card id.
@@ -1736,6 +1747,10 @@ function parsedProtectionQualities(card) {
   return m[1].split(/,| and /i).map((s) => s.replace(/^\s*from\s+/i, "").trim().toLowerCase()).filter(Boolean);
 }
 const PROTECTION_COLOR_WORDS = { white: "W", blue: "U", black: "B", red: "R", green: "G" };
+// Serra's Emissary's "choose a card type" ETB choice -- the real card types a permanent/spell can
+// meaningfully have (Tribal/Kindred and Battle omitted as vanishingly unlikely to come up in
+// practice; easy to extend later).
+const CARD_TYPE_CHOICES = ["Creature", "Instant", "Sorcery", "Artifact", "Enchantment", "Planeswalker", "Land"];
 // Does `sourceCard` (the spell being cast, or the permanent whose ability is targeting) match any
 // of `targetCard`'s printed "protection from X" qualities? X can be a color ("from black") or a
 // creature type ("from Demons and from Dragons", matched via simple singular/plural stemming
@@ -1765,7 +1780,20 @@ function targetIsUntargetableBy(lobby, targetCard, controllerId, sourceCard) {
   if (targetCard.owner === controllerId) return false; // Hexproof/Ward/Protection only ever restrict OPPONENTS
   if (kw.includes("hexproof") || kw.includes("ward")) return true;
   if (sourceMatchesProtection(targetCard, sourceCard)) return true;
+  if (cardTypeProtectionBlocks(lobby, targetCard.owner, sourceCard)) return true;
   return false;
+}
+// Serra's Emissary: "You and creatures you control have protection from the chosen card type." A
+// PLAYER-level protection (tracked on the player, not printed on any one card) -- checked at the
+// same choke points as per-card Protection (targeting, blocking) and gated by the same toggle,
+// following the same "opponents only" simplification the rest of this system already uses (see
+// targetIsUntargetableBy's own comment) rather than introducing a special case that applies to
+// your own sources too.
+function cardTypeProtectionBlocks(lobby, protectedPlayerId, sourceCard) {
+  if (!lobby.settings || !lobby.settings.enforceTargetingRestrictions) return false;
+  const p = lobby.players[protectedPlayerId];
+  if (!p || !p.protectionFromCardType || !sourceCard) return false;
+  return (sourceCard.type || "").toLowerCase().includes(p.protectionFromCardType.toLowerCase());
 }
 
 // Parses a permanent's own oracle text for the single most common untyped anthem/lord pattern --
@@ -1987,6 +2015,7 @@ function playersView(lobby, viewerId) {
       cmdrDamage: p.cmdrDamage || {},
       eliminated: !!p.eliminated,
       poison: p.poison,
+      protectionFromCardType: p.protectionFromCardType || null,
       boardMat: p.boardMat || null,
       boardMatFit: p.boardMatFit || null,
       pileArt: p.pileArt || { library: null, graveyard: null, exile: null },
@@ -2335,6 +2364,7 @@ function resolveChosenTarget(lobby, entry, targetId) {
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
   if (targetKind === "player") {
     if (!lobby.players[targetId]) return { ok: false, error: "Choose a player." };
+    if (cardTypeProtectionBlocks(lobby, targetId, entry.spellCard || entry.sourceCard)) return { ok: false, error: "That player has protection from this." };
     return { ok: true };
   }
   if (targetKind === "spell") {
@@ -2342,7 +2372,10 @@ function resolveChosenTarget(lobby, entry, targetId) {
     return { ok: true };
   }
   if (targetKind === "any") {
-    if (lobby.players[targetId]) return { ok: true };
+    if (lobby.players[targetId]) {
+      if (cardTypeProtectionBlocks(lobby, targetId, entry.spellCard || entry.sourceCard)) return { ok: false, error: "That player has protection from this." };
+      return { ok: true };
+    }
     const c = lobby.cards[targetId];
     if (!c || !(c.zoneType === "creature" || (c.type || "").toLowerCase().includes("planeswalker"))) return { ok: false, error: "Choose a creature, player, or planeswalker." };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
@@ -2358,6 +2391,10 @@ function resolveChosenTarget(lobby, entry, targetId) {
   if (targetKind === "ownPermanent") {
     const c = lobby.cards[targetId];
     if (!c || c.owner !== entry.controllerId || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent you control." };
+    return { ok: true };
+  }
+  if (targetKind === "cardType") {
+    if (!CARD_TYPE_CHOICES.includes(targetId)) return { ok: false, error: "Choose a card type." };
     return { ok: true };
   }
   if (targetKind === "mode") {
@@ -3384,6 +3421,7 @@ io.on("connection", (socket) => {
       name: acctDefaults.defaultName || username,
       color: nextColor(),
       life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0,
+      protectionFromCardType: null, // Serra's Emissary -- "you and creatures you control have protection from the chosen card type"
       boardMat: defaultBoardMat ? defaultBoardMat.url : null,
       boardMatFit: defaultBoardMat ? sanitizeImgFit(defaultBoardMat) : null,
       pileArt: {
@@ -4827,19 +4865,45 @@ io.on("connection", (socket) => {
   // Open to anyone, same spirit as targeting ("anyone can Target anything") -- not gated on
   // priority, since by the time you're representing "it got countered" the actual counterspell
   // has already been cast and resolved through the normal flow.
-  socket.on("counterStackItem", (cardId) => {
+  // Optional `handCardId`: representing the counterspell WITH a real card from your hand -- its
+  // mana cost is actually charged (checked BEFORE anything is removed, so an unaffordable pick
+  // rejects cleanly and leaves the stack untouched) and the card itself goes to the graveyard,
+  // same as any spell that's been cast and resolved. Omitting it keeps the original free/no-card
+  // behavior (representing an effect this app has no automation for at all).
+  socket.on("counterStackItem", ({ targetId, handCardId } = {}) => {
     const lobby = currentLobby(); if (!lobby) return;
-    const card = removeStackItem(lobby, cardId);
+    const p = lobby.players[socket.id];
+    if (!p) return;
+    let handCard = null;
+    if (handCardId) {
+      handCard = lobby.cards[handCardId];
+      if (!handCard || handCard.owner !== socket.id || handCard.zoneType !== "hand") {
+        socket.emit("actionError", "Choose a card from your own hand to pay its cost, or counter for free.");
+        return;
+      }
+      const remaining = canAffordAndPay(p.mana, parseManaCost(handCard.manaCost), 0);
+      if (!remaining) { socket.emit("actionError", `Not enough mana to cast ${handCard.name || "that card"}.`); return; }
+      p.mana = remaining;
+    }
+    const card = removeStackItem(lobby, targetId);
     if (!card) return;
     const owner = lobby.players[card.owner];
-    const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
-    if (owner) pushLog(lobby, `${who} countered ${owner.name}'s ${card.name || "spell"}`);
+    const ownerLabel = owner ? `${owner.name}'s ` : "";
+    if (handCard) {
+      delete lobby.cards[handCard.id];
+      io.to(lobby.id).emit("cardRemove", handCard.id);
+      p.graveyard.push(toEntry(handCard));
+      pushLog(lobby, `${p.name} countered ${ownerLabel}${card.name || "spell"} by casting ${handCard.name || "a card"}`);
+    } else {
+      pushLog(lobby, `${p.name} countered ${ownerLabel}${card.name || "spell"}`);
+    }
     if (lobby.stack.length === 0) {
       lobby.priority.holderId = null;
       lobby.priority.lastActorId = null;
     }
     broadcastPlayers(lobby);
     broadcastStack(lobby);
+    socket.emit("counterStackItemResolved");
   });
 
   // ---- combat ----
@@ -4953,6 +5017,9 @@ io.on("connection", (socket) => {
         // blocker matching one of its protected qualities is illegal, symmetric to the targeting
         // check in resolveChosenTarget (same toggle, same parsedProtectionQualities parsing).
         if (attackerCard && sourceMatchesProtection(attackerCard, blockerCard)) continue;
+        // Serra's Emissary-style player-level protection: the attacker's controller has protection
+        // from the blocker's card type, so this blocker is illegal for the same reason.
+        if (attackerCard && cardTypeProtectionBlocks(lobby, attackerCard.owner, blockerCard)) continue;
         validBlockers.push(blockerId);
       }
       // CR 509.1c: Menace requires two or more blockers or none at all -- a single-blocker
