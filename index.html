@@ -2826,6 +2826,7 @@
           const anthem = anthemKeywordsFromText(c.text);
           if (!anthem.keywords.length) return;
           if (c.id === card.id && !anthem.includesSelf) return;
+          if (anthem.keywordFilter && !(card.keywords || []).some((k) => (k || "").toLowerCase() === anthem.keywordFilter.toLowerCase())) return;
           extra = extra.concat(anthem.keywords);
         });
       }
@@ -2845,14 +2846,20 @@
       }
       return clauses;
     }
-    // Mirrors server.js's anthemKeywordsFromText/parseKeywordList exactly.
+    // Mirrors server.js's anthemKeywordsFromText/parseKeywordList exactly, including the
+    // keyword-restricted "Other creatures you control WITH FLYING have..." clause (Sephara).
     function anthemKeywordsFromText(text) {
       const t = text || "";
-      let m = t.match(/other (?:creatures|permanents) you control have ([^.]+)\./i);
-      if (m) return { keywords: parseKeywordList(m[1]), includesSelf: false };
+      let m = t.match(/other creatures you control with (\w+) have ([^.]+)\./i);
+      if (m) {
+        const keywordFilter = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === m[1].toLowerCase()) || null;
+        return { keywords: parseKeywordList(m[2]), includesSelf: false, keywordFilter };
+      }
+      m = t.match(/other (?:creatures|permanents) you control have ([^.]+)\./i);
+      if (m) return { keywords: parseKeywordList(m[1]), includesSelf: false, keywordFilter: null };
       m = t.match(/creatures you control have ([^.]+)\./i);
-      if (m) return { keywords: parseKeywordList(m[1]), includesSelf: true };
-      return { keywords: [], includesSelf: false };
+      if (m) return { keywords: parseKeywordList(m[1]), includesSelf: true, keywordFilter: null };
+      return { keywords: [], includesSelf: false, keywordFilter: null };
     }
     function parseKeywordList(raw) {
       return raw.split(/,| and /i).map((s) => s.trim())
