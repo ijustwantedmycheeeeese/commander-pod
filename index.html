@@ -691,6 +691,15 @@
         </div>
 
         <div class="mm-section">
+          <div class="mm-label">Rules <span style="font-weight:400;text-transform:none;font-size:10px;color:#8a7a55;">(host only -- seed of a future casual/tournament ruleset picker)</span></div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+            <input type="checkbox" id="rule-enforce-targeting" onchange="setLobbySetting('enforceTargetingRestrictions', this.checked)">
+            Enforce Protection / Hexproof / Ward / Shroud as real targeting restrictions
+          </label>
+          <div class="mm-hint" style="margin-top:2px;">Off = the old behavior (cosmetic badges only, anyone can target anything).</div>
+        </div>
+
+        <div class="mm-section">
           <div class="mm-label">Voice Chat <span style="font-weight:400;text-transform:none;font-size:10px;color:#e0a030;">(experimental)</span></div>
           <div class="flex-row" style="margin-bottom:4px;">
             <button class="mini-btn" id="voice-join-btn" onclick="joinVoice()">Join Voice</button>
@@ -1214,6 +1223,46 @@
     let currentTurn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
     let selectedDiscardIds = new Set();
     let amSpectator = false;
+    let currentLobbySettings = { enforceTargetingRestrictions: true };
+    let amLobbyHost = false;
+    socket.on("lobbySettings", (s) => { currentLobbySettings = s || currentLobbySettings; renderLobbySettingsUI(); });
+
+    // Client-side mirror of the server's Protection parsing (targetIsUntargetableBy /
+    // sourceMatchesProtection in server.js) -- used ONLY to pre-filter what's offered as clickable
+    // (targets, blockers), never as the actual enforcement, which always happens server-side
+    // regardless of what this returns. Keep these two in sync if the server-side parsing ever changes.
+    function parsedProtectionQualities(card) {
+      const m = (card.text || "").match(/protection from ([^.\n]+)/i);
+      if (!m) return [];
+      return m[1].split(/,| and /i).map((s) => s.replace(/^\s*from\s+/i, "").trim().toLowerCase()).filter(Boolean);
+    }
+    const PROTECTION_COLOR_WORDS = { white: "W", blue: "U", black: "B", red: "R", green: "G" };
+    function sourceMatchesProtection(targetCard, sourceCard) {
+      const qualities = parsedProtectionQualities(targetCard);
+      if (!qualities.length || !sourceCard) return false;
+      return qualities.some((q) => {
+        if (q === "everything") return true;
+        if (PROTECTION_COLOR_WORDS[q]) return (sourceCard.colors || []).includes(PROTECTION_COLOR_WORDS[q]);
+        const singular = q.replace(/s$/, "");
+        return (sourceCard.type || "").toLowerCase().includes(singular);
+      });
+    }
+    function setLobbySetting(key, value) { socket.emit("setLobbySetting", { key, value }); }
+    function renderLobbySettingsUI() {
+      const chk = document.getElementById("rule-enforce-targeting");
+      if (!chk) return;
+      chk.checked = !!currentLobbySettings.enforceTargetingRestrictions;
+      chk.disabled = !amLobbyHost;
+    }
+    function targetIsUntargetableBy(targetCard, controllerId, sourceCard) {
+      if (!currentLobbySettings.enforceTargetingRestrictions) return false;
+      const kw = effectiveKeywords(targetCard).map((k) => (k || "").toLowerCase());
+      if (kw.includes("shroud")) return true;
+      if (targetCard.owner === controllerId) return false;
+      if (kw.includes("hexproof") || kw.includes("ward")) return true;
+      if (sourceMatchesProtection(targetCard, sourceCard)) return true;
+      return false;
+    }
 
     // Spectators never appear in `players` (myId matches nothing there), which already makes
     // most per-card/per-seat UI naturally hide itself -- this just covers the handful of
@@ -1245,6 +1294,7 @@
     let pendingTargetChoiceKind = "creature";
     let pendingTargetChoiceModes = null; // [label, label, ...] when kind is "mode" (a modal spell)
     let pendingTargetChoiceHandFilter = null; // [type, type, ...] when kind is "handCard" (Kaalia's ability)
+    let pendingTargetChoiceSource = null; // {colors, type} of the spell/ability doing the targeting -- for client-side Protection pre-filtering
 
     let myAccountAvatar = null;
     let myAccountDefaultName = null;
@@ -1309,6 +1359,9 @@
       currentCombat = data.combat || currentCombat;
       currentStack = data.stack || [];
       currentPriority = data.priority || currentPriority;
+      currentLobbySettings = data.settings || currentLobbySettings;
+      amLobbyHost = !!data.isHost;
+      renderLobbySettingsUI();
 
       applySpectatorUI();
       renderSpectatorRoster(data.spectatorRoster || []);
@@ -1340,6 +1393,7 @@
         pendingTargetChoiceKind = data.pendingTargetChoice.targetKind || "creature";
         pendingTargetChoiceModes = data.pendingTargetChoice.modes || null;
         pendingTargetChoiceHandFilter = data.pendingTargetChoice.handTypeFilter || null;
+        pendingTargetChoiceSource = { colors: data.pendingTargetChoice.sourceColors || [], type: data.pendingTargetChoice.sourceType || "" };
         showTargetChoiceBanner();
       } else {
         pendingTargetChoiceId = null;
@@ -1424,6 +1478,7 @@
       pendingTargetChoiceKind = data.targetKind || "creature";
       pendingTargetChoiceModes = data.modes || null;
       pendingTargetChoiceHandFilter = data.handTypeFilter || null;
+      pendingTargetChoiceSource = { colors: data.sourceColors || [], type: data.sourceType || "" };
       showTargetChoiceBanner();
       playTargetNeededCue();
       // Which cards/stack items/players light up as legal-looking targets depends on the kind that
@@ -1451,13 +1506,18 @@
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "any") return card.zoneType === "creature" || (card.type || "").toLowerCase().includes("planeswalker");
       if (kind === "player" || kind === "spell" || kind === "mode") return false; // battlefield cards are never legal for these
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
         return !filter.length || filter.some((t) => (card.type || "").toLowerCase().includes(t.toLowerCase()));
       }
+      // Protection/Hexproof/Shroud/Ward pre-filtering -- mirrors resolveChosenTarget's real
+      // enforcement server-side, applied here too so an untargetable creature never lights up as
+      // clickable in the first place (same "never offer a choice that silently does nothing"
+      // principle as the blocker checklist). myId is who's doing the targeting.
+      if (targetIsUntargetableBy(card, myId, pendingTargetChoiceSource)) return false;
+      if (kind === "any") return card.zoneType === "creature" || (card.type || "").toLowerCase().includes("planeswalker");
       return card.zoneType === kind;
     }
     function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }
@@ -3981,19 +4041,41 @@
         const atkOwner = atk ? players[atk.owner] : null;
         const row = document.createElement("div");
         row.className = "zone-card-row";
-        // CR 509.1b: a creature without flying or reach can't legally block a flying attacker --
-        // filtered out here (not just rejected server-side) so the dropdown never offers an illegal
-        // choice in the first place, matching this app's rule of never letting a player pick
-        // something that will silently do nothing on Confirm.
-        const atkFlying = atk && effectiveKeywords(atk).some((k) => (k || "").toLowerCase() === "flying");
-        const legalBlockers = myCreatures.filter((c) => !atkFlying || effectiveKeywords(c).some((k) => (k || "").toLowerCase() === "flying" || (k || "").toLowerCase() === "reach"));
-        const options = legalBlockers.map((c) => `<option value="${c.id}">${escapeHtml(c.name || '')} (${effectivePT(c)})</option>`).join("");
+        row.style.flexDirection = "column";
+        row.style.alignItems = "flex-start";
+        // Every legality check the server will actually enforce, mirrored here so the checklist
+        // never offers a choice that would silently do nothing (or get silently dropped, for
+        // Menace) on Confirm -- CR 509.1b flying/reach, Protection's can't-be-blocked-by facet
+        // (toggle-gated, see targetIsUntargetableBy/currentLobbySettings), and Menace itself,
+        // which doesn't filter WHICH creatures are legal so much as require picking 2+ of them.
+        const atkKw = atk ? effectiveKeywords(atk).map((k) => (k || "").toLowerCase()) : [];
+        const atkFlying = atkKw.includes("flying");
+        const atkMenace = atkKw.includes("menace");
+        const legalBlockers = myCreatures.filter((c) => {
+          if (atkFlying) {
+            const bkw = effectiveKeywords(c).map((k) => (k || "").toLowerCase());
+            if (!bkw.includes("flying") && !bkw.includes("reach")) return false;
+          }
+          if (atk && sourceMatchesProtection(atk, c)) return false;
+          return true;
+        });
         const visibleName = atk && !atk.faceDown ? escapeHtml(atk.name || '') : "Face-down attacker";
-        const flyingHint = atkFlying && legalBlockers.length < myCreatures.length ? ` <span style="color:#8a7a55;font-size:11px;">(flying -- only creatures with flying/reach can block)</span>` : "";
+        const hints = [];
+        if (atkFlying) hints.push("flying -- only flying/reach can block");
+        if (atkMenace) hints.push("menace -- needs 2+ blockers or none");
+        if (atk && parsedProtectionQualities(atk).length && currentLobbySettings.enforceTargetingRestrictions) hints.push("protection from " + parsedProtectionQualities(atk).join("/"));
+        const hintHtml = hints.length ? ` <span style="color:#8a7a55;font-size:11px;">(${hints.join(", ")})</span>` : "";
+        const checkboxes = legalBlockers.map((c) => `
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;margin:2px 0;">
+            <input type="checkbox" class="blk-check" data-attacker="${attackerId}" value="${c.id}">
+            ${escapeHtml(c.name || '')} (${effectivePT(c)})
+          </label>`).join("") || `<div style="color:#8a7a55;font-size:11px;">No legal blockers for this attacker.</div>`;
         row.innerHTML = `
-          <img src="${escapeHtml(atk && !atk.faceDown ? atk.img : '')}" class="zone-card-thumb">
-          <div class="zone-card-name">${visibleName} (${atk ? effectivePT(atk) : "0/0"}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}${flyingHint}</div>
-          <select class="blk-select" data-attacker="${attackerId}"><option value="">No block</option>${options}</select>`;
+          <div style="display:flex;align-items:center;gap:8px;width:100%;">
+            <img src="${escapeHtml(atk && !atk.faceDown ? atk.img : '')}" class="zone-card-thumb">
+            <div class="zone-card-name">${visibleName} (${atk ? effectivePT(atk) : "0/0"}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}${hintHtml}</div>
+          </div>
+          <div style="margin-left:44px;">${checkboxes}</div>`;
         body.appendChild(row);
       });
       document.getElementById("blockers-modal").style.display = "flex";
@@ -4001,11 +4083,13 @@
     function submitBlockers(noBlocks) {
       const assignments = {};
       if (!noBlocks) {
-        document.querySelectorAll("#blockers-modal-body .blk-select").forEach((sel) => {
-          assignments[sel.dataset.attacker] = sel.value || null;
+        document.querySelectorAll("#blockers-modal-body .blk-check:checked").forEach((chk) => {
+          const attackerId = chk.dataset.attacker;
+          if (!assignments[attackerId]) assignments[attackerId] = [];
+          assignments[attackerId].push(chk.value);
         });
       } else {
-        Object.entries(currentCombat.attackers || {}).forEach(([cardId, defId]) => { if (defId === myId) assignments[cardId] = null; });
+        Object.entries(currentCombat.attackers || {}).forEach(([cardId, defId]) => { if (defId === myId) assignments[cardId] = []; });
       }
       socket.emit("declareBlockers", assignments);
       document.getElementById("blockers-modal").style.display = "none";
