@@ -1333,6 +1333,7 @@
     let pendingTargetChoiceHandFilter = null; // [type, type, ...] when kind is "handCard" (Kaalia's ability)
     let pendingTargetChoiceSource = null; // {colors, type} of the spell/ability doing the targeting -- for client-side Protection pre-filtering
     let pendingTargetChoiceMinCmc = null; // minimum mana value required (Despark-style) when kind is "permanent"
+    let pendingCommanderChoices = null; // [{slot,name}, ...] when kind is "ownCommanderInZone" (Hellkite Courser)
 
     // Non-null while an OPPONENT'S ability is offering ME an optional payment (Smothering Tithe,
     // Esper Sentinel, Rakdos, Patron of Chaos) -- distinct from pendingTargetChoiceId, since here
@@ -1444,6 +1445,7 @@
         pendingTargetChoiceHandFilter = data.pendingTargetChoice.handTypeFilter || null;
         pendingTargetChoiceSource = { colors: data.pendingTargetChoice.sourceColors || [], type: data.pendingTargetChoice.sourceType || "" };
         pendingTargetChoiceMinCmc = data.pendingTargetChoice.minCmc || null;
+        pendingCommanderChoices = data.pendingTargetChoice.commanderChoices || null;
         showTargetChoiceBanner();
       } else {
         pendingTargetChoiceId = null;
@@ -1548,6 +1550,7 @@
       pendingTargetChoiceHandFilter = data.handTypeFilter || null;
       pendingTargetChoiceSource = { colors: data.sourceColors || [], type: data.sourceType || "" };
       pendingTargetChoiceMinCmc = data.minCmc || null;
+      pendingCommanderChoices = data.commanderChoices || null;
       showTargetChoiceBanner();
       playTargetNeededCue();
       // Which cards/stack items/players light up as legal-looking targets depends on the kind that
@@ -1610,10 +1613,11 @@
       if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
       if (kind === "ownGraveyardCreature") return "Open your Graveyard and click \"Target This\" on a creature card.";
       if (kind === "anyGraveyardCreature") return "Open any player's Graveyard and click \"Target This\" on a creature card.";
+      if (kind === "ownCommanderInZone") return "Choose a commander from the Command Zone:";
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal instead
+      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownCommanderInZone") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal or as mode-style buttons instead
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
@@ -1645,6 +1649,9 @@
       } else if (pendingTargetChoiceKind === "cardType") {
         el.style.display = "flex";
         el.innerHTML = CARD_TYPE_CHOICES.map((t) => `<button class="mini-btn" onclick="chooseTargetFor('${t}')">${t}</button>`).join("");
+      } else if (pendingTargetChoiceKind === "ownCommanderInZone" && pendingCommanderChoices) {
+        el.style.display = "flex";
+        el.innerHTML = pendingCommanderChoices.map((c) => `<button class="mini-btn" onclick="chooseTargetFor('${c.slot}')">${escapeHtml(c.name || "Commander")}</button>`).join("");
       } else {
         el.style.display = "none"; el.innerHTML = "";
       }

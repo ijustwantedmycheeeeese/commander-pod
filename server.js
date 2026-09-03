@@ -333,7 +333,8 @@ const CARD_ABILITIES = {
     { trigger: "youCastSpell", colorFilter: "W", label: "Balefire Liege — gain 3 life", requiresTarget: false, effects: [{ type: "gainLife", target: "controller", amount: 3 }] }
   ],
   "reya dawnbringer": [{ trigger: "upkeep", label: "Reya Dawnbringer — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
-  "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }]
+  "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
+  "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -1010,11 +1011,57 @@ const EFFECTS = {
       label: `${card.name || "A creature"} — exile (Whip of Erebos)`, effects: [{ type: "exileChosenCardById", targetCardId: card.id }]
     });
   },
+  // Liesa, Forgotten Archangel's delayed return-to-hand -- entryId/ownerId baked in at queue time
+  // (see fireLiesaReturnToHandTrigger). If the card already left that graveyard some other way by
+  // the time this resolves (redirected to exile, reanimated elsewhere, etc.), it simply can't be
+  // found and this fizzles -- matches real Magic's "the delayed trigger has no legal target
+  // anymore" outcome, not a bug.
+  returnGraveyardEntryToHandById(lobby, ctx, params) {
+    const owner = lobby.players[params.ownerId];
+    if (!owner) return;
+    const idx = (owner.graveyard || []).findIndex((e) => e.id === params.entryId);
+    if (idx === -1) return;
+    const [entry] = owner.graveyard.splice(idx, 1);
+    spawnBattlefieldCard(lobby, { ...entry, owner: params.ownerId, zoneType: "hand" });
+    broadcastPlayers(lobby);
+  },
   // A specific, pre-chosen card baked in at queue time (see queueDelayedTrigger) -- not a player
   // choice, so this doesn't go through the normal chosenTargetId flow.
   exileChosenCardById(lobby, ctx, params) {
     const card = lobby.cards[params.targetCardId];
     if (card) exileCardInternal(lobby, card);
+  },
+  // Hellkite Courser -- chosenTargetId here is the commander's SLOT (0 or 1, see the
+  // ownCommanderInZone targetKind), not a card id. Puts it onto the battlefield with temporary
+  // haste, then queues a delayed trigger returning it to the Command Zone at the next end step.
+  putCommanderFromZoneWithHaste(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    const slot = parseInt(params.chosenTargetId, 10);
+    const cmd = p && p.commanders[slot];
+    if (!cmd || cmd.battlefieldId) return;
+    const card = spawnBattlefieldCard(lobby, { ...cmd, owner: ctx.controllerId, zoneType: classifyType(cmd.type), isCommander: true });
+    cmd.battlefieldId = card.id;
+    broadcastPlayers(lobby);
+    fireEtbTriggers(lobby, card);
+    grantTemporaryKeyword(lobby, card, "Haste");
+    queueDelayedTrigger(lobby, {
+      firesAtPhase: "End Step", controllerId: ctx.controllerId, sourceCard: card,
+      label: `${card.name || "A commander"} — return to the Command Zone (Hellkite Courser)`, effects: [{ type: "returnCommanderToZoneById", targetCardId: card.id }]
+    });
+  },
+  // A specific, pre-chosen commander (by its CURRENT battlefield id, baked in at queue time)
+  // returning directly to the Command Zone -- not dying, so this bypasses
+  // sendToGraveyardInternal's commander special-case entirely and just does the equivalent
+  // directly (clearCommanderRef already resets battlefieldId to null, the same "docked commander
+  // is castable again" state that special case relies on).
+  returnCommanderToZoneById(lobby, ctx, params) {
+    const card = lobby.cards[params.targetCardId];
+    if (!card) return;
+    const owner = lobby.players[card.owner];
+    clearCommanderRef(lobby, card);
+    delete lobby.cards[card.id];
+    io.to(lobby.id).emit("cardRemove", card.id);
+    if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "commander"} returned to the Command Zone`);
   },
   // For "any target"/"creature" spells that deal damage. chosenTargetId can resolve to either a
   // player or a creature -- check players first since a player id never collides with a card id.
@@ -1656,7 +1703,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     stack: lobby.stack.map((c) => maskCard(c, socketId)),
     priority: lobby.priority,
-    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null }; })() : null,
+    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null, commanderChoices: myPendingChoice.commanderChoices || null }; })() : null,
     pendingOptionalPayment: myPendingPayment ? { id: myPendingPayment.id, label: myPendingPayment.label, costLabel: myPendingPayment.costLabel } : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
@@ -2521,7 +2568,7 @@ function promptTargetChoice(lobby, entry) {
   // what they were told to click got a confusing rejection with no way to tell what went wrong.
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
   const src = entry.spellCard || entry.sourceCard;
-  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null });
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null, commanderChoices: entry.commanderChoices || null });
 }
 // Discards any pending target choices belonging to a departing controller (a real disconnect/leave
 // or an elimination) -- otherwise the table would be stuck forever waiting on a target that will
@@ -2589,6 +2636,12 @@ function resolveChosenTarget(lobby, entry, targetId) {
   }
   if (targetKind === "anyGraveyardCreature") {
     if (!findGraveyardEntry(lobby, targetId, "creature")) return { ok: false, error: "Choose a creature card in a graveyard." };
+    return { ok: true };
+  }
+  if (targetKind === "ownCommanderInZone") {
+    const p = lobby.players[entry.controllerId];
+    const slot = parseInt(targetId, 10);
+    if (!p || !Number.isInteger(slot) || !p.commanders[slot] || p.commanders[slot].battlefieldId) return { ok: false, error: "Choose a commander in your command zone." };
     return { ok: true };
   }
   if (targetKind === "mode") {
@@ -2665,7 +2718,18 @@ function fireTrigger(lobby, card, ability) {
       const hasMatch = p && (p.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("creature"));
       if (!hasMatch) return;
     }
-    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter });
+    // Hellkite Courser: "put a commander you own from the command zone onto the battlefield" --
+    // there are only ever 1-2 real choices, so the eligible commanders (in the zone, not currently
+    // on the battlefield) are computed here and sent as commanderChoices (slot + name) for the
+    // client to render as real, named buttons rather than a battlefield click. Same CR 603.3c
+    // auto-fizzle shape as the other targetKinds above if neither commander qualifies.
+    let commanderChoices = null;
+    if (ability.targetKind === "ownCommanderInZone") {
+      const p = lobby.players[card.owner];
+      commanderChoices = (p ? p.commanders : []).map((cmd, slot) => (cmd && !cmd.battlefieldId) ? { slot, name: cmd.name } : null).filter(Boolean);
+      if (!commanderChoices.length) return;
+    }
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, commanderChoices });
   } else {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
   }
@@ -2774,6 +2838,29 @@ function fireDeathTriggers(lobby, card) {
   if (!lobby.turn.started) return;
   getAutomatedAbilities(card.name, "death").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalTrigger(lobby, "deathYouControl", card.owner);
+  fireLiesaReturnToHandTrigger(lobby, card);
+}
+// Liesa, Forgotten Archangel -- "Whenever another nontoken creature you control dies, return that
+// card to its owner's hand at the beginning of the next end step." Aristocrats-style (scans the
+// dying creature's controller's OTHER permanents for a real Liesa), but needs the dying card's own
+// identity baked into a delayed trigger -- fireGlobalTrigger's generic dispatch has no way to
+// carry that, so this is its own dedicated function, same shape as
+// fireGlobalOtherCreatureEtbTriggers. Called from fireDeathTriggers, BEFORE the card is actually
+// removed from lobby.cards, so card.id/name/originalOwner are all still valid to bake in.
+// "Nontoken" isn't checked -- no isToken flag exists anywhere in this app's data model, a
+// disclosed simplification shared with Rakdos, Patron of Chaos's identical gap.
+function fireLiesaReturnToHandTrigger(lobby, dyingCard) {
+  if (dyingCard.zoneType !== "creature") return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.id === dyingCard.id || c.owner !== dyingCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (archiveKey(c.name) !== "liesa, forgotten archangel") continue;
+    queueDelayedTrigger(lobby, {
+      firesAtPhase: "End Step", controllerId: c.owner, sourceCard: c,
+      label: `${dyingCard.name || "A creature"} — return to hand (Liesa, Forgotten Archangel)`,
+      effects: [{ type: "returnGraveyardEntryToHandById", entryId: dyingCard.id, ownerId: dyingCard.originalOwner || dyingCard.owner }]
+    });
+  }
 }
 
 // The non-self-referential counterpart to fireEtbTriggers/fireDeathTriggers/fireAttackTriggers,
