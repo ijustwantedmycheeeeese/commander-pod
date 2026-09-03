@@ -2878,7 +2878,14 @@
       dePreviewClear();
       deRenderCommanders();
       deRenderLibrary();
-      deckEditorReturnScreen = document.getElementById("app-root").style.display === "flex" ? "app-root" : "main-menu";
+      // Only recompute this on a genuine "entering the editor" transition -- app-root is ALWAYS
+      // display:none by the time we get here on a second call (loading a different existing deck
+      // via the in-editor "Edit existing deck" dropdown while already inside the editor), which
+      // would otherwise silently overwrite a correct "return to app-root" with "main-menu",
+      // stranding a mid-table edit at the Main Menu with no way back in on Close.
+      if (document.getElementById("deck-editor-screen").style.display !== "flex") {
+        deckEditorReturnScreen = document.getElementById("app-root").style.display === "flex" ? "app-root" : "main-menu";
+      }
       document.getElementById("main-menu").style.display = "none";
       document.getElementById("app-root").style.display = "none";
       document.getElementById("deck-editor-screen").style.display = "flex";
