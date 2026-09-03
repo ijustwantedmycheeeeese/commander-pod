@@ -664,7 +664,16 @@ const SPELL_ABILITIES = {
   // addition, not a one-off: any future "destroy/exile target permanent [with condition]" card can
   // reuse this same targetKind.
   "despark": { label: "Despark — destroy target permanent with mana value 4 or greater", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "permanent", minCmc: 4 },
-  "chaos warp": { label: "Chaos Warp — shuffle target permanent into its owner's library, they reveal the top card and may put a permanent onto the battlefield", effects: [{ type: "chaosWarpTarget" }], requiresTarget: true, targetKind: "permanent" }
+  "chaos warp": { label: "Chaos Warp — shuffle target permanent into its owner's library, they reveal the top card and may put a permanent onto the battlefield", effects: [{ type: "chaosWarpTarget" }], requiresTarget: true, targetKind: "permanent" },
+  // Kicker isn't a general mechanism this app has -- modeled as an ordinary modal choice (reusing
+  // the exact same "choose one" engine Rip Apart/Rakdos Charm already use) between the unkicked and
+  // kicked effect, rather than a real optional-additional-cost prompt at cast time. The kicker's
+  // extra {W} isn't automatically charged -- a disclosed simplification, same precedent as every
+  // other narrowed cost/choice in this app.
+  "orim's chant": { label: "Orim's Chant — choose one", modes: [
+    { label: "Orim's Chant — target player can't cast spells this turn", requiresTarget: true, targetKind: "player", effects: [{ type: "restrictCantCastSpells" }] },
+    { label: "Orim's Chant, kicked (pay {W} more) — target player can't cast spells, and creatures can't attack, this turn", requiresTarget: true, targetKind: "player", effects: [{ type: "restrictCantCastSpells" }, { type: "restrictCreaturesCantAttack" }] }
+  ] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -868,6 +877,22 @@ const EFFECTS = {
   bounceTargetToHand(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (card) bounceCardToHandInternal(lobby, card);
+  },
+  // Orim's Chant -- "target player can't cast spells this turn." Cleared at the same end-of-turn
+  // cleanup as temporaryKeywords (see cleanupTemporaryKeywords); enforced in playCard/freeCastCard
+  // via canCastSpells, the one choke point both real cast paths already share.
+  restrictCantCastSpells(lobby, ctx, params) {
+    const p = lobby.players[params.chosenTargetId];
+    if (!p) return;
+    p.cantCastSpells = true;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} can't cast spells this turn`);
+  },
+  // Orim's Chant, kicked -- "creatures can't attack this turn." Table-wide (the real wording has
+  // no "you control"), enforced in declareAttackers, cleared at the same cleanup.
+  restrictCreaturesCantAttack(lobby, ctx, params) {
+    lobby.creaturesCantAttack = true;
+    pushLog(lobby, `Creatures can't attack this turn`);
   },
   tapTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
@@ -1267,6 +1292,7 @@ function createLobbyState(id, name, hostUsername, password) {
     // long-standing "anyone can target anything, players self-police" trust model). Host-only to
     // change (see setLobbySetting), same precedent as deleteLobby.
     settings: { enforceTargetingRestrictions: true },
+    creaturesCantAttack: false, // Orim's Chant, kicked -- "creatures can't attack this turn," cleared at cleanup
     cards: {},        // battlefield/hand cards, keyed by id
     players: {},      // socket.id -> player state
     targets: {},      // cardId -> [playerId, ...]
@@ -1337,6 +1363,7 @@ function restoreLobbies() {
     if (!l.pendingTargetChoices) l.pendingTargetChoices = [];
     if (!l.pendingOptionalPayments) l.pendingOptionalPayments = [];
     if (!l.settings) l.settings = { enforceTargetingRestrictions: true };
+    if (l.creaturesCantAttack === undefined) l.creaturesCantAttack = false;
     // Nobody is actually connected right after a restart — mark every seated player as
     // disconnected so the normal reconnect-grace mechanism below picks up the cleanup/resume.
     for (const sid in l.players) {
@@ -1730,7 +1757,10 @@ function grantTemporaryKeyword(lobby, card, keyword) {
 }
 // Called once per real new turn (the End Step -> next Untap wraparound in advanceOnePhase) --
 // every temporary keyword granted at any point during the turn that just ended is now expired,
-// same real-Magic cleanup-step timing (CR 514) "until end of turn" effects actually follow.
+// same real-Magic cleanup-step timing (CR 514) "until end of turn" effects actually follow. Also
+// clears every other "this turn" restriction this app tracks (Orim's Chant's cast-restriction and
+// its kicked "creatures can't attack" clause) -- one shared cleanup point for anything scoped to
+// "this turn", rather than teaching advanceOnePhase about each one individually.
 function cleanupTemporaryKeywords(lobby) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
@@ -1739,6 +1769,12 @@ function cleanupTemporaryKeywords(lobby) {
       broadcastCard(lobby, c);
     }
   }
+  let restrictionsChanged = false;
+  for (const pid in lobby.players) {
+    if (lobby.players[pid].cantCastSpells) { lobby.players[pid].cantCastSpells = false; restrictionsChanged = true; }
+  }
+  if (restrictionsChanged) broadcastPlayers(lobby);
+  if (lobby.creaturesCantAttack) lobby.creaturesCantAttack = false;
 }
 // A card's keywords plus whatever any attached equipment/aura grants, plus whatever any OTHER
 // permanent's static keyword-anthem grants it -- the one thing that matters for gameplay
@@ -2044,6 +2080,7 @@ function playersView(lobby, viewerId) {
       eliminated: !!p.eliminated,
       poison: p.poison,
       protectionFromCardType: p.protectionFromCardType || null,
+      cantCastSpells: !!p.cantCastSpells,
       boardMat: p.boardMat || null,
       boardMatFit: p.boardMatFit || null,
       pileArt: p.pileArt || { library: null, graveyard: null, exile: null },
@@ -2205,6 +2242,17 @@ function checkTiming(lobby, socketId, card) {
   }
   if (lobby.turn.phase !== "Main 1" && lobby.turn.phase !== "Main 2") {
     return { ok: false, error: `You can only play ${card.name || "that"} during a main phase.` };
+  }
+  return { ok: true };
+}
+
+// Orim's Chant's "can't cast spells this turn" -- checked at the same call sites as checkTiming
+// (playCard, freeCastCard), but only for actual SPELLS: playing a LAND is never "casting a spell"
+// in real Magic, so a land classification is exempt.
+function canCastSpells(lobby, socketId, card) {
+  if (classifyType(card.type) === "mana") return { ok: true };
+  if (lobby.players[socketId] && lobby.players[socketId].cantCastSpells) {
+    return { ok: false, error: `You can't cast spells this turn.` };
   }
   return { ok: true };
 }
@@ -3748,6 +3796,8 @@ io.on("connection", (socket) => {
     if (card.zoneType === "hand") {
       const timing = checkTiming(lobby, socket.id, card);
       if (!timing.ok) { socket.emit("actionError", timing.error); return; }
+      const castCheck = canCastSpells(lobby, socket.id, card);
+      if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
       const result = attemptPlay(p, card, zoneType, x);
       if (!result.ok) { socket.emit("actionError", result.error); return; }
       if (zoneType === "mana" || !lobby.turn.started) {
@@ -3792,6 +3842,8 @@ io.on("connection", (socket) => {
     const targetZoneType = classifyType(card.type);
     const timing = checkTiming(lobby, socket.id, card);
     if (!timing.ok) { socket.emit("actionError", timing.error); return; }
+    const castCheck = canCastSpells(lobby, socket.id, card);
+    if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
     const result = attemptPlay(p, card, targetZoneType, xValue);
     if (!result.ok) { socket.emit("actionError", result.error); return; }
     if (targetZoneType === "mana" || !lobby.turn.started) {
@@ -3826,6 +3878,8 @@ io.on("connection", (socket) => {
     const card = lobby.cards[id];
     const p = lobby.players[socket.id];
     if (!card || !p || card.owner !== socket.id || card.zoneType !== "hand") return;
+    const castCheck = canCastSpells(lobby, socket.id, card);
+    if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
     const targetZoneType = classifyType(card.type);
     if (targetZoneType === "mana" || !lobby.turn.started) {
       card.zoneType = targetZoneType;
@@ -4942,6 +4996,11 @@ io.on("connection", (socket) => {
     if (!lobby.turn.started || lobby.turn.order[lobby.turn.activeIndex] !== socket.id) return;
     if (lobby.stack.length > 0) return; // can't move combat forward with something pending
     if (lobby.combat.step !== "declareAttackers") return;
+    // Orim's Chant, kicked -- "creatures can't attack this turn," table-wide.
+    if (lobby.creaturesCantAttack && Object.keys(assignments || {}).length > 0) {
+      socket.emit("actionError", "Creatures can't attack this turn.");
+      return;
+    }
     // First pass: which submitted assignments are even legal attackers at all (unchanged checks),
     // without mutating/tapping anything yet -- the attack-tax total right after needs the FULL
     // legal set to compute correctly, and an unaffordable tax should reject the whole declaration
