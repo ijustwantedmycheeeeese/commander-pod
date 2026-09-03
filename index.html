@@ -2819,7 +2819,7 @@
     }
     function effectiveKeywords(card) {
       const bonus = attachedBonusFor(card);
-      let extra = [...(card.keywords || []), ...bonus.keywords];
+      let extra = [...(card.keywords || []), ...bonus.keywords, ...(card.temporaryKeywords || []).map((tk) => tk.keyword)];
       if (card.zoneType === "creature") {
         Object.values(allCards).forEach((c) => {
           if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") return;
