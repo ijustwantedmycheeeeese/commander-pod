@@ -134,6 +134,8 @@
     #preview-panel { position: fixed; top: 64px; right: 16px; width: 260px; max-height: 80vh; overflow-y: auto; z-index: 50; background: #171310; border: 1px solid #5a4423; border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); display: none; }
     #target-choice-banner { display: none; flex-direction: column; align-items: center; position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: #171310; border: 2px solid #d4af37; border-radius: 8px; padding: 10px 18px; z-index: 150; text-align: center; box-shadow: 0 4px 16px rgba(0,0,0,0.7); }
     #target-choice-banner-text { color: #d4af37; font-weight: 600; font-size: 13px; }
+    #optional-payment-banner { display: none; flex-direction: column; align-items: center; position: fixed; top: 130px; left: 50%; transform: translateX(-50%); background: #171310; border: 2px solid #7fb8d9; border-radius: 8px; padding: 10px 18px; z-index: 150; text-align: center; box-shadow: 0 4px 16px rgba(0,0,0,0.7); max-width: 360px; }
+    #optional-payment-banner-text { color: #7fb8d9; font-weight: 600; font-size: 13px; }
 
     #combat-view-panel { display: none; position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); width: 340px; max-height: 40vh; overflow-y: auto; background: #171310; border: 2px solid #5a4423; border-radius: 8px; padding: 8px 10px; z-index: 120; box-shadow: 0 4px 16px rgba(0,0,0,0.7); }
     #combat-view-panel .cv-header { font-family: 'Cinzel', serif; color: #d4af37; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
@@ -491,6 +493,14 @@
       <div id="target-choice-banner-hint" style="font-size:11px;color:#a89a70;margin-top:2px;"></div>
       <div id="target-choice-mode-buttons" style="display:none;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
       <button class="mini-btn secondary" style="margin-top:6px;" onclick="cancelTargetChoice()" title="No legal target, or you just want out -- this makes it not happen">Cancel</button>
+    </div>
+
+    <div id="optional-payment-banner">
+      <div id="optional-payment-banner-text"></div>
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <button class="mini-btn" id="optional-payment-pay-btn" onclick="payOptionalCost()"></button>
+        <button class="mini-btn secondary" onclick="declineOptionalCost()">Decline</button>
+      </div>
     </div>
 
     <div id="combat-view-panel">
@@ -1297,6 +1307,13 @@
     let pendingTargetChoiceSource = null; // {colors, type} of the spell/ability doing the targeting -- for client-side Protection pre-filtering
     let pendingTargetChoiceMinCmc = null; // minimum mana value required (Despark-style) when kind is "permanent"
 
+    // Non-null while an OPPONENT'S ability is offering ME an optional payment (Smothering Tithe,
+    // Esper Sentinel, Rakdos, Patron of Chaos) -- distinct from pendingTargetChoiceId, since here
+    // I'm the one being asked to pay or decline, not the ability's own controller choosing a target.
+    let pendingOptionalPaymentId = null;
+    let pendingOptionalPaymentLabel = "";
+    let pendingOptionalPaymentCostLabel = "";
+
     let myAccountAvatar = null;
     let myAccountDefaultName = null;
     let mySavedMats = {}; // name -> url, account-wide (distinct from the per-table active boardMat)
@@ -1402,6 +1419,17 @@
         document.getElementById("target-choice-banner").style.display = "none";
       }
 
+      // Same reconnect-resume for an optional payment that was already waiting on ME specifically.
+      if (data.pendingOptionalPayment) {
+        pendingOptionalPaymentId = data.pendingOptionalPayment.id;
+        pendingOptionalPaymentLabel = data.pendingOptionalPayment.label;
+        pendingOptionalPaymentCostLabel = data.pendingOptionalPayment.costLabel || "Pay";
+        showOptionalPaymentBanner();
+      } else {
+        pendingOptionalPaymentId = null;
+        document.getElementById("optional-payment-banner").style.display = "none";
+      }
+
       // Auto-fit the whole board into view on load, instead of always starting at a fixed 100%
       // zoom that may not match this table's actual card count or the viewer's window size. A
       // brief timeout, not immediate -- the playmat's real on-screen width/height (which
@@ -1495,6 +1523,33 @@
       document.getElementById("target-choice-banner").style.display = "none";
       renderVisibleBoard(); renderStackState(); renderPlayerList();
     });
+
+    // ---- optional-payment prompts (Smothering Tithe, Esper Sentinel, Rakdos, Patron of Chaos) ----
+    socket.on("optionalPayment", (data) => {
+      pendingOptionalPaymentId = data.id;
+      pendingOptionalPaymentLabel = data.label;
+      pendingOptionalPaymentCostLabel = data.costLabel || "Pay";
+      showOptionalPaymentBanner();
+      playTargetNeededCue();
+    });
+    socket.on("optionalPaymentResolved", (id) => {
+      if (id !== pendingOptionalPaymentId) return;
+      pendingOptionalPaymentId = null;
+      document.getElementById("optional-payment-banner").style.display = "none";
+    });
+    function showOptionalPaymentBanner() {
+      document.getElementById("optional-payment-banner-text").innerText = pendingOptionalPaymentLabel;
+      document.getElementById("optional-payment-pay-btn").innerText = pendingOptionalPaymentCostLabel;
+      document.getElementById("optional-payment-banner").style.display = "flex";
+    }
+    function payOptionalCost() {
+      if (!pendingOptionalPaymentId) return;
+      socket.emit("payOptionalCost", pendingOptionalPaymentId);
+    }
+    function declineOptionalCost() {
+      if (!pendingOptionalPaymentId) return;
+      socket.emit("declineOptionalCost", pendingOptionalPaymentId);
+    }
     // targetKindLabel/targetKindMatchesCard/targetKindClickableOnStack/targetKindClickableOnPlayer
     // are the single source of truth for "what does pendingTargetChoiceKind actually accept" --
     // used both for the banner's own instructions and for scoping which clicks get intercepted, so
@@ -1505,6 +1560,7 @@
       if (kind === "spell") return "Click a spell or ability on the Stack to target it.";
       if (kind === "any") return "Click a creature, player, or spell/ability on the Stack to target it.";
       if (kind === "permanent") return `Click a creature, artifact, enchantment, or planeswalker${pendingTargetChoiceMinCmc ? ` with mana value ${pendingTargetChoiceMinCmc}+` : ""} to target it.`;
+      if (kind === "ownPermanent") return "Click one of your own permanents to sacrifice it.";
       if (kind === "mode") return "Choose one:";
       if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
@@ -1527,6 +1583,7 @@
         if (pendingTargetChoiceMinCmc && (card.cmc || 0) < pendingTargetChoiceMinCmc) return false;
         return true;
       }
+      if (kind === "ownPermanent") return card.owner === myId && (card.zoneType === "creature" || card.zoneType === "artifact");
       return card.zoneType === kind;
     }
     function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }

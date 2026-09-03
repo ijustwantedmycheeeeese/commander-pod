@@ -314,7 +314,14 @@ const CARD_ABILITIES = {
   "dragon tempest": [
     { trigger: "otherCreatureEtb", keywordFilter: ["Flying"], label: "Dragon Tempest — that creature gains haste", requiresTarget: false, effects: [{ type: "grantHasteToEnteringCreature" }] },
     { trigger: "otherCreatureEtb", typeFilter: ["Dragon"], amountSource: "count", countTypeFilter: ["Dragon"], label: "Dragon Tempest — deal damage equal to Dragons you control to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget" }] }
-  ]
+  ],
+  // "opponentDraws"/"opponentFirstNoncreatureSpell" are handled by fireGlobalOpponentDrawTriggers/
+  // fireGlobalOpponentFirstNoncreatureSpellTriggers (drawN/pushToStack hooks) rather than
+  // fireTrigger, since the choice here belongs to the OPPONENT, not this card's controller -- see
+  // queueOptionalPayment.
+  "smothering tithe": [{ trigger: "opponentDraws", label: "Smothering Tithe — pay {2} or its controller creates a Treasure", costLabel: "{2}", cost: { mana: "{2}" }, declinedEffects: [{ type: "createTreasureToken" }] }],
+  "esper sentinel": [{ trigger: "opponentFirstNoncreatureSpell", label: "Esper Sentinel — pay {X} or its controller draws a card", xFromPower: true, declinedEffects: [{ type: "drawCards", amount: 1 }] }],
+  "rakdos, patron of chaos": [{ trigger: "endStep", label: "Rakdos, Patron of Chaos — target opponent may sacrifice two nonland permanents or you draw two cards", requiresTarget: true, targetKind: "player", effects: [{ type: "offerSacrificeOrDraw", sacrificeCount: 2, declinedDraw: 2 }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -761,6 +768,34 @@ const EFFECTS = {
     const card = lobby.cards[params.chosenTargetId];
     if (card) exileCardInternal(lobby, card);
   },
+  // Sacrifice (CR 701.19), not destroy -- ignores Indestructible on purpose, unlike destroyTarget.
+  // Used for the "pay by sacrificing a permanent of your own choice" branch of an optional-payment
+  // cost (Rakdos, Patron of Chaos and its functional cousins) -- see queueOptionalPayment.
+  sacrificeTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    fireDeathTriggers(lobby, card);
+    sendToGraveyardInternal(lobby, card);
+  },
+  // Rakdos, Patron of Chaos: "target opponent may sacrifice two nonland, nontoken permanents of
+  // their choice. If they don't, you draw two cards." chosenTargetId (baked in by chooseTargetFor
+  // from the normal targetKind:"player" flow) is who gets offered the choice -- distinct from
+  // ctx.controllerId, who benefits if they decline. sourceCard is looked up fresh since this may
+  // resolve well after the source left the stack (it's already off the stack by the time this
+  // runs, being an ability's own effect).
+  offerSacrificeOrDraw(lobby, ctx, params) {
+    const targetPlayerId = params.chosenTargetId;
+    if (!lobby.players[targetPlayerId]) return;
+    const src = (ctx.sourceCard && lobby.cards[ctx.sourceCard.id]) || null;
+    const srcName = (src && src.name) || "An ability";
+    queueOptionalPayment(lobby, {
+      playerId: targetPlayerId, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: `${srcName} — sacrifice ${params.sacrificeCount || 2} nonland permanents, or its controller draws ${params.declinedDraw || 2} cards`,
+      costLabel: `Sacrifice ${params.sacrificeCount || 2} permanents`,
+      cost: { sacrificeCount: params.sacrificeCount || 2 },
+      declinedEffects: [{ type: "drawCards", amount: params.declinedDraw || 2 }]
+    });
+  },
   // Swords to Plowshares -- "Its controller gains life equal to its power": the life goes to the
   // EXILED creature's own controller (card.owner), not necessarily whoever cast this, since the
   // target is very often an opponent's creature. Power is computed the same way combat damage does
@@ -1016,6 +1051,15 @@ const EFFECTS = {
   // "{T}, Sacrifice: Add one mana of any color" activated ability exists on created tokens
   // anywhere in this app), same disclosed-simplification precedent as everywhere else a token's
   // real activated ability isn't representable.
+  // Smothering Tithe's declined-payment consequence -- same disclosed plain-artifact-token
+  // simplification as rollD20CreateTreasures just below (no sacrifice-for-mana ability on the
+  // created token).
+  createTreasureToken(lobby, ctx, params) {
+    spawnBattlefieldCard(lobby, {
+      name: "Treasure", type: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg",
+      owner: ctx.controllerId, zoneType: "artifact"
+    });
+  },
   rollD20CreateTreasures(lobby, ctx, params) {
     const roll = 1 + Math.floor(Math.random() * 20);
     const p = lobby.players[ctx.controllerId];
@@ -1139,7 +1183,11 @@ function createLobbyState(id, name, hostUsername, password) {
     // A target-requiring triggered ability queues here INSTEAD OF going on the stack until its
     // controller picks a legal target -- see queueTargetChoice. Only the front entry is actively
     // prompted; a second one firing before the first is resolved just waits its turn.
-    pendingTargetChoices: []
+    pendingTargetChoices: [],
+    // "That player may pay X; if they don't, Y happens" (Smothering Tithe, Esper Sentinel, Rakdos,
+    // Patron of Chaos) -- see queueOptionalPayment. Addressed to the AFFECTED player (an opponent
+    // of the ability's controller), not the controller themselves, unlike pendingTargetChoices.
+    pendingOptionalPayments: []
   };
 }
 function lobbySummaries() {
@@ -1189,6 +1237,7 @@ function restoreLobbies() {
     if (!l.stack) l.stack = [];
     if (!l.priority) l.priority = { holderId: null, lastActorId: null };
     if (!l.pendingTargetChoices) l.pendingTargetChoices = [];
+    if (!l.pendingOptionalPayments) l.pendingOptionalPayments = [];
     if (!l.settings) l.settings = { enforceTargetingRestrictions: true };
     // Nobody is actually connected right after a restart — mark every seated player as
     // disconnected so the normal reconnect-grace mechanism below picks up the cleanup/resume.
@@ -1402,6 +1451,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
   // know -- the chooseTarget prompt only fires once, at the moment the trigger first queued, so a
   // fresh connection (a real reload, not just this socket) would otherwise never see it.
   const myPendingChoice = lobby.pendingTargetChoices.find((c, i) => i === 0 && c.controllerId === socketId);
+  const myPendingPayment = lobby.pendingOptionalPayments.find((e) => e.playerId === socketId);
   return {
     lobbyId: lobby.id,
     lobbyName: lobby.name,
@@ -1414,6 +1464,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     stack: lobby.stack.map((c) => maskCard(c, socketId)),
     priority: lobby.priority,
     pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null }; })() : null,
+    pendingOptionalPayment: myPendingPayment ? { id: myPendingPayment.id, label: myPendingPayment.label, costLabel: myPendingPayment.costLabel } : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
     spectatorRoster: Object.values(lobby.spectators).map((s) => s.name),
@@ -1918,7 +1969,27 @@ function drawN(lobby, ownerId, n) {
     spawnBattlefieldCard(lobby, { ...entry, owner: ownerId, faceDown: true, zoneType: "hand" });
     drawn++;
   }
+  fireGlobalOpponentDrawTriggers(lobby, ownerId, drawn);
   return drawn;
+}
+// Smothering Tithe: "Whenever an OPPONENT draws a card, that player may pay {2}. If they don't,
+// you create a Treasure." Fires once per card actually drawn (a "draw 2" effect offers the payment
+// twice, independently) -- gated on lobby.turn.started, same "pregame stays trigger-free"
+// convention as every other trigger, so this correctly stays silent during the opening 7-card deal.
+function fireGlobalOpponentDrawTriggers(lobby, drawingPlayerId, count) {
+  if (!lobby.turn.started || count <= 0) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === drawingPlayerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "opponentDraws").forEach((ability) => {
+      for (let i = 0; i < count; i++) {
+        queueOptionalPayment(lobby, {
+          playerId: drawingPlayerId, controllerId: c.owner, sourceCard: c,
+          label: ability.label, costLabel: ability.costLabel, cost: ability.cost, declinedEffects: ability.declinedEffects
+        });
+      }
+    });
+  }
 }
 
 function returnAllHandToLibrary(lobby, ownerId) {
@@ -2010,6 +2081,34 @@ function pushToStack(lobby, card, casterId) {
   // spell it triggered off of" ordering. Lands never reach this function (see the doc comment
   // above), so this can't misfire for a land drop.
   fireGlobalTrigger(lobby, "youCastSpell", casterId);
+  fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
+}
+// Esper Sentinel: "Whenever an opponent casts their FIRST noncreature spell each turn, draw a card
+// unless that player pays {X}." Once-per-opponent-per-turn, tracked on the CASTING player (not the
+// source card) since it's about their own cast history, not the source's -- p._firstNoncreatureSpellTurn
+// stores the turn number it last fired, compared fresh each call (no separate reset needed, a new
+// turn number just naturally stops matching). X is dynamic (the source's own power, incl. any
+// equipment/anthem bonus), baked into the mana cost string at fire time.
+function fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, spellCard) {
+  if (!lobby.turn.started || (spellCard.type || "").toLowerCase().includes("creature")) return;
+  const casterPlayer = lobby.players[casterId];
+  if (!casterPlayer || casterPlayer._firstNoncreatureSpellTurn === lobby.turn.turnNumber) return;
+  casterPlayer._firstNoncreatureSpellTurn = lobby.turn.turnNumber;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === casterId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "opponentFirstNoncreatureSpell").forEach((ability) => {
+      let xAmount = (ability.cost && ability.cost.manaAmount) || 0;
+      if (ability.xFromPower) {
+        const bonus = attachedBonusFor(lobby, c), stat = staticBonusFor(lobby, c);
+        xAmount = Math.max(0, parsePT(c.power) + bonus.powerBonus + stat.powerBonus);
+      }
+      queueOptionalPayment(lobby, {
+        playerId: casterId, controllerId: c.owner, sourceCard: c, label: ability.label,
+        costLabel: `{${xAmount}}`, cost: { mana: `{${xAmount}}` }, declinedEffects: ability.declinedEffects
+      });
+    });
+  }
 }
 
 // The single choke point for "a card in hand is being cast." A target-requiring instant/sorcery
@@ -2066,6 +2165,28 @@ function pushAbilityToStack(lobby, { sourceCard, controllerId, label, effects })
   return item;
 }
 
+// "That player may pay X; if they don't, Y happens" (Smothering Tithe, Esper Sentinel, Rakdos,
+// Patron of Chaos) -- a real Magic pattern distinct from pendingTargetChoices in one key way: the
+// OPPONENT decides, not the ability's controller, and declining has its own real consequence
+// rather than the ability just fizzling for lack of a target. Several of these can be pending for
+// DIFFERENT players at once (each addressed to whoever the event happened to), so unlike the
+// single-slot pendingTargetChoices queue, only the front entry FOR THAT SPECIFIC PLAYER is
+// actively prompted -- other players' own pending payments are unaffected.
+function queueOptionalPayment(lobby, choice) {
+  const entry = { id: newAbilityId(), ...choice };
+  lobby.pendingOptionalPayments.push(entry);
+  if (lobby.pendingOptionalPayments.filter((e) => e.playerId === entry.playerId).length === 1) promptOptionalPayment(lobby, entry);
+  return entry;
+}
+function promptOptionalPayment(lobby, entry) {
+  const sock = io.sockets.sockets.get(entry.playerId);
+  if (sock) sock.emit("optionalPayment", { id: entry.id, label: entry.label, costLabel: entry.costLabel });
+}
+function promptNextOptionalPayment(lobby, playerId) {
+  const next = lobby.pendingOptionalPayments.find((e) => e.playerId === playerId);
+  if (next) promptOptionalPayment(lobby, next);
+}
+
 // A target-requiring ability queues here instead of reaching the stack -- gating the PUSH, not
 // resolution, is the whole reason resolveStackTop/passPriority need zero knowledge of targeting:
 // by the time anything ever lands in lobby.stack, it's already fully resolvable, exactly like
@@ -2101,6 +2222,11 @@ function discardPendingTargetChoices(lobby, socketId) {
   if (lobby.pendingTargetChoices.length !== before && lobby.pendingTargetChoices.length > 0) {
     promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
   }
+  // Same cleanup for optional payments addressed TO the departing player -- otherwise the table
+  // waits forever on a decision that will never come. Payments addressed to OTHER players but
+  // controlled by the departing one are left alone (the "if not" default still makes sense even if
+  // the ability's controller has left).
+  lobby.pendingOptionalPayments = lobby.pendingOptionalPayments.filter((e) => e.playerId !== socketId);
 }
 // Validates + resolves whatever the player clicked against what a pending choice actually wants.
 // targetKind defaults to the pre-existing "creature" (zoneType-matching) behavior for full backward
@@ -2129,6 +2255,11 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent." };
     if (entry.minCmc && (c.cmc || 0) < entry.minCmc) return { ok: false, error: `${c.name || "That permanent"}'s mana value is too low to target with this.` };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  if (targetKind === "ownPermanent") {
+    const c = lobby.cards[targetId];
+    if (!c || c.owner !== entry.controllerId || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent you control." };
     return { ok: true };
   }
   if (targetKind === "mode") {
@@ -2609,6 +2740,8 @@ function advanceOnePhase(lobby) {
   // scans a player's own permanents for aristocrats-style non-self-referential triggers; an upkeep
   // trigger is likewise "whoever's upkeep this is", not about the source card's own history.
   if (activePlayer && turn.phase === "Upkeep") fireGlobalTrigger(lobby, "upkeep", activeId);
+  // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
+  if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
   if (activePlayer && turn.phase === "Draw") {
     const isVeryFirstTurn = turn.turnNumber === 1 && turn.activeIndex === 0;
     if (!isVeryFirstTurn) {
@@ -3864,6 +3997,55 @@ io.on("connection", (socket) => {
     pushLog(lobby, `${who} canceled: ${entry.label}`);
     socket.emit("targetChoiceResolved", id);
     if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
+  });
+
+  // A player choosing to PAY an optional-payment cost (Smothering Tithe, Esper Sentinel, Rakdos
+  // Patron of Chaos) -- see queueOptionalPayment. Only the addressed player (entry.playerId) may
+  // answer their own prompt. A sacrifice-shaped cost (Rakdos) queues real target choices (of the
+  // payer's OWN permanents) to complete it -- reusing the existing target-choice engine rather than
+  // a parallel "pick N cards" mechanism.
+  socket.on("payOptionalCost", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const idx = lobby.pendingOptionalPayments.findIndex((e) => e.id === id);
+    if (idx === -1) return;
+    const entry = lobby.pendingOptionalPayments[idx];
+    if (entry.playerId !== socket.id) return;
+    const p = lobby.players[socket.id];
+    if (entry.cost && entry.cost.mana) {
+      const remaining = canAffordAndPay(p.mana, parseManaCost(entry.cost.mana), 0);
+      if (!remaining) { socket.emit("actionError", "Not enough mana to pay this cost."); return; }
+      p.mana = remaining;
+      broadcastPlayers(lobby);
+    }
+    lobby.pendingOptionalPayments.splice(idx, 1);
+    pushLog(lobby, `${p ? p.name : "Someone"} paid for: ${entry.label}`);
+    socket.emit("optionalPaymentResolved", id);
+    if (entry.cost && entry.cost.sacrificeCount) {
+      for (let i = 0; i < entry.cost.sacrificeCount; i++) {
+        queueTargetChoice(lobby, {
+          controllerId: socket.id, sourceCard: entry.sourceCard,
+          label: `${entry.label} — choose a permanent to sacrifice`, effects: [{ type: "sacrificeTarget" }], targetKind: "ownPermanent"
+        });
+      }
+    }
+    promptNextOptionalPayment(lobby, socket.id);
+  });
+  // Declining an optional-payment cost -- runs its real consequence (the ability's controller
+  // benefits), same "real Magic auto-resolves the 'if not' branch" behavior the card text describes.
+  socket.on("declineOptionalCost", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const idx = lobby.pendingOptionalPayments.findIndex((e) => e.id === id);
+    if (idx === -1) return;
+    const entry = lobby.pendingOptionalPayments[idx];
+    if (entry.playerId !== socket.id) return;
+    lobby.pendingOptionalPayments.splice(idx, 1);
+    const who = lobby.players[socket.id] ? lobby.players[socket.id].name : "Someone";
+    pushLog(lobby, `${who} declined to pay for: ${entry.label}`);
+    socket.emit("optionalPaymentResolved", id);
+    if (entry.declinedEffects && entry.declinedEffects.length && entry.sourceCard) {
+      pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: `${entry.label} (declined)`, effects: entry.declinedEffects });
+    }
+    promptNextOptionalPayment(lobby, socket.id);
   });
 
   // ---- zone transitions: battlefield -> graveyard/exile/library (owner only) ----
