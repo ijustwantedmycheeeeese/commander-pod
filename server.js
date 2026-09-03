@@ -4000,6 +4000,13 @@ io.on("connection", (socket) => {
         if (usedBlockers.has(blockerId)) continue;
         const blockerCard = lobby.cards[blockerId];
         if (!blockerCard || blockerCard.owner !== socket.id || blockerCard.zoneType !== "creature" || blockerCard.tapped) continue;
+        // CR 509.1b: a creature without flying or reach can't block a flying attacker. Checked via
+        // effectiveKeywords (not the printed card.keywords) so a Reach/Flying grant from an aura,
+        // equipment, or anthem correctly makes an otherwise-grounded creature a legal blocker too.
+        const attackerCard = lobby.cards[attackerId];
+        const atkKw = attackerCard ? effectiveKeywords(lobby, attackerCard).map((k) => (k || "").toLowerCase()) : [];
+        const blkKw = effectiveKeywords(lobby, blockerCard).map((k) => (k || "").toLowerCase());
+        if (atkKw.includes("flying") && !blkKw.includes("flying") && !blkKw.includes("reach")) continue;
         lobby.combat.blocks[attackerId] = blockerId;
         usedBlockers.add(blockerId);
       } else {
