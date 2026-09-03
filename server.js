@@ -331,7 +331,9 @@ const CARD_ABILITIES = {
   "balefire liege": [
     { trigger: "youCastSpell", colorFilter: "R", label: "Balefire Liege — deal 3 damage to target player or planeswalker", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget", amount: 3 }] },
     { trigger: "youCastSpell", colorFilter: "W", label: "Balefire Liege — gain 3 life", requiresTarget: false, effects: [{ type: "gainLife", target: "controller", amount: 3 }] }
-  ]
+  ],
+  "reya dawnbringer": [{ trigger: "upkeep", label: "Reya Dawnbringer — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
+  "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -504,7 +506,11 @@ const ACTIVATED_ABILITIES = {
   "skithiryx, the blight dragon": [
     { cost: { mana: "{B}" }, label: "Skithiryx — gains haste", effects: [{ type: "grantHasteToSelf" }] },
     { cost: { mana: "{B}{B}" }, label: "Skithiryx — regenerate", effects: [{ type: "grantRegenerationShield" }] }
-  ]
+  ],
+  // "Activate only as a sorcery" isn't checked (this table has no timing-restriction vocabulary
+  // for activated abilities) -- a disclosed narrowing, same as everywhere else timing nuances
+  // aren't modeled.
+  "whip of erebos": [{ cost: { mana: "{2}{B}{B}", tap: true }, label: "Whip of Erebos — return target creature card from your graveyard to the battlefield with haste, exile it at the next end step", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateWithHasteExileAtEndStep" }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -973,6 +979,43 @@ const EFFECTS = {
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} and their creatures gain protection from ${params.chosenTargetId}`);
   },
+  // Reya Dawnbringer / Necromancy -- puts a creature card from a graveyard onto the battlefield
+  // under the CASTER's control (correct for both: Reya only ever searches her own controller's
+  // graveyard in the first place, so "under the owner's control" and "under the caster's control"
+  // are the same thing there; Necromancy explicitly wants the caster's control regardless of whose
+  // graveyard it came from). Fires a real ETB (Necromancy's own "if it's on the battlefield" clause
+  // and the full aura-reattachment/sacrifice-if-Necromancy-leaves mechanic aren't modeled -- just
+  // the core reanimation, same narrowing precedent as everywhere else in this engine).
+  reanimateFromGraveyard(lobby, ctx, params) {
+    const found = findAndRemoveGraveyardEntry(lobby, params.chosenTargetId);
+    if (!found) return;
+    const card = spawnBattlefieldCard(lobby, { ...found.entry, owner: ctx.controllerId, zoneType: classifyType(found.entry.type) });
+    broadcastPlayers(lobby); // the graveyard array just shrank
+    fireEtbTriggers(lobby, card);
+  },
+  // Whip of Erebos's activated reanimation -- same core effect as reanimateFromGraveyard, plus
+  // haste (temporary, via the real until-end-of-turn keyword system) and a real delayed trigger
+  // exiling that SAME card at the next end step (not just "when it would leave the battlefield" --
+  // the "exile instead of anywhere else" replacement clause on an early death isn't modeled, a
+  // disclosed narrowing).
+  reanimateWithHasteExileAtEndStep(lobby, ctx, params) {
+    const found = findAndRemoveGraveyardEntry(lobby, params.chosenTargetId);
+    if (!found) return;
+    const card = spawnBattlefieldCard(lobby, { ...found.entry, owner: ctx.controllerId, zoneType: classifyType(found.entry.type) });
+    broadcastPlayers(lobby);
+    fireEtbTriggers(lobby, card);
+    grantTemporaryKeyword(lobby, card, "Haste");
+    queueDelayedTrigger(lobby, {
+      firesAtPhase: "End Step", controllerId: ctx.controllerId, sourceCard: card,
+      label: `${card.name || "A creature"} — exile (Whip of Erebos)`, effects: [{ type: "exileChosenCardById", targetCardId: card.id }]
+    });
+  },
+  // A specific, pre-chosen card baked in at queue time (see queueDelayedTrigger) -- not a player
+  // choice, so this doesn't go through the normal chosenTargetId flow.
+  exileChosenCardById(lobby, ctx, params) {
+    const card = lobby.cards[params.targetCardId];
+    if (card) exileCardInternal(lobby, card);
+  },
   // For "any target"/"creature" spells that deal damage. chosenTargetId can resolve to either a
   // player or a creature -- check players first since a player id never collides with a card id.
   // Sub-lethal damage to a creature has no persistent effect: this app never marks/tracks damage
@@ -1332,7 +1375,10 @@ function createLobbyState(id, name, hostUsername, password) {
     // "That player may pay X; if they don't, Y happens" (Smothering Tithe, Esper Sentinel, Rakdos,
     // Patron of Chaos) -- see queueOptionalPayment. Addressed to the AFFECTED player (an opponent
     // of the ability's controller), not the controller themselves, unlike pendingTargetChoices.
-    pendingOptionalPayments: []
+    pendingOptionalPayments: [],
+    // "At the beginning of the next end step" (or any other named phase) one-shot triggers -- see
+    // queueDelayedTrigger.
+    delayedTriggers: []
   };
 }
 function lobbySummaries() {
@@ -1383,6 +1429,7 @@ function restoreLobbies() {
     if (!l.priority) l.priority = { holderId: null, lastActorId: null };
     if (!l.pendingTargetChoices) l.pendingTargetChoices = [];
     if (!l.pendingOptionalPayments) l.pendingOptionalPayments = [];
+    if (!l.delayedTriggers) l.delayedTriggers = [];
     if (!l.settings) l.settings = { enforceTargetingRestrictions: true };
     if (l.creaturesCantAttack === undefined) l.creaturesCantAttack = false;
     // Nobody is actually connected right after a restart — mark every seated player as
@@ -2048,6 +2095,12 @@ const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 // same attribute set as the archive, minus battlefield-only state (tapped, counters, etc).
 function toEntry(c) {
   return {
+    // Preserved so a graveyard/exile/library entry can be addressed as a real target (Reya
+    // Dawnbringer, Necromancy, Whip of Erebos's reanimation ability) -- previously omitted since
+    // nothing needed to target a card once it left the battlefield; every target-choice kind that
+    // touches a zone list now relies on this being stable and unique (it's the same id the card
+    // had while on the battlefield, never reused).
+    id: c.id,
     name: sanitizeCardStr(c.name, 200), img: sanitizeImgUrl(c.img), type: sanitizeCardStr(c.type || "", 100), manaCost: sanitizeCardStr(c.manaCost || "", 50),
     cmc: c.cmc || 0, colors: c.colors || [], colorIdentity: c.colorIdentity || [],
     power: c.power, toughness: c.toughness, loyalty: c.loyalty,
@@ -2412,6 +2465,17 @@ function pushAbilityToStack(lobby, { sourceCard, controllerId, label, effects })
   return item;
 }
 
+// Queues a real "at the beginning of the next end step" (or any other named phase) one-shot
+// trigger -- see the matching check in advanceOnePhase for where it actually fires. sourceCard is
+// whatever object should be credited as the source in the stack UI; for effects that need to act
+// on a SPECIFIC card (Whip of Erebos exiling the exact creature it just reanimated), bake that
+// card's id into `effects` at queue time, the same "capture the dynamic bit now" pattern used
+// throughout this engine (fireCombatDamageToPlayerTriggers, etc.) rather than re-resolving it later.
+function queueDelayedTrigger(lobby, { firesAtPhase, controllerId, sourceCard, label, effects }) {
+  if (!lobby.delayedTriggers) lobby.delayedTriggers = [];
+  lobby.delayedTriggers.push({ firesAtPhase, controllerId, sourceCard, label, effects });
+}
+
 // "That player may pay X; if they don't, Y happens" (Smothering Tithe, Esper Sentinel, Rakdos,
 // Patron of Chaos) -- a real Magic pattern distinct from pendingTargetChoices in one key way: the
 // OPPONENT decides, not the ability's controller, and declining has its own real consequence
@@ -2517,6 +2581,16 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!CARD_TYPE_CHOICES.includes(targetId)) return { ok: false, error: "Choose a card type." };
     return { ok: true };
   }
+  if (targetKind === "ownGraveyardCreature") {
+    const p = lobby.players[entry.controllerId];
+    const found = p && (p.graveyard || []).find((e) => e.id === targetId && (e.type || "").toLowerCase().includes("creature"));
+    if (!found) return { ok: false, error: "Choose a creature card from your own graveyard." };
+    return { ok: true };
+  }
+  if (targetKind === "anyGraveyardCreature") {
+    if (!findGraveyardEntry(lobby, targetId, "creature")) return { ok: false, error: "Choose a creature card in a graveyard." };
+    return { ok: true };
+  }
   if (targetKind === "mode") {
     const idx = parseInt(targetId, 10);
     if (!Number.isInteger(idx) || idx < 0 || idx >= (entry.modes || []).length) return { ok: false, error: "Choose one of the modes." };
@@ -2582,6 +2656,13 @@ function fireTrigger(lobby, card, ability) {
     if (ability.targetKind === "handCard") {
       const filter = ability.handTypeFilter || [];
       const hasMatch = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "hand" && filter.some((t) => (c.type || "").toLowerCase().includes(t.toLowerCase())));
+      if (!hasMatch) return;
+    }
+    // Reya Dawnbringer: same CR 603.3c auto-fizzle as handCard above, but for an EMPTY graveyard --
+    // otherwise this would nag every single upkeep even when there's nothing to reanimate.
+    if (ability.targetKind === "ownGraveyardCreature") {
+      const p = lobby.players[card.owner];
+      const hasMatch = p && (p.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("creature"));
       if (!hasMatch) return;
     }
     queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter });
@@ -2870,6 +2951,29 @@ function equipCostFromText(text) {
   return parseManaCost(m[1]);
 }
 
+// Reanimation targeting (Reya Dawnbringer, Necromancy, Whip of Erebos) -- addresses a graveyard
+// entry by the stable id toEntry() now preserves. Read-only lookup for validation
+// (resolveChosenTarget); the find-AND-remove version below is for actually resolving the effect.
+function findGraveyardEntry(lobby, entryId, typeFilter) {
+  for (const pid in lobby.players) {
+    const p = lobby.players[pid];
+    const e = (p.graveyard || []).find((x) => x.id === entryId && (!typeFilter || (x.type || "").toLowerCase().includes(typeFilter)));
+    if (e) return { entry: e, ownerId: pid };
+  }
+  return null;
+}
+function findAndRemoveGraveyardEntry(lobby, entryId) {
+  for (const pid in lobby.players) {
+    const p = lobby.players[pid];
+    const idx = (p.graveyard || []).findIndex((x) => x.id === entryId);
+    if (idx !== -1) {
+      const [entry] = p.graveyard.splice(idx, 1);
+      return { entry, ownerId: pid };
+    }
+  }
+  return null;
+}
+
 // Liesa, Forgotten Archangel / Valgavoth, Terror Eater -- both read "if [some card] would die /
 // be put into a graveyard, exile it instead," a real Magic replacement effect (CR 614) that
 // intercepts a zone change BEFORE it happens rather than moving the card afterward. This app has
@@ -3027,6 +3131,22 @@ function advanceOnePhase(lobby) {
   turn.phaseStartedAt = Date.now(); // purely informational -- drives a passive client-side "how long has this phase been going" indicator, never used to auto-act for anyone
   const activeId = turn.order[turn.activeIndex];
   const activePlayer = lobby.players[activeId];
+
+  // "At the beginning of the next end step" (Hellkite Courser, Whip of Erebos, Liesa) and similar
+  // ONE-SHOT delayed triggers -- distinct from fireGlobalTrigger's "upkeep"/"endStep" (which fire
+  // EVERY occurrence of that phase, forever): a delayed trigger fires exactly once, on the very
+  // next occurrence of its target phase after being queued (whoever's turn it happens to be, same
+  // as the real "the next end step" wording -- not necessarily the queuing player's own), then
+  // removes itself. See queueDelayedTrigger.
+  if (lobby.delayedTriggers && lobby.delayedTriggers.length) {
+    const due = lobby.delayedTriggers.filter((dt) => dt.firesAtPhase === turn.phase);
+    if (due.length) {
+      lobby.delayedTriggers = lobby.delayedTriggers.filter((dt) => dt.firesAtPhase !== turn.phase);
+      // A departing player's own delayed trigger is simply dropped -- nowhere sensible to resolve
+      // it, same "discard rather than error" precedent discardPendingTargetChoices already follows.
+      due.filter((dt) => lobby.players[dt.controllerId]).forEach((dt) => pushAbilityToStack(lobby, { sourceCard: dt.sourceCard, controllerId: dt.controllerId, label: dt.label, effects: dt.effects }));
+    }
+  }
 
   for (const pid in lobby.players) lobby.players[pid].mana = EMPTY_MANA(); // mana empties every step/phase
 
@@ -4051,6 +4171,15 @@ io.on("connection", (socket) => {
     if (!lobby.turn.started) { socket.emit("actionError", "You can't activate abilities before the game starts."); return; }
     const ability = getActivatedAbilities(card.name)[abilityIndex];
     if (!ability) return;
+    // Reject BEFORE paying anything if this ability could never find a legal target right now --
+    // Whip of Erebos with an empty graveyard, say. Without this the player would pay the full
+    // mana/tap cost for an ability that's about to silently fizzle (fireTrigger's own CR 603.3c
+    // check further down would catch the empty-graveyard case too, but only AFTER the cost is
+    // already spent).
+    if (ability.requiresTarget && ability.targetKind === "ownGraveyardCreature") {
+      const hasMatch = (p.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("creature"));
+      if (!hasMatch) { socket.emit("actionError", "There's no creature card in your graveyard to target."); return; }
+    }
     const cost = ability.cost || {};
 
     if (cost.tap) {

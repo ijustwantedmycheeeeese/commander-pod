@@ -1608,10 +1608,12 @@
       if (kind === "cardType") return "Choose a card type:";
       if (kind === "mode") return "Choose one:";
       if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
+      if (kind === "ownGraveyardCreature") return "Open your Graveyard and click \"Target This\" on a creature card.";
+      if (kind === "anyGraveyardCreature") return "Open any player's Graveyard and click \"Target This\" on a creature card.";
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType") return false; // battlefield cards are never legal for these
+      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal instead
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
@@ -3079,6 +3081,18 @@
               <button class="mini-btn" onclick="zoneToBattlefield('${zoneName}',${idx})">To Battlefield</button>
               <button class="mini-btn" onclick="zoneToHand('${zoneName}',${idx})">To Hand</button>
               ${entry.isCommander ? `<button class="mini-btn" onclick="commanderToCommandZone('${zoneName}',${idx})" title="Real Commander rule: you can move your commander to the Command Zone instead of here">To Command Zone</button>` : ""}`;
+          }
+          // Reanimation targeting (Reya Dawnbringer, Necromancy, Whip of Erebos) -- a pending
+          // "ownGraveyardCreature"/"anyGraveyardCreature" choice makes each legal creature entry in
+          // the right graveyard(s) clickable, same "only light up what's actually legal" principle
+          // as every other target-choice surface. Addressed by the entry's real, stable id (see
+          // toEntry's own comment), not the array index other zone-modal actions use.
+          if (zoneName === "graveyard" && pendingTargetChoiceId && (entry.type || "").toLowerCase().includes("creature")) {
+            const wantsOwnGY = pendingTargetChoiceKind === "ownGraveyardCreature" && isMine;
+            const wantsAnyGY = pendingTargetChoiceKind === "anyGraveyardCreature";
+            if (wantsOwnGY || wantsAnyGY) {
+              actions += ` <button class="mini-btn" style="background:#7f9fd4;" onclick="chooseTargetFor('${entry.id}')">Target This</button>`;
+            }
           }
           row.innerHTML = `<img src="${escapeHtml(entry.img || "")}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
           row.onmouseenter = () => zoneModalPreview(entry);
