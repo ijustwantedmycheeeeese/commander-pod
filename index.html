@@ -1529,7 +1529,7 @@
       status.innerText = `Added ${added} card${added === 1 ? "" : "s"}` + (commandersFilled ? ` + ${commandersFilled} commander${commandersFilled === 1 ? "" : "s"}` : "") +
         (skipped ? ` — ${skipped} skipped (99 limit reached).` : ".") +
         (res.found.length < res.requested ? ` (${res.requested - res.found.length} not found.)` : "") +
-        (res.truncatedFrom ? ` The source had ${res.truncatedFrom} cards after filtering — only the first 99 were imported.` : "");
+        (res.truncatedFrom ? ` That's ${res.truncatedFrom} cards after parsing — only the first 99 were added (if your commander's name is in this list too, that's most likely why it's not showing up).` : "");
     });
 
     socket.on("deckData", ({ name, data }) => {
