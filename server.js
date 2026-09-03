@@ -186,7 +186,7 @@ const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End St
 // this app) -- a curated list matching Scryfall's own keyword naming so a granted keyword looks
 // identical to one a card was natively printed with. Haste already plugs straight into the
 // existing summoning-sickness check in declareAttackers with zero extra code.
-const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud"];
+const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect"];
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
 
 // ---------------- trigger/effect engine ----------------
@@ -279,7 +279,26 @@ const CARD_ABILITIES = {
   // Cancel on the target-choice banner as the way to decline -- that escape hatch didn't exist when
   // most of the earlier "may" simplifications in this file were written, so this one uses it instead
   // of quietly always resolving.
-  "overseer of the damned": [{ trigger: "etb", label: "Overseer of the Damned — destroy target creature", requiresTarget: true, targetZoneType: "creature", effects: [{ type: "destroyTarget" }] }]
+  "overseer of the damned": [{ trigger: "etb", label: "Overseer of the Damned — destroy target creature", requiresTarget: true, targetZoneType: "creature", effects: [{ type: "destroyTarget" }] }],
+  // Kaalia of the Vast's signature ability -- see the "handCard" targetKind branches in fireTrigger/
+  // resolveChosenTarget/EFFECTS.putFromHandAttacking for the actual mechanism. "You may" is handled
+  // by the pre-existing Cancel-on-target-choice escape hatch, same as Overseer of the Damned above.
+  "kaalia of the vast": [{ trigger: "attack", label: "Kaalia of the Vast — put an Angel, Demon, or Dragon from hand onto the battlefield attacking",
+    requiresTarget: true, targetKind: "handCard", handTypeFilter: ["Angel", "Demon", "Dragon"], effects: [{ type: "putFromHandAttacking" }] }],
+  // Hellkite Tyrant / Lord of the Void: "whenever this creature deals combat damage to a player,
+  // gain control of..." / "...exile the top seven, put a creature from among them onto the
+  // battlefield under your control" -- both are control-change effects keyed off COMBAT DAMAGE TO
+  // A PLAYER specifically (not just "attacks"), which needed its own new trigger type + hook point
+  // (see fireCombatDamageTriggers, called from resolveCombatDamage at the exact point unblocked/
+  // trampled-over damage actually lands on a player, not at declare-attackers time).
+  "hellkite tyrant": [{ trigger: "combatDamageToPlayer", label: "Hellkite Tyrant — gain control of all their artifacts", effects: [{ type: "gainControlOfArtifacts" }] }],
+  "lord of the void": [{ trigger: "combatDamageToPlayer", label: "Lord of the Void — exile top 7, put a creature onto the battlefield", effects: [{ type: "exileTopNPutCreatureOntoBattlefield", amount: 7 }] }],
+  "aurelia, the warleader": [{ trigger: "attack", label: "Aurelia, the Warleader — untap creatures, additional combat phase",
+    condition: (c, lobby) => c.lastExtraCombatTurn !== lobby.turn.turnNumber,
+    effects: [{ type: "grantExtraCombatPhase", stampCard: true }] }],
+  "combat celebrant": [{ trigger: "attack", label: "Combat Celebrant — untap other creatures, additional combat phase",
+    condition: (c, lobby) => c.lastExtraCombatTurn !== lobby.turn.turnNumber,
+    effects: [{ type: "grantExtraCombatPhase", stampCard: true, excludeSelf: true }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -593,7 +612,21 @@ const SPELL_ABILITIES = {
   "lightning strike": { label: "Lightning Strike — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
   "waking nightmare": { label: "Waking Nightmare — target player discards 2", effects: [{ type: "targetPlayerDiscards", amount: 2 }], requiresTarget: true, targetKind: "player" },
   "bee sting": { label: "Bee Sting — deal 2 damage", effects: [{ type: "damageTarget", amount: 2 }], requiresTarget: true, targetKind: "any" },
-  "weave fate": { label: "Weave Fate — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }
+  "weave fate": { label: "Weave Fate — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] },
+  // Modal spells ("Choose one —") -- see castSpell's `spellAbility.modes` branch for the actual
+  // mechanism (mode picked first via the pendingTargetChoices queue, THEN a real target choice if
+  // that mode needs one). Rip Apart's first mode is narrowed to "target creature" only (real text
+  // also allows planeswalkers -- no "creature or planeswalker" targetKind exists, same "approximate
+  // the common case" precedent as targetKind:"any" already does for player/creature/planeswalker).
+  "rip apart": { label: "Rip Apart — choose one", modes: [
+    { label: "Rip Apart — deal 3 damage to target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "damageTarget", amount: 3 }] },
+    { label: "Rip Apart — destroy target artifact or enchantment", requiresTarget: true, targetKind: "artifact", effects: [{ type: "destroyTarget" }] }
+  ] },
+  "rakdos charm": { label: "Rakdos Charm — choose one", modes: [
+    { label: "Rakdos Charm — exile target player's graveyard", requiresTarget: true, targetKind: "player", effects: [{ type: "exilePlayerGraveyard" }] },
+    { label: "Rakdos Charm — destroy target artifact", requiresTarget: true, targetKind: "artifact", effects: [{ type: "destroyTarget" }] },
+    { label: "Rakdos Charm — each creature deals 1 damage to its controller", requiresTarget: false, effects: [{ type: "eachCreatureDamagesController", amount: 1 }] }
+  ] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -798,6 +831,124 @@ const EFFECTS = {
     if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter });
     broadcastPlayers(lobby);
   },
+  // Kaalia of the Vast's signature ability: puts the chosen hand card (already validated against
+  // handTypeFilter by resolveChosenTarget) onto the battlefield tapped AND attacking the same
+  // player/planeswalker the source (Kaalia) is currently attacking -- looked up fresh from
+  // lobby.combat.attackers rather than baked in at trigger time, since by the time this actually
+  // resolves off the stack a responding player could in principle have changed combat state.
+  // Fires the new creature's own ETB and attack triggers (CR 508.3d: entering attacking still
+  // counts as "this creature attacks" for its own triggers), and skips it entirely if Kaalia
+  // somehow isn't attacking anymore (removed from combat by a response) rather than stranding a
+  // creature attacking nothing.
+  putFromHandAttacking(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card || card.zoneType !== "hand") return;
+    const sourceId = ctx.sourceCard && ctx.sourceCard.id;
+    const defenderId = sourceId ? lobby.combat.attackers[sourceId] : null;
+    if (!defenderId) return;
+    card.zoneType = classifyType(card.type);
+    card.faceDown = false;
+    card.tapped = true;
+    card.controllerSince = lobby.turn.turnNumber;
+    broadcastCard(lobby, card);
+    lobby.combat.attackers[card.id] = defenderId;
+    broadcastCombat(lobby);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "?"} put ${card.name || "a card"} onto the battlefield tapped and attacking`);
+    fireEtbTriggers(lobby, card);
+    fireAttackTriggers(lobby, card);
+  },
+  // Hellkite Tyrant -- "gain control of all artifacts that player controls." dealtToPlayerId is
+  // baked in by fireCombatDamageToPlayerTriggers at the moment damage actually landed, since this
+  // effect might not resolve off the stack until well after combat has moved on. The separate "if
+  // you control 20+ artifacts, you win the game" upkeep clause is NOT modeled -- no win-condition
+  // system beyond normal elimination exists in this app.
+  gainControlOfArtifacts(lobby, ctx, params) {
+    const defenderId = params.dealtToPlayerId;
+    if (!defenderId) return;
+    let count = 0;
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner !== defenderId || c.zoneType === "hand" || c.zoneType === "stack") return;
+      if (!(c.type || "").toLowerCase().includes("artifact")) return;
+      c.owner = ctx.controllerId;
+      broadcastCard(lobby, c);
+      count++;
+    });
+    if (count) {
+      const p = lobby.players[ctx.controllerId];
+      pushLog(lobby, `${p ? p.name : "?"} gained control of ${count} artifact${count === 1 ? "" : "s"}`);
+    }
+    broadcastPlayers(lobby);
+  },
+  // Aurelia / Combat Celebrant -- "untap all [other] creatures you control, and after this phase
+  // there is an additional combat phase." Combat Celebrant's real cost (exert -- it doesn't untap
+  // during your next untap step) isn't modeled; this always triggers rather than being a player
+  // choice, same "may" simplification precedent used elsewhere for a strictly-upside effect. The
+  // once-per-turn guard lives in each CARD_ABILITIES entry's own `condition` (now passed `lobby`
+  // too, not just the card, specifically so it can compare against the CURRENT turn number) --
+  // without it, a creature that attacks again in the extra combat phase it just granted would
+  // grant ANOTHER one, forever.
+  grantExtraCombatPhase(lobby, ctx, params) {
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner !== ctx.controllerId || c.zoneType !== "creature") return;
+      if (params.excludeSelf && ctx.sourceCard && c.id === ctx.sourceCard.id) return;
+      if (c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
+    });
+    if (params.stampCard && ctx.sourceCard) {
+      const src = lobby.cards[ctx.sourceCard.id];
+      if (src) src.lastExtraCombatTurn = lobby.turn.turnNumber;
+    }
+    lobby.turn.extraCombatsPending = (lobby.turn.extraCombatsPending || 0) + 1;
+    broadcastTurn(lobby);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "?"} untaps creatures -- there will be an additional combat phase`);
+  },
+  // Rakdos Charm's third mode -- "each creature deals 1 damage to its controller." Damage FROM
+  // each creature TO its own controller's life total, not damage to the creature itself.
+  eachCreatureDamagesController(lobby, ctx, params) {
+    const amt = params.amount || 1;
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => {
+      const p = lobby.players[c.owner];
+      if (p) p.life -= amt;
+    });
+    broadcastPlayers(lobby);
+    checkEliminations(lobby);
+  },
+  // Rakdos Charm's first mode -- "exile target player's graveyard."
+  exilePlayerGraveyard(lobby, ctx, params) {
+    const p = lobby.players[params.chosenTargetId];
+    if (!p) return;
+    p.exile.push(...p.graveyard);
+    p.graveyard = [];
+    broadcastPlayers(lobby);
+  },
+  // Lord of the Void -- "exile the top seven cards of that player's library, then put a creature
+  // card from among them onto the battlefield under your control." The exile-and-reveal part is
+  // fully real (cards genuinely move to that player's exile zone, visible via the normal zone
+  // modal); WHICH creature to reanimate is auto-picked (first creature found among the exiled
+  // cards) rather than prompted -- a real, disclosed simplification (this would need a whole new
+  // "pick one from a batch of just-exiled cards" choice UI for one card's ability), not a silent
+  // no-op the way most of this table's genuinely-skipped abilities are.
+  exileTopNPutCreatureOntoBattlefield(lobby, ctx, params) {
+    const defenderId = params.dealtToPlayerId;
+    if (!defenderId) return;
+    const defender = lobby.players[defenderId];
+    if (!defender) return;
+    const n = params.amount || 7;
+    const exiled = [];
+    for (let i = 0; i < n && defender.library.length > 0; i++) exiled.push(defender.library.shift());
+    exiled.forEach((e) => defender.exile.push(e));
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "?"} exiled the top ${exiled.length} card${exiled.length === 1 ? "" : "s"} of ${defender.name}'s library`);
+    const creatureIdx = exiled.findIndex((e) => (e.type || "").toLowerCase().includes("creature"));
+    if (creatureIdx !== -1) {
+      const entry = defender.exile.splice(defender.exile.length - exiled.length + creatureIdx, 1)[0];
+      const card = spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, faceDown: false, zoneType: classifyType(entry.type) });
+      pushLog(lobby, `${p ? p.name : "?"} put ${card.name} onto the battlefield under their control`);
+      fireEtbTriggers(lobby, card);
+    }
+    broadcastPlayers(lobby);
+  },
   // Signets and similar mana rocks ("{1}, T: Add {W}{B}.") produce a FIXED set of colors all at
   // once -- not a choice among them the way a dual land's "add W or B" is. Only ever reached via
   // activateAbility's manaAbility fast path (see there for why mana abilities skip the stack
@@ -849,7 +1000,7 @@ function createLobbyState(id, name, hostUsername, password) {
     chatLog: [],
     spectators: {}, // socket.id -> { username, name } -- watch-only, never touches lobby.players
     voiceParticipants: new Set(),
-    turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null },
+    turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null, extraCombatsPending: 0 },
     combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] },
     stack: [], // cast spells awaiting resolution, top = last element
     priority: { holderId: null, lastActorId: null }, // only meaningful while stack.length > 0
@@ -900,7 +1051,7 @@ function restoreLobbies() {
     // among them -- crashing on `undefined[...]` for any table that predates the field, which
     // silently broke createLobby/joinLobby/chat/disconnect for anyone still seated in one.
     if (!l.spectators) l.spectators = {};
-    if (!l.turn) l.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null };
+    if (!l.turn) l.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null, extraCombatsPending: 0 };
     if (l.turn.pendingDiscard === undefined) l.turn.pendingDiscard = null;
     if (l.turn.phaseStartedAt === undefined) l.turn.phaseStartedAt = null;
     if (!l.stack) l.stack = [];
@@ -1129,7 +1280,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     stack: lobby.stack.map((c) => maskCard(c, socketId)),
     priority: lobby.priority,
-    pendingTargetChoice: myPendingChoice ? { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature" } : null,
+    pendingTargetChoice: myPendingChoice ? { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null } : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
     spectatorRoster: Object.values(lobby.spectators).map((s) => s.name),
@@ -1689,6 +1840,20 @@ function pushToStack(lobby, card, casterId) {
 function castSpell(lobby, card, casterId, logSuffix) {
   if (isInstantOrSorcery(card.type)) {
     const spellAbility = getSpellAbility(card.name);
+    // Modal spell ("Choose one —") -- mode is picked BEFORE any target, since which target kind
+    // even applies depends on which mode got picked. Reuses the exact same pendingTargetChoices
+    // queue as a real target choice (kind: "chooseMode", targetKind: "mode") rather than a
+    // parallel mechanism, so the Cancel escape hatch and reconnect-resume behavior both come for
+    // free; chooseTargetFor's "chooseMode" branch (see its own comment) is what actually turns the
+    // picked mode into either a real target choice or a straight-to-stack cast.
+    if (spellAbility && spellAbility.modes) {
+      queueTargetChoice(lobby, {
+        kind: "chooseMode", controllerId: casterId, spellCard: card, sourceCard: card,
+        label: spellAbility.label, modes: spellAbility.modes, targetKind: "mode",
+        logSuffix: logSuffix || ""
+      });
+      return;
+    }
     if (spellAbility && spellAbility.requiresTarget) {
       queueTargetChoice(lobby, {
         kind: "castSpell", controllerId: casterId, spellCard: card, sourceCard: card,
@@ -1741,7 +1906,7 @@ function promptTargetChoice(lobby, entry) {
   // battlefield-only instruction and lit up every card as clickable, so a player naturally clicking
   // what they were told to click got a confusing rejection with no way to tell what went wrong.
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
-  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, targetKind });
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, targetKind, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null });
 }
 // Discards any pending target choices belonging to a departing controller (a real disconnect/leave
 // or an elimination) -- otherwise the table would be stuck forever waiting on a target that will
@@ -1774,6 +1939,18 @@ function resolveChosenTarget(lobby, entry, targetId) {
     const c = lobby.cards[targetId];
     if (c && (c.zoneType === "creature" || (c.type || "").toLowerCase().includes("planeswalker"))) return { ok: true };
     return { ok: false, error: "Choose a creature, player, or planeswalker." };
+  }
+  if (targetKind === "mode") {
+    const idx = parseInt(targetId, 10);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= (entry.modes || []).length) return { ok: false, error: "Choose one of the modes." };
+    return { ok: true };
+  }
+  if (targetKind === "handCard") {
+    const c = lobby.cards[targetId];
+    if (!c || c.owner !== entry.controllerId || c.zoneType !== "hand") return { ok: false, error: "Choose a card from your own hand." };
+    const filter = entry.handTypeFilter || [];
+    if (filter.length && !filter.some((t) => (c.type || "").toLowerCase().includes(t.toLowerCase()))) return { ok: false, error: `Choose a ${filter.join("/")} card.` };
+    return { ok: true };
   }
   // Existing behavior: a card whose zoneType matches (default "creature").
   const c = lobby.cards[targetId];
@@ -1815,9 +1992,21 @@ function finishStackTail(lobby) {
 // controller chose mode X") -- distinct from targeting or from fireGlobalTrigger's forPlayerId
 // scoping, which are both about who the event happened to, not what state the source card is in.
 function fireTrigger(lobby, card, ability) {
-  if (ability.condition && !ability.condition(card)) return;
+  if (ability.condition && !ability.condition(card, lobby)) return;
   if (ability.requiresTarget) {
-    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType });
+    // "handCard" targets (Kaalia's own signature ability -- put a card of the given types from
+    // hand onto the battlefield attacking) have no legal-targets check anywhere else in this
+    // engine to lean on, unlike battlefield/player/spell targets which are always at least
+    // theoretically satisfiable. Without this, the trigger would fire and prompt EVERY single
+    // attack even on a turn where the attacking player's hand has nothing matching -- CR 603.3c's
+    // real auto-fizzle-with-no-legal-target behavior, just checked up front here since nothing
+    // downstream does it.
+    if (ability.targetKind === "handCard") {
+      const filter = ability.handTypeFilter || [];
+      const hasMatch = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "hand" && filter.some((t) => (c.type || "").toLowerCase().includes(t.toLowerCase())));
+      if (!hasMatch) return;
+    }
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter });
   } else {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
   }
@@ -1875,6 +2064,22 @@ function applyLifeGain(lobby, playerId, amount) {
 function fireAttackTriggers(lobby, card) {
   if (!lobby.turn.started) return;
   getAutomatedAbilities(card.name, "attack").forEach((ability) => fireTrigger(lobby, card, ability));
+}
+
+// "Whenever this creature deals combat damage to a PLAYER" (Hellkite Tyrant, Lord of the Void) --
+// distinct from "attacks" (fires the instant attackers are declared, win or lose) and needs to know
+// WHO was actually damaged, which fireTrigger's generic CARD_ABILITIES effects can't carry (a
+// triggered ability goes onto the stack and may not resolve until well after resolveCombatDamage
+// has already reset lobby.combat back to empty). Bypasses fireTrigger/queueTargetChoice entirely
+// and bakes `dealtToPlayerId` directly into a cloned effects array instead -- same "bake the
+// dynamic bit in at fire time" approach chooseTargetFor already uses for chosenTargetId.
+function fireCombatDamageToPlayerTriggers(lobby, card, defenderId) {
+  if (!lobby.turn.started) return;
+  getAutomatedAbilities(card.name, "combatDamageToPlayer").forEach((ability) => {
+    if (ability.condition && !ability.condition(card)) return;
+    const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId }));
+    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
+  });
 }
 
 // Pops the top of the stack and resolves it: a triggered ability runs its effects; a permanent
@@ -2065,11 +2270,21 @@ function advanceOnePhase(lobby) {
   if (!turn.started || turn.order.length === 0) return;
   const oldPhase = turn.phase;
   let idx = PHASES.indexOf(turn.phase);
-  idx++;
+  // An extra combat phase (Aurelia, Combat Celebrant, ...) re-enters Combat instead of advancing
+  // to Main 2 -- the one place phase-to-phase movement actually happens, rather than teaching
+  // every call site about it. turn.extraCombatsPending is reset to 0 every time a real new turn
+  // starts (the idx>=PHASES.length branch below), so it can never leak into a later turn.
+  if (oldPhase === "Combat" && (turn.extraCombatsPending || 0) > 0) {
+    turn.extraCombatsPending--;
+    idx = PHASES.indexOf("Combat");
+  } else {
+    idx++;
+  }
   if (idx >= PHASES.length) {
     idx = 0;
     turn.activeIndex = (turn.activeIndex + 1) % turn.order.length;
     turn.turnNumber++;
+    turn.extraCombatsPending = 0;
   }
   turn.phase = PHASES[idx];
   turn.phaseStartedAt = Date.now(); // purely informational -- drives a passive client-side "how long has this phase been going" indicator, never used to auto-act for anyone
@@ -2198,9 +2413,16 @@ function resolveCombatDamage(lobby) {
             if (toPlayer > 0) {
               const defender = lobby.players[defenderId];
               if (defender) {
-                defender.life -= toPlayer;
+                // CR 702.90c -- infect converts combat damage to a PLAYER into that many poison
+                // counters instead of life loss. Creature-vs-creature infect damage (-1/-1 counters
+                // instead of marked damage) is NOT modeled -- falls back to normal lethal-toughness
+                // marked damage against a blocker, a disclosed simplification; poisoning opponents
+                // is infect's primary win condition and the part worth having.
+                if (hasKw(attacker, "infect")) { defender.poison = (defender.poison || 0) + toPlayer; }
+                else { defender.life -= toPlayer; }
                 dmgEvents.push({ targetId: defenderId, amount: toPlayer });
-                pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}`);
+                pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
+                fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId);
               }
             }
             if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, toBlocker + toPlayer);
@@ -2221,7 +2443,8 @@ function resolveCombatDamage(lobby) {
         const { power: atkPower } = effPT(attacker);
         const defender = lobby.players[defenderId];
         if (defender && atkPower > 0) {
-          defender.life -= atkPower;
+          if (hasKw(attacker, "infect")) defender.poison = (defender.poison || 0) + atkPower;
+          else defender.life -= atkPower;
           if (attacker.isCommander) {
             defender.cmdr = (defender.cmdr || 0) + atkPower; // kept as the quick-glance total
             const key = commanderSlotKey(lobby, attacker);
@@ -2230,9 +2453,10 @@ function resolveCombatDamage(lobby) {
               defender.cmdrDamage[key] = (defender.cmdrDamage[key] || 0) + atkPower;
             }
           }
-          pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}`);
+          pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${atkPower}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
           dmgEvents.push({ targetId: defenderId, amount: atkPower });
           if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, atkPower);
+          fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId);
         }
       }
     }
@@ -3251,6 +3475,27 @@ io.on("connection", (socket) => {
     const resolved = resolveChosenTarget(lobby, entry, targetId);
     if (!resolved.ok) { socket.emit("actionError", resolved.error); return; }
     lobby.pendingTargetChoices.splice(idx, 1);
+    // Modal spell: the "target" just chosen is actually a MODE INDEX, not a real target -- pick
+    // that mode's own effects and either queue a REAL target choice for it (if that mode needs
+    // one) or cast straight to the stack (if it doesn't), instead of the generic chosenTargetId
+    // baking-in below, which doesn't apply here at all.
+    if (entry.kind === "chooseMode") {
+      const mode = entry.modes[parseInt(targetId, 10)];
+      socket.emit("targetChoiceResolved", id);
+      if (mode.requiresTarget) {
+        queueTargetChoice(lobby, {
+          kind: "castSpell", controllerId: entry.controllerId, spellCard: entry.spellCard, sourceCard: entry.spellCard,
+          label: mode.label, effects: mode.effects, targetKind: mode.targetKind, logSuffix: entry.logSuffix || ""
+        });
+      } else {
+        entry.spellCard._resolvedSpellEffects = mode.effects;
+        pushToStack(lobby, entry.spellCard, entry.controllerId);
+        const owner = lobby.players[entry.controllerId];
+        if (owner) pushLog(lobby, `${owner.name} cast ${entry.spellCard.name || "a spell"}${entry.logSuffix || ""}`);
+      }
+      if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
+      return;
+    }
     const effects = entry.effects.map((e) => ({ ...e, chosenTargetId: targetId }));
     if (entry.kind === "castSpell") {
       // Target chosen as part of casting, matching real Magic -- the prompt fires immediately when
@@ -4091,7 +4336,7 @@ io.on("connection", (socket) => {
       p.landDropBonus = 0;
     }
     lobby.gameState.log = [];
-    lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null };
+    lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null, extraCombatsPending: 0 };
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
     lobby.stack = [];
     lobby.priority = { holderId: null, lastActorId: null };
