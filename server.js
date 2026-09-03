@@ -489,7 +489,12 @@ const ACTIVATED_ABILITIES = {
   // Real text also requires "activate only if an opponent controls more lands than you" -- not
   // checked (this table's cost/condition vocabulary has no cross-player state comparison), so this
   // is always activatable. A real, disclosed simplification, not a silent one.
-  "weathered wayfarer": [{ cost: { mana: "{W}", tap: true }, label: "Weathered Wayfarer — search for a land", effects: [{ type: "tutorToHand", typeFilter: "land" }] }]
+  "weathered wayfarer": [{ cost: { mana: "{W}", tap: true }, label: "Weathered Wayfarer — search for a land", effects: [{ type: "tutorToHand", typeFilter: "land" }] }],
+  "deathless angel": [{ cost: { mana: "{W}{W}" }, label: "Deathless Angel — target creature gains indestructible", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Indestructible" }] }],
+  "skithiryx, the blight dragon": [
+    { cost: { mana: "{B}" }, label: "Skithiryx — gains haste", effects: [{ type: "grantHasteToSelf" }] },
+    { cost: { mana: "{B}{B}" }, label: "Skithiryx — regenerate", effects: [{ type: "grantRegenerationShield" }] }
+  ]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -761,6 +766,15 @@ const EFFECTS = {
     // CR 702.12b -- a "destroy" effect doesn't destroy an indestructible permanent. Same check
     // dealtLethal uses for combat.
     if (effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "indestructible")) return;
+    // CR 701.16d -- regeneration REPLACES destruction (not just combat lethal damage). Same shield
+    // consumed by the combat-lethal check in resolveCombatDamage's processDeaths.
+    if (card.regenerationShield > 0) {
+      card.regenerationShield -= 1;
+      card.tapped = true;
+      broadcastCard(lobby, card);
+      pushLog(lobby, `${card.name || "A creature"} regenerates instead of being destroyed`);
+      return;
+    }
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
   },
@@ -828,6 +842,30 @@ const EFFECTS = {
     const card = lobby.cards[params.enteringCardId];
     if (!card) return;
     if (!(card.keywords || []).includes("Haste")) { card.keywords = [...(card.keywords || []), "Haste"]; broadcastCard(lobby, card); }
+  },
+  // Skithiryx's "{B}: gains haste until end of turn" -- same permanent-grant simplification as
+  // grantHasteToEnteringCreature (no duration/cleanup system exists), just self-targeted off an
+  // activated ability instead of a trigger.
+  grantHasteToSelf(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    if (!(card.keywords || []).includes("Haste")) { card.keywords = [...(card.keywords || []), "Haste"]; broadcastCard(lobby, card); }
+  },
+  // Skithiryx's "{B}{B}: Regenerate" -- see the regenerationShield checks in destroyTarget and
+  // resolveCombatDamage's processDeaths for where the shield actually gets spent.
+  grantRegenerationShield(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    card.regenerationShield = (card.regenerationShield || 0) + 1;
+    broadcastCard(lobby, card);
+  },
+  // Deathless Angel's "target creature gains indestructible" -- a genuinely reusable primitive
+  // (not a one-off), for any future "target creature gains keyword" card. Same permanent-grant
+  // simplification as every other "until end of turn" effect in this app.
+  grantKeywordToTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card || !params.keyword) return;
+    if (!(card.keywords || []).includes(params.keyword)) { card.keywords = [...(card.keywords || []), params.keyword]; broadcastCard(lobby, card); }
   },
   // For "any target"/"creature" spells that deal damage. chosenTargetId can resolve to either a
   // player or a creature -- check players first since a player id never collides with a card id.
@@ -2810,7 +2848,19 @@ function resolveCombatDamage(lobby) {
   function processDeaths() {
     for (const id in marked) {
       const card = lobby.cards[id];
-      if (card && dealtLethal(card, false)) { fireDeathTriggers(lobby, card); sendToGraveyardInternal(lobby, card); }
+      if (!card || !dealtLethal(card, false)) continue;
+      // Regeneration (CR 701.16) -- a shield consumed here instead of dying, tapped and (since this
+      // app never persists combat damage past one resolution pass anyway -- `marked` is local to
+      // this closure) implicitly "damage removed" for free, matching the real effect's full text
+      // without needing to track it separately.
+      if (card.regenerationShield > 0) {
+        card.regenerationShield -= 1;
+        card.tapped = true;
+        broadcastCard(lobby, card);
+        pushLog(lobby, `${card.name || "A creature"} regenerates instead of dying`);
+        continue;
+      }
+      fireDeathTriggers(lobby, card); sendToGraveyardInternal(lobby, card);
     }
   }
 
