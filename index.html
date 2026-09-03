@@ -2831,14 +2831,19 @@
       }
       return [...new Set(extra)];
     }
-    // Mirrors server.js's anthemEffectsFromText/staticBonusFor exactly -- same single untyped
-    // "Other creatures you control get +X/+Y" pattern, same "other" enforced by skipping card.id.
+    // Mirrors server.js's anthemEffectsFromText/staticBonusFor exactly -- an array of clauses
+    // (optionally color-restricted, e.g. Balefire Liege's two separate red/white clauses), not a
+    // single flat bonus. See the server copy's own comment for the full rationale.
     function anthemEffectsFromText(text) {
       const t = text || "";
-      let powerBonus = 0, toughnessBonus = 0;
-      const m = t.match(/other creatures you control get ([+-]\d+)\/([+-]\d+)/i);
-      if (m) { powerBonus = parseInt(m[1], 10) || 0; toughnessBonus = parseInt(m[2], 10) || 0; }
-      return { powerBonus, toughnessBonus };
+      const clauses = [];
+      const re = /other (?:(red|white|blue|black|green) )?creatures you control get ([+-]\d+)\/([+-]\d+)/gi;
+      let m;
+      while ((m = re.exec(t))) {
+        const colorFilter = m[1] ? PROTECTION_COLOR_WORDS[m[1].toLowerCase()] : null;
+        clauses.push({ powerBonus: parseInt(m[2], 10) || 0, toughnessBonus: parseInt(m[3], 10) || 0, colorFilter });
+      }
+      return clauses;
     }
     // Mirrors server.js's anthemKeywordsFromText/parseKeywordList exactly.
     function anthemKeywordsFromText(text) {
@@ -2857,12 +2862,15 @@
     function staticBonusFor(card) {
       let powerBonus = 0, toughnessBonus = 0;
       if (card.zoneType !== "creature") return { powerBonus, toughnessBonus };
+      const cardColors = card.colors || [];
       Object.values(allCards).forEach((c) => {
         if (c.id === card.id) return;
         if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") return;
-        const eff = anthemEffectsFromText(c.text);
-        powerBonus += eff.powerBonus;
-        toughnessBonus += eff.toughnessBonus;
+        anthemEffectsFromText(c.text).forEach((eff) => {
+          if (eff.colorFilter && !cardColors.includes(eff.colorFilter)) return;
+          powerBonus += eff.powerBonus;
+          toughnessBonus += eff.toughnessBonus;
+        });
       });
       return { powerBonus, toughnessBonus };
     }
