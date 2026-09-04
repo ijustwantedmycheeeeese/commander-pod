@@ -836,7 +836,9 @@
         <button class="modal-close-x" onclick="closeTokenModal()" title="Close">✕</button>
         <h2>Create Token</h2>
         <div class="mm-label" style="margin-top:0;">Token type</div>
-        <div id="token-category-tabs" class="flex-row" style="gap:6px;margin-bottom:8px;"></div>
+        <select id="token-category-select" onchange="setTokenCategory(this.value)" style="width:100%;margin-bottom:8px;">
+          <option value="">-- choose a type --</option>
+        </select>
         <div id="token-presets" class="flex-row" style="flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
         <div id="token-role-hint" style="display:none;font-size:11px;color:#a89a70;margin:-6px 0 10px;">Role tokens are Auras — after creating one, right-click it and use "Attach To..." to put it on a creature.</div>
         <input type="text" id="tok-name" placeholder="Name" style="width:100%;margin-bottom:6px;">
@@ -3108,19 +3110,24 @@
       { id: "artifact", label: "Artifact" },
       { id: "role", label: "Role (Aura)" }
     ];
-    let tokenActiveCategory = "creature";
-    function renderTokenCategoryTabs() {
-      document.getElementById("token-category-tabs").innerHTML = TOKEN_CATEGORIES.map((c) =>
-        `<button class="mini-btn${c.id === tokenActiveCategory ? "" : " secondary"}" onclick="setTokenCategory('${c.id}')">${escapeHtml(c.label)}</button>`
+    // No category selected by default -- the preset list starts empty and only fills in once a
+    // real type is chosen from the dropdown, rather than defaulting to "Creature" and dumping 34
+    // buttons on the player before they've asked for anything.
+    let tokenActiveCategory = "";
+    function renderTokenCategorySelect() {
+      const sel = document.getElementById("token-category-select");
+      sel.innerHTML = `<option value="">-- choose a type --</option>` + TOKEN_CATEGORIES.map((c) =>
+        `<option value="${c.id}">${escapeHtml(c.label)}</option>`
       ).join("");
+      sel.value = tokenActiveCategory;
     }
     function setTokenCategory(id) {
       tokenActiveCategory = id;
-      renderTokenCategoryTabs();
       renderTokenPresets();
       document.getElementById("token-role-hint").style.display = id === "role" ? "block" : "none";
     }
     function renderTokenPresets() {
+      if (!tokenActiveCategory) { document.getElementById("token-presets").innerHTML = ""; return; }
       const presets = TOKEN_PRESETS.filter((t) => t.category === tokenActiveCategory);
       document.getElementById("token-presets").innerHTML = presets.map((t) =>
         `<button class="mini-btn" onclick="applyTokenPreset('${escapeHtml(t.name)}')">${escapeHtml(t.name)}</button>`
@@ -3145,8 +3152,8 @@
       document.querySelectorAll(".tok-color").forEach((cb) => { cb.checked = t.colors.includes(cb.value); });
     }
     function openTokenModal() {
-      tokenActiveCategory = "creature";
-      renderTokenCategoryTabs();
+      tokenActiveCategory = "";
+      renderTokenCategorySelect();
       renderTokenPresets();
       renderTokenKeywords();
       document.getElementById("token-role-hint").style.display = "none";
