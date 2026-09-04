@@ -759,14 +759,14 @@ function getAltCost(cardName) {
 function getAllAutomatedCardNames() {
   return [...new Set([
     ...Object.keys(CARD_ABILITIES), ...Object.keys(ACTIVATED_ABILITIES), ...Object.keys(SPELL_ABILITIES),
-    ...ENTERS_TAPPED_FOR_OPPONENTS, ...ATTACK_ALONE_CARDS, ...DAMAGE_DOUBLING_CARDS,
+    ...ENTERS_TAPPED_FOR_OPPONENTS, ...ATTACK_ALONE_CARDS, ...DAMAGE_DOUBLING_CARDS, ...SELF_DAMAGE_HALVING_CARDS,
     ...GRAVEYARD_REDIRECT_CREATURE_ONLY, ...GRAVEYARD_REDIRECT_ANY_CARD, ...Object.keys(ALT_COSTS)
   ])];
 }
 function isCardAutomated(cardName) {
   const key = archiveKey(cardName);
   return !!(CARD_ABILITIES[key] || ACTIVATED_ABILITIES[key] || SPELL_ABILITIES[key]
-    || ENTERS_TAPPED_FOR_OPPONENTS.includes(key) || ATTACK_ALONE_CARDS.includes(key) || DAMAGE_DOUBLING_CARDS.includes(key)
+    || ENTERS_TAPPED_FOR_OPPONENTS.includes(key) || ATTACK_ALONE_CARDS.includes(key) || DAMAGE_DOUBLING_CARDS.includes(key) || SELF_DAMAGE_HALVING_CARDS.includes(key)
     || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key) || ALT_COSTS[key]);
 }
 
@@ -1186,6 +1186,7 @@ const EFFECTS = {
     const p = lobby.players[params.chosenTargetId];
     if (p) {
       if (params.chosenTargetId !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
+      amount = reduceDamageForVictim(lobby, params.chosenTargetId, amount);
       applyLifeLoss(lobby, params.chosenTargetId, amount, ctx.sourceCard && ctx.sourceCard.id); return;
     }
     const card = lobby.cards[params.chosenTargetId];
@@ -3305,8 +3306,6 @@ function graveyardRedirectFor(lobby, card) {
 // creature-vs-creature combat damage isn't modeled (would mean touching the multi-blocker damage-
 // assignment loop's lethal-toughness math, a much higher-risk change for a less commonly relevant
 // case) -- a disclosed narrowing, same precedent as every other scope-limited card in this engine.
-// Gisela's OTHER half ("prevent half the damage that would be dealt to you") is a genuinely
-// separate damage-reduction mechanism this app doesn't have yet -- not modeled, disclosed.
 const DAMAGE_DOUBLING_CARDS = ["twinflame tyrant", "gisela, blade of goldnight"];
 function damageMultiplierFor(lobby, controllerId) {
   for (const id in lobby.cards) {
@@ -3314,6 +3313,20 @@ function damageMultiplierFor(lobby, controllerId) {
     if (c.owner === controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && DAMAGE_DOUBLING_CARDS.includes(archiveKey(c.name))) return 2;
   }
   return 1;
+}
+// Gisela, Blade of Goldnight's OTHER half -- "if a source would deal damage to you or a permanent
+// you control, prevent half that damage, rounded up" -- i.e. the recipient only takes
+// floor(amount/2). Keyed by the VICTIM's controller (the opposite direction from
+// DAMAGE_DOUBLING_CARDS's "FROM its controller"), so it's a separate list/function even though
+// Gisela happens to be on both. Same PLAYER-directed-only scope as the doubling half above (not
+// creature-vs-creature combat damage) -- a disclosed narrowing, same precedent as everywhere else.
+const SELF_DAMAGE_HALVING_CARDS = ["gisela, blade of goldnight"];
+function reduceDamageForVictim(lobby, victimId, amount) {
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === victimId && c.zoneType !== "hand" && c.zoneType !== "stack" && SELF_DAMAGE_HALVING_CARDS.includes(archiveKey(c.name))) return Math.floor(amount / 2);
+  }
+  return amount;
 }
 function sendToGraveyardInternal(lobby, card) {
   if (graveyardRedirectFor(lobby, card)) { exileCardInternal(lobby, card); return; }
@@ -3606,7 +3619,7 @@ function resolveCombatDamage(lobby) {
               remaining -= toThis;
             });
             const toPlayerBase = atkTrample ? remaining : 0;
-            const toPlayer = toPlayerBase * damageMultiplierFor(lobby, attacker.owner);
+            const toPlayer = reduceDamageForVictim(lobby, defenderId, toPlayerBase * damageMultiplierFor(lobby, attacker.owner));
             if (toPlayer > 0) {
               const defender = lobby.players[defenderId];
               // Teferi's Protection -- see the non-trample branch below for why the whole event is
@@ -3662,7 +3675,7 @@ function resolveCombatDamage(lobby) {
         // whole damage event (no poison, no commander-damage tracking either) rather than just
         // zeroing the life change.
         if (defender && atkPower > 0 && !defender.protectionFromEverything) {
-          const dealt = atkPower * damageMultiplierFor(lobby, attacker.owner);
+          const dealt = reduceDamageForVictim(lobby, defenderId, atkPower * damageMultiplierFor(lobby, attacker.owner));
           // Deflecting Palm only intercepts real life loss -- infect's poison-counter conversion
           // (CR 702.90c) isn't a life change at all, so it's never redirectable and always lands.
           const tookIt = hasKw(attacker, "infect") ? (defender.poison = (defender.poison || 0) + dealt, true) : applyLifeLoss(lobby, defenderId, dealt, attacker.id);
