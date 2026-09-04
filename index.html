@@ -524,6 +524,7 @@
     <div id="context-menu">
       <button data-action="play">Play to Battlefield</button>
       <button data-action="freeCast" title="Represents an effect like Cascade -- cast without paying its mana cost">Free Cast (no cost)</button>
+      <button id="context-menu-altcost" style="display:none;"></button>
       <button data-action="toHand">Return to Hand</button>
       <button data-action="tap">Tap</button>
       <button data-action="flip">Flip Face Up/Down</button>
@@ -4146,6 +4147,17 @@
           contextMenu.style.display = "none";
         };
       });
+      // Same "only shown when the server says a real option exists" pattern as activatedAbilities
+      // above, for a HAND card's alternative-cost casting (Sephara, Sky's Blade) instead of a
+      // battlefield permanent's ability -- see maskCard's altCastOption / castWithAltCost.
+      const altCostEl = document.getElementById("context-menu-altcost");
+      if (isMine && card.zoneType === "hand" && card.altCastOption) {
+        altCostEl.style.display = "block";
+        altCostEl.textContent = card.altCastOption.label;
+        altCostEl.onclick = () => { socket.emit("castWithAltCost", card.id); contextMenu.style.display = "none"; };
+      } else {
+        altCostEl.style.display = "none";
+      }
     }
 
     contextMenu.querySelectorAll("button").forEach((btn) => {

@@ -735,6 +735,18 @@ const SPELL_ABILITIES = {
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
 }
+// Alternative costs for casting FROM HAND ("you may pay X rather than pay this spell's mana
+// cost") -- a genuinely different shape from SPELL_ABILITIES (which is about what a spell DOES
+// once cast, not how it's paid for). Scoped to the one real pattern this deck needed: a flat mana
+// amount plus tapping N untapped creatures matching a keyword. Which specific creatures get tapped
+// isn't a real choice worth prompting for (they're interchangeable as a cost) -- the server just
+// tapstype the first N that qualify, a disclosed simplification. See castWithAltCost.
+const ALT_COSTS = {
+  "sephara, sky's blade": { label: "Sephara, Sky's Blade — pay {W} and tap four untapped creatures you control with flying, rather than pay its mana cost", mana: "{W}", tapCount: 4, tapKeyword: "flying" }
+};
+function getAltCost(cardName) {
+  return ALT_COSTS[archiveKey(cardName)] || null;
+}
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -748,14 +760,14 @@ function getAllAutomatedCardNames() {
   return [...new Set([
     ...Object.keys(CARD_ABILITIES), ...Object.keys(ACTIVATED_ABILITIES), ...Object.keys(SPELL_ABILITIES),
     ...ENTERS_TAPPED_FOR_OPPONENTS, ...ATTACK_ALONE_CARDS, ...DAMAGE_DOUBLING_CARDS,
-    ...GRAVEYARD_REDIRECT_CREATURE_ONLY, ...GRAVEYARD_REDIRECT_ANY_CARD
+    ...GRAVEYARD_REDIRECT_CREATURE_ONLY, ...GRAVEYARD_REDIRECT_ANY_CARD, ...Object.keys(ALT_COSTS)
   ])];
 }
 function isCardAutomated(cardName) {
   const key = archiveKey(cardName);
   return !!(CARD_ABILITIES[key] || ACTIVATED_ABILITIES[key] || SPELL_ABILITIES[key]
     || ENTERS_TAPPED_FOR_OPPONENTS.includes(key) || ATTACK_ALONE_CARDS.includes(key) || DAMAGE_DOUBLING_CARDS.includes(key)
-    || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key));
+    || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key) || ALT_COSTS[key]);
 }
 
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
@@ -2299,6 +2311,13 @@ function maskCard(card, viewerId) {
       name: null, img: null, type: null, manaCost: null, power: null, toughness: null, counters: 0, isCommander: card.isCommander,
       cmc: null, colors: null, colorIdentity: null, loyalty: null, text: null, keywords: null, producedMana: null
     };
+  }
+  // Same "live-computed, only shown when a real option exists" precedent as activatedAbilities
+  // below, just for a HAND card's alternative-cost casting instead of a battlefield permanent's
+  // activated ability -- see castWithAltCost.
+  if (card.zoneType === "hand" && card.owner === viewerId) {
+    const alt = getAltCost(card.name);
+    if (alt) return { ...card, altCastOption: { label: alt.label } };
   }
   // Live-computed, never stored on the card itself -- lets the client show a real, correctly-labeled
   // "Activate: ..." context-menu entry only when one actually exists. Safe to send: nothing secret,
@@ -4381,6 +4400,38 @@ io.on("connection", (socket) => {
     } else {
       castSpell(lobby, card, socket.id, " without paying its mana cost");
     }
+  });
+
+  // Sephara, Sky's Blade and any future ALT_COSTS card -- "you may pay X rather than pay this
+  // spell's mana cost." A real way to cast the spell (unlike freeCastCard's manual-bypass trust
+  // model above), so it goes through the same timing/cantCastSpells gating playCard does; only the
+  // cost-payment step itself differs. WHICH qualifying creatures get tapped isn't a real choice
+  // (see ALT_COSTS's own comment) -- just taps the first N that qualify.
+  socket.on("castWithAltCost", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
+    const p = lobby.players[socket.id];
+    if (!card || !p || card.owner !== socket.id || card.zoneType !== "hand") return;
+    const alt = getAltCost(card.name);
+    if (!alt) return;
+    const timing = checkTiming(lobby, socket.id, card);
+    if (!timing.ok) { socket.emit("actionError", timing.error); return; }
+    const castCheck = canCastSpells(lobby, socket.id, card);
+    if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
+    const qualifying = Object.values(lobby.cards).filter((c) =>
+      c.owner === socket.id && c.zoneType === "creature" && !c.tapped &&
+      effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === alt.tapKeyword)
+    );
+    if (qualifying.length < alt.tapCount) {
+      socket.emit("actionError", `You need ${alt.tapCount} untapped creatures with ${alt.tapKeyword} to pay ${card.name}'s alternative cost (only have ${qualifying.length}).`);
+      return;
+    }
+    const remaining = alt.mana ? canAffordAndPay(p.mana, parseManaCost(alt.mana), 0) : p.mana;
+    if (!remaining) { socket.emit("actionError", `Not enough mana to pay ${card.name}'s alternative cost.`); return; }
+    p.mana = remaining;
+    qualifying.slice(0, alt.tapCount).forEach((c) => { c.tapped = true; broadcastCard(lobby, c); });
+    broadcastPlayers(lobby);
+    castSpell(lobby, card, socket.id, " using its alternative cost");
   });
 
   socket.on("tap", (id) => {
