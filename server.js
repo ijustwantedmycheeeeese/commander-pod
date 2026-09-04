@@ -4049,6 +4049,48 @@ app.get("/api/autocomplete", async (req, res) => {
   }
 });
 
+// Live art picker for Create Token -- "get all of the card art for each one and allow a selection."
+// Unlike DEFAULT_TOKEN_ART (a fixed 5-per-name table used only as an automatic fallback when the
+// player leaves Art blank entirely), this is a genuine live Scryfall search, so it works for ANY
+// token name typed in the form, not just the quick-preset list -- that list is scoped to a fixed
+// set of buttons for UI reasons, but "every possible token" is only actually achievable through a
+// live lookup like this one, which needs no hardcoded name list at all.
+// `kind` narrows the search to the right permanent type (a "Treasure" search with no type filter
+// could otherwise surface an unrelated card that merely mentions the word) -- derived client-side
+// from the token's own type line, same classifyType-style bucketing used everywhere else in this
+// app (creature / artifact / enchantment, or omitted to search unrestricted).
+app.get("/api/tokenArt", async (req, res) => {
+  try {
+    const name = (req.query.name || "").replace(/"/g, "").trim().slice(0, 100);
+    if (!name) return res.json({ success: true, options: [] });
+    const kind = (req.query.kind || "").toLowerCase();
+    const typeClause = ["creature", "artifact", "enchantment"].includes(kind) ? ` type:${kind}` : "";
+    const q = `is:token !"${name}"${typeClause}`;
+    const url = "https://api.scryfall.com/cards/search?q=" + encodeURIComponent(q) + "&unique=art&order=released";
+    const r = await fetch(url, { headers: { "User-Agent": "Archon/1.0", "Accept": "application/json" } });
+    const json = await r.json();
+    // Scryfall returns a 404 "error" object (not a thrown exception) when nothing matches a search
+    // -- code "not_found" is a real, expected outcome (an obscure or made-up token name), not a
+    // failure worth logging. Any OTHER error object (rate-limited, malformed query, etc.) is a real
+    // failure -- surfaced as success:false so the client shows "couldn't reach Scryfall" instead of
+    // incorrectly claiming this token genuinely has no art.
+    if (json.object === "error") {
+      if (json.code === "not_found") return res.json({ success: true, options: [] });
+      return res.json({ success: false, options: [] });
+    }
+    // Double-faced tokens carry their art under card_faces instead of a top-level image_uris --
+    // skipped rather than specially handled, same "narrow to the common case" precedent as
+    // everywhere else art gets pulled from Scryfall in this app.
+    const options = (json.data || [])
+      .filter((c) => c.image_uris && c.image_uris.normal)
+      .slice(0, 30)
+      .map((c) => ({ id: c.id, img: c.image_uris.normal, set: c.set_name || "" }));
+    res.json({ success: true, options });
+  } catch (e) {
+    res.json({ success: false, options: [] });
+  }
+});
+
 // WebRTC ICE server config for voice chat. Public STUN alone only lets two players connect
 // directly, which fails whenever a router's NAT gets in the way — a self-hosted TURN relay
 // (see docker-compose.yml's coturn service) is what makes cross-network voice chat actually work.

@@ -814,8 +814,10 @@
       <div class="modal-box" style="max-width:420px;">
         <button class="modal-close-x" onclick="closeTokenModal()" title="Close">✕</button>
         <h2>Create Token</h2>
-        <div class="mm-label" style="margin-top:0;">Quick presets</div>
+        <div class="mm-label" style="margin-top:0;">Token type</div>
+        <div id="token-category-tabs" class="flex-row" style="gap:6px;margin-bottom:8px;"></div>
         <div id="token-presets" class="flex-row" style="flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
+        <div id="token-role-hint" style="display:none;font-size:11px;color:#a89a70;margin:-6px 0 10px;">Role tokens are Auras — after creating one, right-click it and use "Attach To..." to put it on a creature.</div>
         <input type="text" id="tok-name" placeholder="Name" style="width:100%;margin-bottom:6px;">
         <input type="text" id="tok-type" placeholder="Type line (e.g. Token Creature — Zombie)" style="width:100%;margin-bottom:6px;">
         <div class="flex-row" style="margin-bottom:6px;">
@@ -825,10 +827,13 @@
         <div class="mm-label">Art</div>
         <div class="flex-row" style="align-items:center;margin-bottom:2px;">
           <input type="text" id="tok-img" placeholder="Image URL (optional)..." style="flex:1;">
-          <input type="file" id="tok-img-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'tok-img')">
-          <button class="mini-btn secondary" onclick="document.getElementById('tok-img-file').click()">Upload...</button>
         </div>
-        <div style="font-size:11px;color:#a89a70;margin-bottom:10px;">Leave blank for real art on the presets above, or a generated placeholder for anything else.</div>
+        <div class="flex-row" style="margin-bottom:2px;">
+          <button class="mini-btn secondary" onclick="openTokenArtPicker()">Choose Art...</button>
+          <button class="mini-btn secondary" onclick="document.getElementById('tok-img-file').click()">Upload...</button>
+          <input type="file" id="tok-img-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'tok-img')">
+        </div>
+        <div style="font-size:11px;color:#a89a70;margin-bottom:10px;">"Choose Art" searches Scryfall live for every real printing of this exact token name. Leave Art blank instead for automatic real art on the presets above, or a generated placeholder for anything else.</div>
         <div class="mm-label">Colors</div>
         <div class="flex-row" style="margin-bottom:10px;">
           <label style="font-size:12px;"><input type="checkbox" class="tok-color" value="W"> W</label>
@@ -843,6 +848,15 @@
         <div class="modal-close-row">
           <button onclick="createToken()">Create Token</button>
         </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="token-art-modal">
+      <div class="modal-box" style="max-width:520px;">
+        <button class="modal-close-x" onclick="closeTokenArtPicker()" title="Close">✕</button>
+        <h2 id="token-art-modal-title">Choose Art</h2>
+        <div id="token-art-status" style="font-size:12px;color:#a89a70;margin-bottom:8px;">Searching Scryfall...</div>
+        <div id="token-art-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;max-height:400px;overflow-y:auto;"></div>
       </div>
     </div>
 
@@ -2987,19 +3001,96 @@
     // ---------------- token creation ----------------
     // Tokens aren't real cards, so there's nothing to look up on Scryfall -- spawnCard already
     // accepts arbitrary card data with no lookup required, which is exactly what a token needs.
+    // Every entry here is a genuinely common token across Magic's history, grouped into the three
+    // mechanically distinct TOKEN TYPES a game can call for: "creature" (an independent creature
+    // permanent), "artifact" (Treasure/Clue/Food-style resource tokens), and "role" (Wilds of
+    // Eldraine's Role tokens -- Auras that attach to a creature you already control, not standalone
+    // permanents; see token-role-hint in the modal). `kind` is what /api/tokenArt uses to scope the
+    // live art search to the right permanent type. This list is a curated common set, not literally
+    // every token ever printed (that's an unbounded, always-growing list as new sets release) --
+    // "Choose Art" and a hand-typed name work for ANY token regardless of whether it has a preset
+    // button here, which is what actually makes every possible token reachable.
     const TOKEN_PRESETS = [
-      { name: "Soldier", type: "Token Creature — Soldier", power: "1", toughness: "1", colors: ["W"] },
-      { name: "Zombie", type: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] },
-      { name: "Spirit", type: "Token Creature — Spirit", power: "1", toughness: "1", colors: ["W"], flying: true },
-      { name: "Goblin", type: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], haste: true },
-      { name: "Elemental", type: "Token Creature — Elemental", power: "3", toughness: "3", colors: ["G"] },
-      { name: "Treasure", type: "Token Artifact — Treasure", power: null, toughness: null, colors: [] },
-      { name: "Clue", type: "Token Artifact — Clue", power: null, toughness: null, colors: [] },
-      { name: "Food", type: "Token Artifact — Food", power: null, toughness: null, colors: [] }
+      // -- Creature tokens --
+      { category: "creature", kind: "creature", name: "Soldier", type: "Token Creature — Soldier", power: "1", toughness: "1", colors: ["W"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Spirit", type: "Token Creature — Spirit", power: "1", toughness: "1", colors: ["W"], keywords: ["Flying"] },
+      { category: "creature", kind: "creature", name: "Angel", type: "Token Creature — Angel", power: "4", toughness: "4", colors: ["W"], keywords: ["Flying"] },
+      { category: "creature", kind: "creature", name: "Knight", type: "Token Creature — Knight", power: "2", toughness: "2", colors: ["W"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Cat", type: "Token Creature — Cat", power: "1", toughness: "1", colors: ["W"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Human", type: "Token Creature — Human", power: "1", toughness: "1", colors: [], keywords: [] },
+      { category: "creature", kind: "creature", name: "Zombie", type: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Skeleton", type: "Token Creature — Skeleton", power: "1", toughness: "1", colors: ["B"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Rat", type: "Token Creature — Rat", power: "1", toughness: "1", colors: ["B"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Vampire", type: "Token Creature — Vampire", power: "1", toughness: "1", colors: ["B"], keywords: ["Flying"] },
+      { category: "creature", kind: "creature", name: "Demon", type: "Token Creature — Demon", power: "5", toughness: "5", colors: ["B"], keywords: ["Flying"] },
+      { category: "creature", kind: "creature", name: "Goblin", type: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], keywords: ["Haste"] },
+      { category: "creature", kind: "creature", name: "Devil", type: "Token Creature — Devil", power: "1", toughness: "1", colors: ["R"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Dragon", type: "Token Creature — Dragon", power: "4", toughness: "4", colors: ["R"], keywords: ["Flying"] },
+      { category: "creature", kind: "creature", name: "Warrior", type: "Token Creature — Warrior", power: "2", toughness: "2", colors: ["R"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Elemental", type: "Token Creature — Elemental", power: "3", toughness: "3", colors: ["G"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Elf", type: "Token Creature — Elf", power: "1", toughness: "1", colors: ["G"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Beast", type: "Token Creature — Beast", power: "3", toughness: "3", colors: ["G"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Saproling", type: "Token Creature — Saproling", power: "1", toughness: "1", colors: ["G"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Wolf", type: "Token Creature — Wolf", power: "2", toughness: "2", colors: ["G"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Squirrel", type: "Token Creature — Squirrel", power: "1", toughness: "1", colors: ["G"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Insect", type: "Token Creature — Insect", power: "1", toughness: "1", colors: ["G"], keywords: ["Flying"] },
+      { category: "creature", kind: "creature", name: "Spider", type: "Token Creature — Spider", power: "2", toughness: "1", colors: ["G"], keywords: ["Reach"] },
+      { category: "creature", kind: "creature", name: "Rhino", type: "Token Creature — Rhino", power: "4", toughness: "4", colors: ["G"], keywords: ["Trample"] },
+      { category: "creature", kind: "creature", name: "Wurm", type: "Token Creature — Wurm", power: "5", toughness: "5", colors: ["G"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Snake", type: "Token Creature — Snake", power: "1", toughness: "1", colors: ["G"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Merfolk", type: "Token Creature — Merfolk", power: "1", toughness: "1", colors: ["U"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Bird", type: "Token Creature — Bird", power: "1", toughness: "1", colors: ["U"], keywords: ["Flying"] },
+      { category: "creature", kind: "creature", name: "Illusion", type: "Token Creature — Illusion", power: "1", toughness: "1", colors: ["U"], keywords: [] },
+      { category: "creature", kind: "creature", name: "Thopter", type: "Token Creature — Thopter", power: "1", toughness: "1", colors: [], keywords: ["Flying"] },
+      { category: "creature", kind: "creature", name: "Construct", type: "Token Creature — Construct", power: "0", toughness: "0", colors: [], keywords: [] },
+      { category: "creature", kind: "creature", name: "Eldrazi Spawn", type: "Token Creature — Eldrazi Spawn", power: "0", toughness: "1", colors: [], keywords: [] },
+      { category: "creature", kind: "creature", name: "Eldrazi Scion", type: "Token Creature — Eldrazi Scion", power: "1", toughness: "1", colors: [], keywords: [] },
+      { category: "creature", kind: "creature", name: "Shapeshifter", type: "Token Creature — Shapeshifter", power: "2", toughness: "2", colors: [], keywords: [] },
+      // -- Artifact tokens --
+      { category: "artifact", kind: "artifact", name: "Treasure", type: "Token Artifact — Treasure", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "artifact", kind: "artifact", name: "Clue", type: "Token Artifact — Clue", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "artifact", kind: "artifact", name: "Food", type: "Token Artifact — Food", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "artifact", kind: "artifact", name: "Blood", type: "Token Artifact — Blood", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "artifact", kind: "artifact", name: "Gold", type: "Token Artifact — Gold", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "artifact", kind: "artifact", name: "Powerstone", type: "Token Artifact — Powerstone", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "artifact", kind: "artifact", name: "Incubator", type: "Token Artifact — Incubator", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "artifact", kind: "artifact", name: "Map", type: "Token Artifact — Map", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "artifact", kind: "artifact", name: "Junk", type: "Token Artifact — Junk", power: null, toughness: null, colors: [], keywords: [] },
+      // -- Role tokens (Auras -- attach to a creature after creating). Real printings are
+      // double-faced (e.g. "Monster // Sorcerer" as one physical token), each side just its own
+      // named Role -- modeled here as single-faced, one preset per side, same "no true DFC support"
+      // simplification this app uses everywhere else. Names below are each real Role's OWN name
+      // (confirmed against Scryfall, not "<Name> Role" -- that combined form isn't the real name and
+      // won't match anything in the live art search).
+      { category: "role", kind: "enchantment", name: "Monster", type: "Token Enchantment — Aura — Role", power: null, toughness: null, colors: ["G"], keywords: [] },
+      { category: "role", kind: "enchantment", name: "Sorcerer", type: "Token Enchantment — Aura — Role", power: null, toughness: null, colors: ["U"], keywords: [] },
+      { category: "role", kind: "enchantment", name: "Wicked", type: "Token Enchantment — Aura — Role", power: null, toughness: null, colors: ["B"], keywords: [] },
+      { category: "role", kind: "enchantment", name: "Virtuous", type: "Token Enchantment — Aura — Role", power: null, toughness: null, colors: ["W"], keywords: [] },
+      { category: "role", kind: "enchantment", name: "Young Hero", type: "Token Enchantment — Aura — Role", power: null, toughness: null, colors: ["R"], keywords: [] },
+      { category: "role", kind: "enchantment", name: "Cursed", type: "Token Enchantment — Aura — Role", power: null, toughness: null, colors: [], keywords: [] },
+      { category: "role", kind: "enchantment", name: "Royal", type: "Token Enchantment — Aura — Role", power: null, toughness: null, colors: ["W"], keywords: [] }
     ];
+    const TOKEN_CATEGORIES = [
+      { id: "creature", label: "Creature" },
+      { id: "artifact", label: "Artifact" },
+      { id: "role", label: "Role (Aura)" }
+    ];
+    let tokenActiveCategory = "creature";
+    function renderTokenCategoryTabs() {
+      document.getElementById("token-category-tabs").innerHTML = TOKEN_CATEGORIES.map((c) =>
+        `<button class="mini-btn${c.id === tokenActiveCategory ? "" : " secondary"}" onclick="setTokenCategory('${c.id}')">${escapeHtml(c.label)}</button>`
+      ).join("");
+    }
+    function setTokenCategory(id) {
+      tokenActiveCategory = id;
+      renderTokenCategoryTabs();
+      renderTokenPresets();
+      document.getElementById("token-role-hint").style.display = id === "role" ? "block" : "none";
+    }
     function renderTokenPresets() {
-      document.getElementById("token-presets").innerHTML = TOKEN_PRESETS.map((t, i) =>
-        `<button class="mini-btn" onclick="applyTokenPreset(${i})">${escapeHtml(t.name)}</button>`
+      const presets = TOKEN_PRESETS.filter((t) => t.category === tokenActiveCategory);
+      document.getElementById("token-presets").innerHTML = presets.map((t) =>
+        `<button class="mini-btn" onclick="applyTokenPreset('${escapeHtml(t.name)}')">${escapeHtml(t.name)}</button>`
       ).join("");
     }
     function tokKeywordId(kw) { return "tok-kw-" + kw.toLowerCase().replace(/\s+/g, "-"); }
@@ -3008,27 +3099,77 @@
         `<label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="tok-kw" id="${tokKeywordId(kw)}" value="${escapeHtml(kw)}"> ${KEYWORD_ICONS[kw] || ""} ${escapeHtml(kw)}</label>`
       ).join("");
     }
-    function applyTokenPreset(i) {
-      const t = TOKEN_PRESETS[i];
+    function applyTokenPreset(name) {
+      const t = TOKEN_PRESETS.find((p) => p.category === tokenActiveCategory && p.name === name);
+      if (!t) return;
       document.getElementById("tok-name").value = t.name;
       document.getElementById("tok-type").value = t.type;
       document.getElementById("tok-power").value = t.power || "";
       document.getElementById("tok-toughness").value = t.toughness || "";
       document.getElementById("tok-img").value = "";
-      const presetKeywords = new Set();
-      if (t.flying) presetKeywords.add("Flying");
-      if (t.haste) presetKeywords.add("Haste");
+      const presetKeywords = new Set(t.keywords || []);
       document.querySelectorAll(".tok-kw").forEach((cb) => { cb.checked = presetKeywords.has(cb.value); });
       document.querySelectorAll(".tok-color").forEach((cb) => { cb.checked = t.colors.includes(cb.value); });
     }
     function openTokenModal() {
+      tokenActiveCategory = "creature";
+      renderTokenCategoryTabs();
       renderTokenPresets();
       renderTokenKeywords();
+      document.getElementById("token-role-hint").style.display = "none";
       document.getElementById("tok-img").value = "";
       document.getElementById("tok-status").innerText = "";
       document.getElementById("token-modal").style.display = "flex";
     }
     function closeTokenModal() { document.getElementById("token-modal").style.display = "none"; }
+
+    // ---------------- token art picker ----------------
+    // "Get all of the card art for each one and allow a selection" -- a genuine live Scryfall
+    // search (server.js's /api/tokenArt), scoped by the token's current Type line so results match
+    // the right permanent kind. Works for ANY name typed into the Name field, not just the preset
+    // buttons above -- that's what actually covers "every possible token," since a fixed button list
+    // can never be complete as new sets keep adding new token names.
+    function tokenKindFromType(type) {
+      const t = (type || "").toLowerCase();
+      if (t.includes("creature")) return "creature";
+      if (t.includes("enchantment")) return "enchantment";
+      if (t.includes("artifact")) return "artifact";
+      return "";
+    }
+    async function openTokenArtPicker() {
+      const name = document.getElementById("tok-name").value.trim();
+      if (!name) { document.getElementById("tok-status").innerText = "Enter a name first."; return; }
+      const kind = tokenKindFromType(document.getElementById("tok-type").value);
+      document.getElementById("token-art-modal-title").innerText = `Choose Art — ${name}`;
+      document.getElementById("token-art-status").innerText = "Searching Scryfall...";
+      document.getElementById("token-art-status").style.display = "block";
+      document.getElementById("token-art-grid").innerHTML = "";
+      document.getElementById("token-art-modal").style.display = "flex";
+      try {
+        const res = await fetch(`/api/tokenArt?name=${encodeURIComponent(name)}&kind=${encodeURIComponent(kind)}`);
+        const json = await res.json();
+        if (!json || !json.success) {
+          document.getElementById("token-art-status").innerText = "Couldn't reach Scryfall right now — you can still paste a URL or upload your own.";
+          return;
+        }
+        const options = json.options || [];
+        if (!options.length) {
+          document.getElementById("token-art-status").innerText = `No real "${name}" token art found on Scryfall — you can still paste a URL or upload your own.`;
+          return;
+        }
+        document.getElementById("token-art-status").style.display = "none";
+        document.getElementById("token-art-grid").innerHTML = options.map((o) => `
+          <img src="${escapeHtml(o.img)}" title="${escapeHtml(o.set || "")}" style="width:100%;aspect-ratio:5/7;object-fit:cover;border-radius:5px;cursor:pointer;border:2px solid transparent;" onmouseenter="this.style.borderColor='#d4af37';" onmouseleave="this.style.borderColor='transparent';" onclick="pickTokenArt('${escapeHtml(o.img)}')">
+        `).join("");
+      } catch (e) {
+        document.getElementById("token-art-status").innerText = "Couldn't reach Scryfall — you can still paste a URL or upload your own.";
+      }
+    }
+    function pickTokenArt(url) {
+      document.getElementById("tok-img").value = url;
+      closeTokenArtPicker();
+    }
+    function closeTokenArtPicker() { document.getElementById("token-art-modal").style.display = "none"; }
     function createToken() {
       const name = document.getElementById("tok-name").value.trim();
       if (!name) { document.getElementById("tok-status").innerText = "Enter a name first."; return; }
