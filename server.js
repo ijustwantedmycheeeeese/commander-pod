@@ -701,7 +701,16 @@ const SPELL_ABILITIES = {
   // part of resolving, instead of going to the graveyard like every other instant/sorcery --
   // exileInsteadOfGraveyard (read by resolveStackTop) is the one flag needed for that, reusable by
   // any future self-exiling spell.
-  "teferi's protection": { label: "Teferi's Protection — life total can't change, protection from everything, phase out all your permanents until your next turn", effects: [{ type: "teferisProtection" }], exileInsteadOfGraveyard: true }
+  "teferi's protection": { label: "Teferi's Protection — life total can't change, protection from everything, phase out all your permanents until your next turn", effects: [{ type: "teferisProtection" }], exileInsteadOfGraveyard: true },
+  // "The next time a source of your choice would deal damage to you this turn, prevent that
+  // damage. If damage is prevented this way, Deflecting Palm deals that much damage to that
+  // source's controller." Real oracle text has no "target" keyword at all -- it's a CHOICE, not a
+  // target, so Hexproof/Shroud/Protection shouldn't actually stop it from being chosen. This app's
+  // target-choice engine has no separate "choice, not target" concept, so it's modeled as an
+  // ordinary "target creature" choice (the overwhelmingly common real use case -- punching back an
+  // attacking creature) -- a disclosed, narrow inaccuracy shared with every other "choice" this app
+  // has ever represented as a target. See applyLifeLoss for where the actual redirect happens.
+  "deflecting palm": { label: "Deflecting Palm — the next time target creature would deal you damage this turn, prevent it and deal that much to its controller instead", effects: [{ type: "deflectingPalm" }], requiresTarget: true, targetKind: "creature" }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -774,6 +783,16 @@ const EFFECTS = {
   // already included in this same filter, so it naturally phases out alongside its host; an
   // opponent's aura on one of this player's permanents is not un-attached -- a disclosed, rare edge
   // case (no reparenting/detach step exists for that scenario).
+  // Deflecting Palm -- sets up the pending redirect; the actual prevent-and-redirect logic lives in
+  // applyLifeLoss (the one shared hook every life-loss site already routes through), keyed off
+  // player.deflectingPalmSource matching the damage's sourceCardId.
+  deflectingPalm(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    const source = lobby.cards[params.chosenTargetId];
+    if (!p || !source) return;
+    p.deflectingPalmSource = params.chosenTargetId;
+    pushLog(lobby, `${p.name} readies Deflecting Palm against ${source.name || "a creature"}`);
+  },
   teferisProtection(lobby, ctx) {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
@@ -1121,7 +1140,7 @@ const EFFECTS = {
     const p = lobby.players[params.chosenTargetId];
     if (p) {
       if (params.chosenTargetId !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
-      applyLifeLoss(lobby, params.chosenTargetId, amount); return;
+      applyLifeLoss(lobby, params.chosenTargetId, amount, ctx.sourceCard && ctx.sourceCard.id); return;
     }
     const card = lobby.cards[params.chosenTargetId];
     if (!card) return;
@@ -1933,7 +1952,10 @@ function cleanupTemporaryKeywords(lobby) {
   }
   let restrictionsChanged = false;
   for (const pid in lobby.players) {
-    if (lobby.players[pid].cantCastSpells) { lobby.players[pid].cantCastSpells = false; restrictionsChanged = true; }
+    const p = lobby.players[pid];
+    if (p.cantCastSpells) { p.cantCastSpells = false; restrictionsChanged = true; }
+    // Deflecting Palm -- "this turn," swept here if the chosen source never actually dealt damage.
+    if (p.deflectingPalmSource) { p.deflectingPalmSource = null; restrictionsChanged = true; }
   }
   if (restrictionsChanged) broadcastPlayers(lobby);
   if (lobby.creaturesCantAttack) lobby.creaturesCantAttack = false;
@@ -2974,12 +2996,32 @@ function applyLifeGain(lobby, playerId, amount) {
 // The loss-side counterpart to applyLifeGain -- same lifeLocked check, no trigger to fire (nothing
 // in this app currently cares about "whenever you lose life"). Every raw `p.life -=` site should
 // route through this instead, so Teferi's Protection's lock is enforced uniformly rather than only
-// at whichever sites happened to get updated.
-function applyLifeLoss(lobby, playerId, amount) {
+// at whichever sites happened to get updated. `sourceCardId`, when the caller can identify a real
+// on-battlefield source of the damage (a combat-damage-dealing attacker, or a damage spell/ability's
+// own card), is what lets Deflecting Palm's redirect trigger -- omit it for non-source-attributable
+// life loss (mass effects, cost payments), which Deflecting Palm correctly can't intercept either.
+// Returns true if `playerId` actually lost the life (the normal case -- callers that also track
+// something ELSE alongside a life loss, like commander damage, should gate that on this return
+// value too, since a locked/redirected hit means THIS player never really took the damage).
+function applyLifeLoss(lobby, playerId, amount, sourceCardId) {
   const p = lobby.players[playerId];
-  if (!p || amount <= 0) return;
-  if (p.lifeLocked) return; // Teferi's Protection -- "your life total can't change"
+  if (!p || amount <= 0) return false;
+  if (p.lifeLocked) return false; // Teferi's Protection -- "your life total can't change"
+  // Deflecting Palm -- "the next time a source of your choice would deal damage to you this turn,
+  // prevent it; that source's controller takes that much instead." One-shot: consumed the first
+  // time the chosen source actually deals this player damage, regardless of amount.
+  if (sourceCardId && p.deflectingPalmSource === sourceCardId) {
+    p.deflectingPalmSource = null;
+    const source = lobby.cards[sourceCardId];
+    const redirectTo = source ? source.owner : null;
+    if (redirectTo && lobby.players[redirectTo]) {
+      pushLog(lobby, `${p.name} deflects ${amount} damage from ${source.name || "its source"} back to ${lobby.players[redirectTo].name} (Deflecting Palm)`);
+      applyLifeLoss(lobby, redirectTo, amount);
+    }
+    return false;
+  }
   p.life -= amount;
+  return true;
 }
 
 // Fires every authored "attacks" ability for `card` (self-referential only). Called from
@@ -3492,11 +3534,12 @@ function resolveCombatDamage(lobby) {
                 // instead of marked damage) is NOT modeled -- falls back to normal lethal-toughness
                 // marked damage against a blocker, a disclosed simplification; poisoning opponents
                 // is infect's primary win condition and the part worth having.
-                if (hasKw(attacker, "infect")) { defender.poison = (defender.poison || 0) + toPlayer; }
-                else { applyLifeLoss(lobby, defenderId, toPlayer); }
-                dmgEvents.push({ targetId: defenderId, amount: toPlayer });
-                pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
-                fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
+                const tookIt = hasKw(attacker, "infect") ? (defender.poison = (defender.poison || 0) + toPlayer, true) : applyLifeLoss(lobby, defenderId, toPlayer, attacker.id);
+                if (tookIt) {
+                  dmgEvents.push({ targetId: defenderId, amount: toPlayer });
+                  pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
+                  fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
+                }
               }
             }
             if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, atkPower);
@@ -3537,20 +3580,26 @@ function resolveCombatDamage(lobby) {
         // zeroing the life change.
         if (defender && atkPower > 0 && !defender.protectionFromEverything) {
           const dealt = atkPower * damageMultiplierFor(lobby, attacker.owner);
-          if (hasKw(attacker, "infect")) defender.poison = (defender.poison || 0) + dealt;
-          else applyLifeLoss(lobby, defenderId, dealt);
-          if (attacker.isCommander) {
-            defender.cmdr = (defender.cmdr || 0) + dealt; // kept as the quick-glance total
-            const key = commanderSlotKey(lobby, attacker);
-            if (key) {
-              if (!defender.cmdrDamage) defender.cmdrDamage = {};
-              defender.cmdrDamage[key] = (defender.cmdrDamage[key] || 0) + dealt;
+          // Deflecting Palm only intercepts real life loss -- infect's poison-counter conversion
+          // (CR 702.90c) isn't a life change at all, so it's never redirectable and always lands.
+          const tookIt = hasKw(attacker, "infect") ? (defender.poison = (defender.poison || 0) + dealt, true) : applyLifeLoss(lobby, defenderId, dealt, attacker.id);
+          // A fully-redirected hit (Deflecting Palm) means this attacker never actually dealt ITS
+          // defender any damage -- no commander-damage tracking, no lifelink, no
+          // combat-damage-to-player trigger for a hit that didn't land.
+          if (tookIt) {
+            if (attacker.isCommander) {
+              defender.cmdr = (defender.cmdr || 0) + dealt; // kept as the quick-glance total
+              const key = commanderSlotKey(lobby, attacker);
+              if (key) {
+                if (!defender.cmdrDamage) defender.cmdrDamage = {};
+                defender.cmdrDamage[key] = (defender.cmdrDamage[key] || 0) + dealt;
+              }
             }
+            pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${dealt}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
+            dmgEvents.push({ targetId: defenderId, amount: dealt });
+            if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, dealt);
+            fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, dealt);
           }
-          pushLog(lobby, `${attacker.name || "A face-down creature"} hits ${defender.name} for ${dealt}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
-          dmgEvents.push({ targetId: defenderId, amount: dealt });
-          if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, dealt);
-          fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, dealt);
         }
       }
     }
@@ -3873,6 +3922,7 @@ io.on("connection", (socket) => {
       life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0,
       protectionFromCardType: null, // Serra's Emissary -- "you and creatures you control have protection from the chosen card type"
       lifeLocked: false, protectionFromEverything: false, phasedOut: [], // Teferi's Protection
+      deflectingPalmSource: null, // Deflecting Palm -- id of the chosen source, cleared on first hit or at cleanup
       boardMat: defaultBoardMat ? defaultBoardMat.url : null,
       boardMatFit: defaultBoardMat ? sanitizeImgFit(defaultBoardMat) : null,
       pileArt: {
