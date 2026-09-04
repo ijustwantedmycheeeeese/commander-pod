@@ -2089,14 +2089,14 @@
       document.getElementById("combat-view-body").innerHTML = attackerIds.map((atkId) => {
         const atk = allCards[atkId];
         const atkName = atk && !atk.faceDown ? escapeHtml(atk.name || "") : "Face-down attacker";
-        const atkImg = atk && !atk.faceDown ? (atk.img || "") : "";
+        const atkImg = atk && !atk.faceDown ? cardArtSrc(atk) : "";
         const atkPT = atk ? effectivePT(atk) : "0/0";
         const blockerId = (c.blocks || {})[atkId];
         let rightSide;
         if (blockerId && allCards[blockerId]) {
           const blk = allCards[blockerId];
           const blkName = blk && !blk.faceDown ? escapeHtml(blk.name || "") : "Face-down blocker";
-          const blkImg = blk && !blk.faceDown ? (blk.img || "") : "";
+          const blkImg = blk && !blk.faceDown ? cardArtSrc(blk) : "";
           const blkPT = effectivePT(blk);
           rightSide = `<img src="${escapeHtml(blkImg)}" class="cv-thumb"><div class="cv-name">${blkName} (${blkPT})</div>`;
         } else {
@@ -2138,7 +2138,7 @@
           const targetableStyle = stackTargetable ? "cursor:pointer;outline:2px solid #d4af37;" : "";
           const targetableClick = stackTargetable ? `chooseTargetFor('${c.id}')` : "";
           return `<div class="stack-item${i === 0 ? " stack-top" : ""}" style="${targetableStyle}" onclick="${targetableClick}" onmouseenter="showStackItemPreview('${c.id}')" onmouseleave="hidePreview()" title="${stackTargetable ? "Click to target this" : ""}">
-            <img src="${escapeHtml(c.img || '')}" class="zone-card-thumb" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')" title="Click to see the full card">
+            <img src="${escapeHtml(cardArtSrc(c))}" class="zone-card-thumb" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')" title="Click to see the full card">
             <div class="zone-card-name" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
             <button class="mini-btn" style="background:#7a1f1f;" onclick="event.stopPropagation();startCounterFlow('${c.id}')" title="${counterTitle}">Counter</button>
           </div>`;
@@ -2188,6 +2188,25 @@
       return String(s).replace(/[&<>"']/g, (ch) => ESCAPE_HTML_MAP[ch]);
     }
     function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+    // A token created without an image URL (Create Token's Art field is optional) has no real
+    // Scryfall art at all -- every card-image <img> in this app falls back to src="", which browsers
+    // render as a broken-image icon, not a graceful placeholder. Generates a small inline SVG (a
+    // gradient from the token's own color identity, its name centered on top) as a data: URI, so it
+    // drops in anywhere `card.img || ...` already sits without needing a separate <img>-vs-<div>
+    // branch at each of the many render call sites.
+    const MTG_COLOR_HEX = { W: "#e8dfb0", U: "#1c6fb0", B: "#4a4a52", R: "#c0342a", G: "#2f7a4a" };
+    function tokenArtDataUri(card) {
+      const colors = (card.colors || []).filter((c) => MTG_COLOR_HEX[c]);
+      const stops = colors.length ? colors.map((c) => MTG_COLOR_HEX[c]) : ["#5a5a5a", "#2a2a2a"];
+      const stopEls = stops.map((c, i) => `<stop offset="${stops.length > 1 ? (i / (stops.length - 1)) * 100 : 0}%" stop-color="${c}"/>`).join("");
+      const name = escapeHtml((card.name || "Token").slice(0, 22));
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="240"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">${stopEls}</linearGradient></defs><rect width="220" height="240" fill="url(#g)"/><text x="110" y="120" font-family="Georgia, serif" font-size="20" fill="rgba(255,255,255,0.92)" text-anchor="middle" dominant-baseline="middle">${name}</text></svg>`;
+      return "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg);
+    }
+    // The one place every card-image src should be computed -- real art if it has any, otherwise
+    // the generated placeholder above. Use this instead of `card.img || ""` at any new render site.
+    function cardArtSrc(card) { return card.img || tokenArtDataUri(card); }
 
     // ---------------- stats / name / dice ----------------
 
@@ -2701,7 +2720,7 @@
       const hand = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "hand");
       document.getElementById("discard-modal-grid").innerHTML = hand.map((c) => `
         <div class="discard-card-pick ${selectedDiscardIds.has(c.id) ? "picked" : ""}" onclick="toggleDiscardPick('${c.id}')">
-          <img src="${escapeHtml(c.img || "")}" alt="${escapeHtml(c.name || "")}">
+          <img src="${escapeHtml(cardArtSrc(c))}" alt="${escapeHtml(c.name || "")}">
           <div class="discard-card-name">${escapeHtml(c.name || "Unknown")}</div>
         </div>
       `).join("");
@@ -2927,7 +2946,7 @@
         body.innerHTML = candidates.map((c) => {
           const ownerName = (players[c.owner] && players[c.owner].name) || "?";
           return `<div class="zone-card-row" style="cursor:pointer;" onclick="pickAttachTarget('${c.id}')">
-            <img src="${escapeHtml(c.img || '')}" class="zone-card-thumb">
+            <img src="${escapeHtml(cardArtSrc(c))}" class="zone-card-thumb">
             <div class="zone-card-name">${escapeHtml(c.name || "Face-down card")}<div style="font-size:10px;color:#a89a70;">${escapeHtml(ownerName)}</div></div>
           </div>`;
         }).join("");
@@ -3108,7 +3127,7 @@
               actions += ` <button class="mini-btn" style="background:#7f9fd4;" onclick="chooseTargetFor('${entry.id}')">Target This</button>`;
             }
           }
-          row.innerHTML = `<img src="${escapeHtml(entry.img || "")}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
+          row.innerHTML = `<img src="${escapeHtml(cardArtSrc(entry))}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
           row.onmouseenter = () => zoneModalPreview(entry);
           body.appendChild(row);
         });
@@ -3124,9 +3143,9 @@
       document.getElementById("zone-modal-preview-body").innerHTML = '<div id="zone-modal-preview-empty">Hover a card to preview it here.</div>';
     }
     function zoneModalPreview(card) {
-      if (!card || !card.img) return;
+      if (!card) return;
       document.getElementById("zone-modal-preview-body").innerHTML =
-        `<img src="${escapeHtml(card.img)}"><div class="pv-name">${buildCardPreviewHtml(card)}</div>`;
+        `<img src="${escapeHtml(cardArtSrc(card))}"><div class="pv-name">${buildCardPreviewHtml(card)}</div>`;
     }
 
     // ---------------- commander zone ----------------
@@ -3781,7 +3800,7 @@
       if (isMasked) {
         inner = `<div class="card-back">🂠</div><div class="card-label">Face-down card</div>`;
       } else {
-        inner = `<img src="${escapeHtml(card.img || "")}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>${attachmentLabel(card)}${controlLabel(card)}`;
+        inner = `<img src="${escapeHtml(cardArtSrc(card))}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>${attachmentLabel(card)}${controlLabel(card)}`;
       }
       if (card.counters) inner += `<div class="counter-badge">${card.counters > 0 ? "+" : ""}${card.counters}</div>`;
       if (!isMasked && card.zoneType === "creature") {
@@ -4068,8 +4087,8 @@
     // (a graveyard/exile/library entry, or a stack item) -- those never carry a faceDown/masking
     // concern the way a live battlefield card can, so this skips straight to rendering.
     function showPreviewFor(card) {
-      if (!card || !card.img) return;
-      document.getElementById("preview-img").src = card.img;
+      if (!card) return;
+      document.getElementById("preview-img").src = cardArtSrc(card);
       document.getElementById("preview-name").innerHTML = buildCardPreviewHtml(card);
       previewPanel.style.display = "block";
     }
@@ -4092,8 +4111,7 @@
       if (!item) return;
       const isAbility = item.kind === "ability";
       const card = isAbility ? { name: item.sourceName, img: item.img } : item;
-      if (!card.img) return;
-      document.getElementById("stack-detail-img").src = card.img;
+      document.getElementById("stack-detail-img").src = cardArtSrc(card);
       document.getElementById("stack-detail-name").innerHTML = buildCardPreviewHtml(card);
       document.getElementById("stack-detail-modal").style.display = "flex";
     }
@@ -4239,7 +4257,7 @@
         // enough; a 3+ player pod still requires actually picking who to attack.
         row.innerHTML = `
           <input type="checkbox" class="atk-check" data-id="${card.id}" onchange="updateAttackersSelectedCount()">
-          <img src="${escapeHtml(card.img || '')}" class="zone-card-thumb">
+          <img src="${escapeHtml(cardArtSrc(card))}" class="zone-card-thumb">
           <div class="zone-card-name">${escapeHtml(card.name || '')} (${effectivePT(card)})</div>
           <select class="atk-target" data-id="${card.id}"><option value="">-- target --</option>${otherPlayers.map(([id, p]) => `<option value="${id}"${otherPlayers.length === 1 ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}</select>`;
         body.appendChild(row);
@@ -4310,7 +4328,7 @@
           </label>`).join("") || `<div style="color:#8a7a55;font-size:11px;">No legal blockers for this attacker.</div>`;
         row.innerHTML = `
           <div style="display:flex;align-items:center;gap:8px;width:100%;">
-            <img src="${escapeHtml(atk && !atk.faceDown ? atk.img : '')}" class="zone-card-thumb">
+            <img src="${escapeHtml(atk && !atk.faceDown ? cardArtSrc(atk) : '')}" class="zone-card-thumb">
             <div class="zone-card-name">${visibleName} (${atk ? effectivePT(atk) : "0/0"}) from ${atkOwner ? escapeHtml(atkOwner.name) : "?"}${hintHtml}</div>
           </div>
           <div style="margin-left:44px;">${checkboxes}</div>`;
