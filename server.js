@@ -747,6 +747,11 @@ const ALT_COSTS = {
 function getAltCost(cardName) {
   return ALT_COSTS[archiveKey(cardName)] || null;
 }
+// Cards whose real automation lives entirely in a dedicated function rather than any of the three
+// main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
+// indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
+// future card built the same way.
+const DEDICATED_FUNCTION_CARDS = ["breath of fury"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -760,14 +765,14 @@ function getAllAutomatedCardNames() {
   return [...new Set([
     ...Object.keys(CARD_ABILITIES), ...Object.keys(ACTIVATED_ABILITIES), ...Object.keys(SPELL_ABILITIES),
     ...ENTERS_TAPPED_FOR_OPPONENTS, ...ATTACK_ALONE_CARDS, ...DAMAGE_DOUBLING_CARDS, ...SELF_DAMAGE_HALVING_CARDS,
-    ...GRAVEYARD_REDIRECT_CREATURE_ONLY, ...GRAVEYARD_REDIRECT_ANY_CARD, ...Object.keys(ALT_COSTS)
+    ...GRAVEYARD_REDIRECT_CREATURE_ONLY, ...GRAVEYARD_REDIRECT_ANY_CARD, ...Object.keys(ALT_COSTS), ...DEDICATED_FUNCTION_CARDS
   ])];
 }
 function isCardAutomated(cardName) {
   const key = archiveKey(cardName);
   return !!(CARD_ABILITIES[key] || ACTIVATED_ABILITIES[key] || SPELL_ABILITIES[key]
     || ENTERS_TAPPED_FOR_OPPONENTS.includes(key) || ATTACK_ALONE_CARDS.includes(key) || DAMAGE_DOUBLING_CARDS.includes(key) || SELF_DAMAGE_HALVING_CARDS.includes(key)
-    || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key) || ALT_COSTS[key]);
+    || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key) || ALT_COSTS[key] || DEDICATED_FUNCTION_CARDS.includes(key));
 }
 
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
@@ -1342,6 +1347,25 @@ const EFFECTS = {
     broadcastTurn(lobby);
     const p = lobby.players[ctx.controllerId];
     pushLog(lobby, `${p ? p.name : "?"} untaps creatures -- there will be an additional combat phase`);
+  },
+  // Breath of Fury -- the "sacrifice it and attach this Aura to a creature you control" half, run
+  // once a legal new host has actually been chosen (see fireBreathOfFuryTrigger). Reattaches the
+  // Aura BEFORE sacrificing the old host, so detachDependents (which fires inside
+  // sendToGraveyardInternal and would otherwise send an Aura straight to the graveyard the instant
+  // its host dies) sees attachedTo already pointing at the NEW creature and leaves it alone. "If you
+  // do" (CR 603.3c is inapplicable here since the reattach already succeeded by construction --
+  // fireBreathOfFuryTrigger only ever queues this when a legal host exists) always reaches the
+  // untap/extra-combat half.
+  breathOfFuryReattach(lobby, ctx, params) {
+    const aura = lobby.cards[params.auraId];
+    const sacrificed = lobby.cards[params.sacrificedCardId];
+    const newHost = lobby.cards[params.chosenTargetId];
+    if (!aura || !sacrificed || !newHost) return;
+    aura.attachedTo = newHost.id;
+    broadcastCard(lobby, aura);
+    fireDeathTriggers(lobby, sacrificed);
+    sendToGraveyardInternal(lobby, sacrificed);
+    EFFECTS.grantExtraCombatPhase(lobby, ctx, {});
   },
   // Rakdos Charm's third mode -- "each creature deals 1 damage to its controller." Damage FROM
   // each creature TO its own controller's life total, not damage to the creature itself.
@@ -2776,6 +2800,11 @@ function resolveChosenTarget(lobby, entry, targetId) {
   if (targetKind === "ownCreature") {
     const c = lobby.cards[targetId];
     if (!c || c.owner !== entry.controllerId || c.zoneType !== "creature") return { ok: false, error: "Choose a creature you control." };
+    // Optional, generic exclusion (Breath of Fury -- can't reattach to the creature that's about
+    // to be sacrificed) -- a plain id check rather than a dedicated targetKind like
+    // otherOwnCreature's hardcoded sourceCard.id exclusion, since the excluded card here is neither
+    // the ability's source nor a fixed relationship, just whatever the caller passes.
+    if (entry.excludeCardId && targetId === entry.excludeCardId) return { ok: false, error: "Choose a DIFFERENT creature you control." };
     return { ok: true };
   }
   // Giver of Runes -- "ANOTHER target creature you control" -- same as ownCreature but excludes the
@@ -3152,6 +3181,42 @@ function fireCombatDamageToPlayerTriggers(lobby, card, defenderId, amount) {
     if (ability.condition && !ability.condition(card)) return;
     const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId, dealtToPlayerAmount: amount }));
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
+  });
+}
+// Breath of Fury -- "When enchanted creature deals combat damage to a player, sacrifice it and
+// attach this Aura to a creature you control. If you do, untap all creatures you control and
+// after this phase, there is an additional combat phase." Not a CARD_ABILITIES entry keyed by the
+// dealing creature's own name (this triggers off WHATEVER creature the Aura currently enchants,
+// which changes every time it fires) -- a dedicated function that scans for the Aura by
+// `attachedTo`, same "genuinely different trigger shape" precedent as fireLiesaReturnToHandTrigger/
+// fireKardurDoomscourgeDeathTrigger. Called alongside fireCombatDamageToPlayerTriggers at both its
+// call sites in resolveCombatDamage.
+// Disclosed edge case: the actual sacrifice-and-reattach only runs once the player answers the
+// queued choice below (see breathOfFuryReattach), which happens AFTER this same combat step's
+// processDeaths() call. If the enchanted creature is ALSO lethally damaged by a blocker in the same
+// exchange (mutual combat), processDeaths kills it first via the normal path, and
+// breathOfFuryReattach then silently no-ops (sacrificedCardId no longer in lobby.cards) -- the
+// trigger correctly fired, but the reattach/extra-combat half is lost for this narrow double-death
+// case. The common cases (unblocked, or the enchanted creature survives its own combat) are
+// unaffected.
+function fireBreathOfFuryTrigger(lobby, attackerCard, defenderId, amount) {
+  if (!lobby.turn.started) return;
+  const aura = Object.values(lobby.cards).find((c) => c.attachedTo === attackerCard.id && archiveKey(c.name) === "breath of fury");
+  if (!aura) return;
+  const otherCreatures = Object.values(lobby.cards).some((c) => c.owner === aura.owner && c.zoneType === "creature" && c.id !== attackerCard.id);
+  if (!otherCreatures) {
+    // No legal creature to move the Aura to -- the sacrifice still happens (mandatory), but "if you
+    // do" (the attach) fails, so untap/extra-combat never fires. The Aura falls off and heads to the
+    // graveyard on its own via detachDependents, same as any Aura whose host leaves the battlefield.
+    fireDeathTriggers(lobby, attackerCard);
+    sendToGraveyardInternal(lobby, attackerCard);
+    return;
+  }
+  queueTargetChoice(lobby, {
+    controllerId: aura.owner, sourceCard: aura,
+    label: `Breath of Fury — sacrifice ${attackerCard.name || "the enchanted creature"} and attach this Aura to a creature you control`,
+    targetKind: "ownCreature", excludeCardId: attackerCard.id,
+    effects: [{ type: "breathOfFuryReattach", sacrificedCardId: attackerCard.id, auraId: aura.id }]
   });
 }
 
@@ -3635,6 +3700,7 @@ function resolveCombatDamage(lobby) {
                   dmgEvents.push({ targetId: defenderId, amount: toPlayer });
                   pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
                   fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
+                  fireBreathOfFuryTrigger(lobby, attacker, defenderId, toPlayer);
                 }
               }
             }
@@ -3695,6 +3761,7 @@ function resolveCombatDamage(lobby) {
             dmgEvents.push({ targetId: defenderId, amount: dealt });
             if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, dealt);
             fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, dealt);
+            fireBreathOfFuryTrigger(lobby, attacker, defenderId, dealt);
           }
         }
       }
