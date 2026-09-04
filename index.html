@@ -3280,7 +3280,8 @@
     }
     function renderTokenPresets() {
       if (!tokenActiveCategory) { document.getElementById("token-presets").innerHTML = ""; return; }
-      const presets = TOKEN_PRESETS.filter((t) => t.category === tokenActiveCategory);
+      const presets = TOKEN_PRESETS.filter((t) => t.category === tokenActiveCategory)
+        .slice().sort((a, b) => a.name.localeCompare(b.name));
       document.getElementById("token-presets").innerHTML = presets.map((t) =>
         `<button class="mini-btn" onclick="applyTokenPreset('${escapeHtml(t.name)}')">${escapeHtml(t.name)}</button>`
       ).join("");
