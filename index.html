@@ -123,6 +123,27 @@
     .player-row.life-flash { animation: lifeFlashAnim 0.7s ease-out; }
     @keyframes clashFlashAnim { 0% { transform: scale(0.3); opacity: 1; } 100% { transform: scale(1.8); opacity: 0; } }
     .clash-flash { position: absolute; width: 40px; height: 40px; margin-left: -20px; margin-top: -20px; border-radius: 50%; background: radial-gradient(circle, rgba(255,220,120,0.9), rgba(255,120,40,0.4) 60%, transparent 80%); animation: clashFlashAnim 0.4s ease-out forwards; pointer-events: none; z-index: 56; }
+    /* Color-coded elemental impact FX (spawnElementalBurst) -- a burst of small particles plus a
+       soft glow, colored per the source's own mana color (fire/red, decay-smoke/black,
+       frost-spark/blue, nature/green, radiant/white, arcane/colorless). Particle direction/distance
+       is randomized per-spawn via the --dx/--dy custom properties set inline in JS, not in this
+       shared rule. */
+    @keyframes fxParticleAnim { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) scale(0.15); opacity: 0; } }
+    .fx-particle { position: absolute; width: 7px; height: 7px; margin-left: -3px; margin-top: -3px; border-radius: 50%; pointer-events: none; z-index: 58; animation: fxParticleAnim 0.65s ease-out forwards; box-shadow: 0 0 6px 1px currentColor; }
+    /* Black's decay/smoke particles drift straight up and billow out rather than exploding
+       radially -- reuses --dx for a slight horizontal drift, but the vertical rise and growth are
+       fixed in the keyframe itself since smoke reads as "smoke" specifically because it doesn't
+       scatter like fire/spark embers do. */
+    @keyframes fxSmokeAnim { 0% { transform: translate(0, 0) scale(0.6); opacity: 0.75; } 100% { transform: translate(var(--dx), -48px) scale(1.8); opacity: 0; } }
+    .fx-smoke { position: absolute; width: 13px; height: 13px; margin-left: -6px; margin-top: -6px; border-radius: 50%; pointer-events: none; z-index: 58; animation: fxSmokeAnim 0.9s ease-out forwards; filter: blur(0.5px); }
+    @keyframes fxGlowAnim { 0% { transform: scale(0.4); opacity: 0.85; } 100% { transform: scale(1.7); opacity: 0; } }
+    .fx-elemental-glow { position: absolute; width: 84px; height: 84px; margin-left: -42px; margin-top: -42px; border-radius: 50%; pointer-events: none; z-index: 57; animation: fxGlowAnim 0.5s ease-out forwards; }
+    /* Equip/aura attach -- "shocks the card with a powerup looking effect," played on the creature
+       RECEIVING the attachment (not the equipment/aura card itself). A brief electric-blue-to-gold
+       flash plus a scale kick, distinct from castPulseAnim's plain gold pulse so a buff landing on
+       an existing permanent reads differently from a fresh cast. */
+    @keyframes fxPowerupAnim { 0% { box-shadow: 0 0 0 3px #444, 0 4px 12px rgba(0,0,0,0.7); filter: brightness(1) saturate(1); } 35% { box-shadow: 0 0 26px 10px rgba(120,220,255,0.95), 0 0 0 3px #d4af37; filter: brightness(1.7) saturate(1.4); transform: scale(1.06); } 100% { box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 3px #444; filter: brightness(1) saturate(1); transform: scale(1); } }
+    .card.equip-powerup { animation: fxPowerupAnim 0.55s ease-out; }
     .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
     .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
     .equip-bonus-badge { position: absolute; bottom: 18px; left: 4px; background: #3b82f6; color: #fff; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
@@ -1536,8 +1557,19 @@
     socket.on("cardUpdate", (card) => {
       const prev = allCards[card.id];
       if (prev && prev.zoneType !== "stack" && card.zoneType === "stack") pendingCastPulse.add(card.id);
+      // Equip/aura attach -- fires on the CREATURE receiving the attachment. Checked against the
+      // PREVIOUS attachedTo (not just "is attached"), so this only plays once, right as the
+      // attachment actually lands, not on every unrelated update to an already-attached permanent.
+      const justAttachedTo = (prev && prev.attachedTo !== card.attachedTo && card.attachedTo) ? card.attachedTo : null;
       allCards[card.id] = card;
       renderVisibleBoard();
+      // Read cardEls AFTER renderVisibleBoard, which wipes and rebuilds it on every call -- the
+      // host creature's DOM element from before this render is about to be discarded, so adding an
+      // animation class to it here would never actually get painted.
+      if (justAttachedTo) {
+        const hostEl = cardEls[justAttachedTo];
+        if (hostEl) spawnEquipPowerup(hostEl);
+      }
       updatePoisonVisibility();
       if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
     });
@@ -1552,11 +1584,12 @@
     });
 
     socket.on("combatDamage", (events) => {
-      // Must read currentCombat.blocks BEFORE anything else touches it -- this event always
-      // arrives before the combatState broadcast that resets combat.blocks to {} server-side
-      // (resolveCombatDamage emits combatDamage first), so this is the only moment the client
-      // still knows which attacker fought which blocker.
+      // Must read currentCombat.blocks/attackers BEFORE anything else touches them -- this event
+      // always arrives before the combatState broadcast that resets combat.attackers/.blocks to {}
+      // server-side (resolveCombatDamage emits combatDamage first), so this is the only moment the
+      // client still knows which attacker fought which blocker, or dealt which player-directed hit.
       spawnClashEffects(currentCombat.blocks);
+      spawnElementalCombatFx(currentCombat.attackers, events);
       (events || []).forEach((e) => spawnDamageFx(e.targetId, e.amount));
       if ((events || []).some((e) => e.targetId === myId && e.amount > 0)) playDamageCue();
     });
@@ -4104,6 +4137,91 @@
     }
     initMusicVolumeSliders();
 
+    // ---------------- elemental impact FX ----------------
+    // Color-coded burst effects for combat damage, keyed off the SOURCE creature's own printed
+    // mana color -- fire/magma for red, decay-smoke for black, frost-spark for blue, nature for
+    // green, radiant light for white, arcane sparkle for colorless/multicolor. Deliberately scoped
+    // to combat damage dealt to a player (see the combatDamage handler below, which is the one
+    // event this app already broadcasts with enough info -- via currentCombat.attackers -- to know
+    // WHO dealt the damage); a targeted spell's own damage effect (Lightning Bolt, etc.) isn't
+    // color-coded since the server's damage-dealt events for that path don't carry a source card id
+    // at all today -- a real, disclosed gap, not an oversight missed during this pass.
+    const ELEMENTAL_PROFILES = {
+      W: { particles: ["#fff8dc", "#ffe066", "#fffbe0"], glow: "rgba(255,224,102,0.55)" },
+      U: { particles: ["#7ec8ff", "#bfe9ff", "#2196f3"], glow: "rgba(79,195,247,0.55)" },
+      B: { particles: ["#5a4a6a", "#3a2e4a", "#8a7a9a"], glow: "rgba(90,74,106,0.55)", smoke: true },
+      R: { particles: ["#ff6a00", "#ff2d00", "#ffcc33"], glow: "rgba(255,90,0,0.6)" },
+      G: { particles: ["#4caf50", "#8bc34a", "#c5e1a5"], glow: "rgba(76,175,80,0.55)" },
+      C: { particles: ["#c0c0d0", "#e8e8f0", "#8a8a9a"], glow: "rgba(192,192,208,0.5)" }
+    };
+    function elementalProfileFor(colors) {
+      const key = (colors && colors.length === 1) ? colors[0] : null;
+      // Multicolor sources don't get a blended effect (would just look muddy) -- fall through to
+      // the same generic arcane spark colorless sources use, same "pick the common case, disclose
+      // the rest" narrowing as everywhere else in this app.
+      return (key && ELEMENTAL_PROFILES[key]) || ELEMENTAL_PROFILES.C;
+    }
+    function spawnElementalBurst(x, y, colors) {
+      const profile = elementalProfileFor(colors);
+      const glow = document.createElement("div");
+      glow.className = "fx-elemental-glow";
+      glow.style.left = x + "px";
+      glow.style.top = y + "px";
+      glow.style.background = `radial-gradient(circle, ${profile.glow}, transparent 70%)`;
+      document.getElementById("fx-layer").appendChild(glow);
+      setTimeout(() => glow.remove(), 550);
+      const count = 9;
+      for (let i = 0; i < count; i++) {
+        const p = document.createElement("div");
+        const color = profile.particles[i % profile.particles.length];
+        if (profile.smoke) {
+          p.className = "fx-smoke";
+          p.style.setProperty("--dx", ((Math.random() - 0.5) * 30) + "px");
+          p.style.background = `radial-gradient(circle, ${color}, transparent 75%)`;
+        } else {
+          p.className = "fx-particle";
+          const angle = (Math.PI * 2 * i) / count + (Math.random() * 0.4 - 0.2);
+          const dist = 26 + Math.random() * 26;
+          p.style.setProperty("--dx", (Math.cos(angle) * dist) + "px");
+          p.style.setProperty("--dy", (Math.sin(angle) * dist - 8) + "px");
+          p.style.background = color;
+          p.style.color = color; // drives the box-shadow: 0 0 6px 1px currentColor glow
+        }
+        p.style.left = x + "px";
+        p.style.top = y + "px";
+        document.getElementById("fx-layer").appendChild(p);
+        setTimeout(() => p.remove(), 950);
+      }
+    }
+    // Combat damage's own trigger point for spawnElementalBurst -- `attackers` is combat.attackers
+    // (attackerId -> defenderId, i.e. the player being hit), read by the caller BEFORE the server's
+    // combatState broadcast resets it. Plays the burst at whichever ATTACKING creature is visible
+    // on the currently-viewed board (same "at most one combatant is ever visible" reasoning
+    // spawnClashEffects already documents) -- so a blocked fight's damage-to-a-player side (trample
+    // spillover) still gets its effect from whichever side of the table you're looking at.
+    function spawnElementalCombatFx(attackers, events) {
+      (events || []).forEach((e) => {
+        if (!(e.amount > 0)) return;
+        Object.entries(attackers || {}).forEach(([attackerId, defenderId]) => {
+          if (defenderId !== e.targetId) return;
+          const el = cardEls[attackerId];
+          if (!el) return;
+          const attacker = allCards[attackerId];
+          const x = parseFloat(el.style.left) + 54;
+          const y = parseFloat(el.style.top) + 75;
+          spawnElementalBurst(x, y, attacker && attacker.colors);
+        });
+      });
+    }
+    // "Equipping the lightning greaves shocks the card with a powerup looking effect" -- played on
+    // the creature RECEIVING an equipment/aura attachment, not the equipment/aura card itself.
+    function spawnEquipPowerup(el) {
+      el.classList.remove("equip-powerup");
+      void el.offsetWidth; // restart the animation if it's somehow already mid-flash
+      el.classList.add("equip-powerup");
+      setTimeout(() => el.classList.remove("equip-powerup"), 600);
+    }
+
     // Cloned into #fx-layer (never touched by renderVisibleBoard's wipe-and-rebuild) so the
     // fade-out animation gets to actually finish instead of being yanked mid-flight by the very
     // next re-render, which can happen within milliseconds of a card leaving the battlefield.
@@ -4112,7 +4230,15 @@
       if (!el) return;
       const ghost = el.cloneNode(true);
       ghost.removeAttribute("id");
-      ghost.className = "card-ghost";
+      // Keep every class the live card had (card, tapped, attacking, face-down-mine, etc.) --
+      // .card img and .card .card-label are both DESCENDANT selectors keyed off the "card" class,
+      // so overwriting className to just "card-ghost" (as this used to do) silently dropped the
+      // image's width/height/object-fit sizing entirely, leaving the <img> at its full natural
+      // resolution inside the (still correctly sized, via .card-ghost's own rule) clipped box --
+      // which shows as a zoomed-in crop of the art's top-left corner, not the actual card image.
+      // .card-ghost only needs to ADD the leave-animation/z-index/pointer-events on top, so append
+      // rather than replace.
+      ghost.classList.add("card-ghost");
       ghost.style.left = el.style.left;
       ghost.style.top = el.style.top;
       ghost.style.borderColor = el.style.borderColor;
