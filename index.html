@@ -1569,6 +1569,14 @@
       // PREVIOUS attachedTo (not just "is attached"), so this only plays once, right as the
       // attachment actually lands, not on every unrelated update to an already-attached permanent.
       const justAttachedTo = (prev && prev.attachedTo !== card.attachedTo && card.attachedTo) ? card.attachedTo : null;
+      // ETB -- fires when a creature genuinely arrives on the battlefield: either a brand new card
+      // id this client has never seen before (a token, a reanimated/tutored card spawned straight
+      // onto the battlefield), or a real cast resolving off the stack, or a creature entering
+      // straight from hand (a flash creature, or any other hand->battlefield path that skips the
+      // stack). Deliberately NOT triggered by prev.zoneType === "artifact"/"mana" -- that's the
+      // cosmetic row-reclassification an already-battlefield permanent can get dragged through
+      // (see changeZone's realZoneType comment), not a real entrance.
+      const enteredBattlefield = card.zoneType === "creature" && (!prev || prev.zoneType === "stack" || prev.zoneType === "hand");
       allCards[card.id] = card;
       renderVisibleBoard();
       // Read cardEls AFTER renderVisibleBoard, which wipes and rebuilds it on every call -- the
@@ -1577,6 +1585,10 @@
       if (justAttachedTo) {
         const hostEl = cardEls[justAttachedTo];
         if (hostEl) spawnEquipPowerup(hostEl);
+      }
+      if (enteredBattlefield) {
+        const el = cardEls[card.id];
+        if (el) spawnElementalBurst(parseFloat(el.style.left) + 54, parseFloat(el.style.top) + 75, card.colors);
       }
       updatePoisonVisibility();
       if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
@@ -1589,6 +1601,30 @@
       renderVisibleBoard();
       updatePoisonVisibility();
       if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
+    });
+
+    // Color-coded death burst -- arrives from fireDeathTriggers server-side, always BEFORE the
+    // cardRemove that actually deletes the card (see that function's comment), so cardEls[data.id]
+    // is still the live, correctly-positioned element here.
+    socket.on("creatureDied", (data) => {
+      const el = cardEls[data.id];
+      if (el) spawnElementalBurst(parseFloat(el.style.left) + 54, parseFloat(el.style.top) + 75, data.colors);
+    });
+
+    // Non-combat damage (a burn spell, a drain effect, etc.) -- server now sends the source card's
+    // id alongside the amount, closing the gap the combat-only version of this system originally
+    // shipped with. Always shows the floating "-N"/life-flash (spawnDamageFx, same as combat
+    // damage); the color-coded burst only plays when the TARGET is a creature currently visible on
+    // this board (cardEls has a position for it) -- a player target has no on-board position to
+    // play a burst at (#fx-layer is scoped to the playmat, not the sidebar player list), same
+    // limitation combat damage to a player already has today.
+    socket.on("spellDamage", (data) => {
+      spawnDamageFx(data.targetId, data.amount);
+      const cardEl = cardEls[data.targetId];
+      if (cardEl) {
+        const source = allCards[data.sourceCardId];
+        spawnElementalBurst(parseFloat(cardEl.style.left) + 54, parseFloat(cardEl.style.top) + 75, source && source.colors);
+      }
     });
 
     socket.on("combatDamage", (events) => {
@@ -4261,14 +4297,21 @@
     initMusicVolumeSliders();
 
     // ---------------- elemental impact FX ----------------
-    // Color-coded burst effects for combat damage, keyed off the SOURCE creature's own printed
-    // mana color -- fire/magma for red, decay-smoke for black, frost-spark for blue, nature for
-    // green, radiant light for white, arcane sparkle for colorless/multicolor. Deliberately scoped
-    // to combat damage dealt to a player (see the combatDamage handler below, which is the one
-    // event this app already broadcasts with enough info -- via currentCombat.attackers -- to know
-    // WHO dealt the damage); a targeted spell's own damage effect (Lightning Bolt, etc.) isn't
-    // color-coded since the server's damage-dealt events for that path don't carry a source card id
-    // at all today -- a real, disclosed gap, not an oversight missed during this pass.
+    // Color-coded burst effects, keyed off the SOURCE's own printed mana color -- fire/magma for
+    // red, decay-smoke for black, frost-spark for blue, nature for green, radiant light for white,
+    // arcane sparkle for colorless/multicolor. Trigger points, all funneling into the one
+    // spawnElementalBurst/ELEMENTAL_PROFILES table below: combat damage to a player
+    // (spawnElementalCombatFx, via the combatDamage handler), equip/aura attach
+    // (spawnEquipPowerup -- a powerup flash rather than a burst, played on the creature RECEIVING
+    // the attachment), a creature entering the battlefield (the cardUpdate handler's
+    // enteredBattlefield check), a creature dying (the creatureDied handler, covers every death
+    // path in the game since they all route through server.js's fireDeathTriggers), and non-combat
+    // damage from a spell/ability (the spellDamage handler, e.g. a Lightning Bolt-style burn spell
+    // or a drain effect -- the server now tags these with the source card's id). Not covered: ETB
+    // and death bursts don't apply to non-creature permanents (artifacts/enchantments have no
+    // "enters/dies" flavor moment the way creatures do), and spell damage to a PLAYER target gets
+    // the plain (uncolored) flash/float only, not a burst -- #fx-layer is scoped to the playmat, so
+    // there's no on-board position to play one at for a sidebar player row.
     const ELEMENTAL_PROFILES = {
       W: { particles: ["#fff8dc", "#ffe066", "#fffbe0"], glow: "rgba(255,224,102,0.55)" },
       U: { particles: ["#7ec8ff", "#bfe9ff", "#2196f3"], glow: "rgba(79,195,247,0.55)" },
