@@ -359,10 +359,10 @@
       <div class="mm-section">
         <div class="mm-label">Play</div>
         <div class="flex-row">
-          <input type="text" id="lobby-name-input" placeholder="Table name (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
+          <input type="text" id="lobby-name-input" name="archon-table-name" autocomplete="off" placeholder="Table name (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
         </div>
         <div class="flex-row" style="margin-top:6px;">
-          <input type="password" id="lobby-password-input" placeholder="Password (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
+          <input type="password" id="lobby-password-input" name="archon-table-password" autocomplete="off" placeholder="Password (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
           <button class="mini-btn" onclick="createLobby()">Create Table</button>
         </div>
         <div class="mm-label" style="margin-top:14px;">Open Tables</div>
@@ -897,6 +897,21 @@
         <h2 id="token-art-modal-title">Choose Art</h2>
         <div id="token-art-status" style="font-size:12px;color:#a89a70;margin-bottom:8px;">Searching Scryfall...</div>
         <div id="token-art-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;max-height:400px;overflow-y:auto;"></div>
+      </div>
+    </div>
+
+    <!-- Generic in-app replacement for window.confirm() -- native confirm/alert/prompt dialogs
+         force the browser out of fullscreen the moment they appear (real behavior, not a bug in
+         this app's own code), so anything shown while at the table needs to be a real DOM modal
+         instead. See showConfirmModal(). -->
+    <div class="modal-overlay" id="confirm-modal">
+      <div class="modal-box" style="max-width:400px;">
+        <h2 id="confirm-modal-title">Confirm</h2>
+        <p id="confirm-modal-text" style="font-size:13px;color:#ddd;white-space:pre-wrap;"></p>
+        <div class="modal-close-row">
+          <button class="mini-btn secondary" onclick="closeConfirmModal()">Cancel</button>
+          <button class="mini-btn" id="confirm-modal-ok-btn">OK</button>
+        </div>
       </div>
     </div>
 
@@ -2157,10 +2172,31 @@
       sel.innerHTML = '<option value="">Load a deck...</option>' + myDeckNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
       if (myDeckNames.includes(current)) sel.value = current;
     }
+    // Real DOM modal standing in for window.confirm() -- a native confirm() dialog forces the
+    // browser to drop out of fullscreen the instant it appears (that's the browser's own
+    // fullscreen-exit-on-any-native-dialog behavior, not something this app's code controls), which
+    // is exactly what made loading a deck while at the table in fullscreen so disruptive. Purely
+    // additive: onConfirm only runs if OK is clicked, same call contract as `if (confirm(...))`.
+    let confirmModalOnConfirm = null;
+    function showConfirmModal(message, onConfirm) {
+      document.getElementById("confirm-modal-text").innerText = message;
+      confirmModalOnConfirm = onConfirm;
+      document.getElementById("confirm-modal").style.display = "flex";
+    }
+    function closeConfirmModal() {
+      document.getElementById("confirm-modal").style.display = "none";
+      confirmModalOnConfirm = null;
+    }
+    document.getElementById("confirm-modal-ok-btn").onclick = () => {
+      const fn = confirmModalOnConfirm;
+      closeConfirmModal();
+      if (fn) fn();
+    };
+
     function loadSelectedDeck() {
       const name = document.getElementById("load-deck-select").value;
       if (!name) return;
-      if (confirm(`Load "${name}"? This replaces your current library (and commander slots, if the deck has any).`)) socket.emit("loadDeck", name);
+      showConfirmModal(`Load "${name}"? This replaces your current library (and commander slots, if the deck has any).`, () => socket.emit("loadDeck", name));
     }
 
     // Whether the "you're being attacked" banner is currently up -- tracked separately from the
