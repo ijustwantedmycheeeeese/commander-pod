@@ -123,21 +123,32 @@
     .player-row.life-flash { animation: lifeFlashAnim 0.7s ease-out; }
     @keyframes clashFlashAnim { 0% { transform: scale(0.3); opacity: 1; } 100% { transform: scale(1.8); opacity: 0; } }
     .clash-flash { position: absolute; width: 40px; height: 40px; margin-left: -20px; margin-top: -20px; border-radius: 50%; background: radial-gradient(circle, rgba(255,220,120,0.9), rgba(255,120,40,0.4) 60%, transparent 80%); animation: clashFlashAnim 0.4s ease-out forwards; pointer-events: none; z-index: 56; }
-    /* Color-coded elemental impact FX (spawnElementalBurst) -- a burst of small particles plus a
-       soft glow, colored per the source's own mana color (fire/red, decay-smoke/black,
-       frost-spark/blue, nature/green, radiant/white, arcane/colorless). Particle direction/distance
-       is randomized per-spawn via the --dx/--dy custom properties set inline in JS, not in this
-       shared rule. */
+    /* Color-coded elemental impact FX (spawnElementalBurst) -- a burst of particles plus a glow,
+       colored per the source's own mana color (fire/red, decay-smoke/black, frost-spark/blue,
+       nature/green, radiant/white, arcane/colorless). Sized deliberately large/bright/long-lived --
+       an earlier, more subdued version of this was hard to actually notice during play. Particle
+       direction/distance is randomized per-spawn via the --dx/--dy custom properties set inline in
+       JS, not in this shared rule. */
     @keyframes fxParticleAnim { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) scale(0.15); opacity: 0; } }
-    .fx-particle { position: absolute; width: 7px; height: 7px; margin-left: -3px; margin-top: -3px; border-radius: 50%; pointer-events: none; z-index: 58; animation: fxParticleAnim 0.65s ease-out forwards; box-shadow: 0 0 6px 1px currentColor; }
+    .fx-particle { position: absolute; width: 13px; height: 13px; margin-left: -6.5px; margin-top: -6.5px; border-radius: 50%; pointer-events: none; z-index: 58; animation: fxParticleAnim 0.9s ease-out forwards; box-shadow: 0 0 16px 5px currentColor; }
     /* Black's decay/smoke particles drift straight up and billow out rather than exploding
        radially -- reuses --dx for a slight horizontal drift, but the vertical rise and growth are
        fixed in the keyframe itself since smoke reads as "smoke" specifically because it doesn't
        scatter like fire/spark embers do. */
-    @keyframes fxSmokeAnim { 0% { transform: translate(0, 0) scale(0.6); opacity: 0.75; } 100% { transform: translate(var(--dx), -48px) scale(1.8); opacity: 0; } }
-    .fx-smoke { position: absolute; width: 13px; height: 13px; margin-left: -6px; margin-top: -6px; border-radius: 50%; pointer-events: none; z-index: 58; animation: fxSmokeAnim 0.9s ease-out forwards; filter: blur(0.5px); }
-    @keyframes fxGlowAnim { 0% { transform: scale(0.4); opacity: 0.85; } 100% { transform: scale(1.7); opacity: 0; } }
-    .fx-elemental-glow { position: absolute; width: 84px; height: 84px; margin-left: -42px; margin-top: -42px; border-radius: 50%; pointer-events: none; z-index: 57; animation: fxGlowAnim 0.5s ease-out forwards; }
+    @keyframes fxSmokeAnim { 0% { transform: translate(0, 0) scale(0.7); opacity: 0.9; } 100% { transform: translate(var(--dx), -72px) scale(2.6); opacity: 0; } }
+    .fx-smoke { position: absolute; width: 20px; height: 20px; margin-left: -10px; margin-top: -10px; border-radius: 50%; pointer-events: none; z-index: 58; animation: fxSmokeAnim 1.15s ease-out forwards; filter: blur(0.5px); }
+    @keyframes fxGlowAnim { 0% { transform: scale(0.3); opacity: 1; } 100% { transform: scale(2.6); opacity: 0; } }
+    .fx-elemental-glow { position: absolute; width: 160px; height: 160px; margin-left: -80px; margin-top: -80px; border-radius: 50%; pointer-events: none; z-index: 57; animation: fxGlowAnim 0.75s ease-out forwards; }
+    /* Expanding ring, layered with the glow for a game-like "impact" read -- the glow alone reads
+       as a soft bloom, the ring is what makes it register as a HIT. */
+    @keyframes fxShockwaveAnim { 0% { transform: scale(0.15); opacity: 1; } 100% { transform: scale(4); opacity: 0; } }
+    .fx-shockwave { position: absolute; width: 70px; height: 70px; margin-left: -35px; margin-top: -35px; border-radius: 50%; border: 5px solid; pointer-events: none; z-index: 57; animation: fxShockwaveAnim 0.6s ease-out forwards; }
+    /* Brief colored flash directly ON the card getting hit/entering/dying -- box-shadow/filter only
+       (no transform), so it never fights the static rotate(90deg) a tapped card already has. This is
+       the single most reliable "did you notice that" cue since it's unmissable even if the particle
+       burst itself is off in a part of the board you're not looking at. */
+    @keyframes fxImpactFlashAnim { 0% { box-shadow: 0 0 0 3px #444, 0 4px 12px rgba(0,0,0,0.7); filter: brightness(1) saturate(1); } 25% { box-shadow: 0 0 38px 16px var(--impact-color, rgba(255,120,0,0.9)), 0 0 0 5px var(--impact-color, #ff6a00); filter: brightness(2.2) saturate(1.8); } 100% { box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 3px #444; filter: brightness(1) saturate(1); } }
+    .card.fx-impact-flash { animation: fxImpactFlashAnim 0.5s ease-out; }
     /* Equip/aura attach -- "shocks the card with a powerup looking effect," played on the creature
        RECEIVING the attachment (not the equipment/aura card itself). A brief electric-blue-to-gold
        flash plus a scale kick, distinct from castPulseAnim's plain gold pulse so a buff landing on
@@ -1588,7 +1599,7 @@
       }
       if (enteredBattlefield) {
         const el = cardEls[card.id];
-        if (el) spawnElementalBurst(parseFloat(el.style.left) + 54, parseFloat(el.style.top) + 75, card.colors);
+        if (el) spawnElementalBurst(parseFloat(el.style.left) + 54, parseFloat(el.style.top) + 75, card.colors, el);
       }
       updatePoisonVisibility();
       if (document.getElementById("discard-modal").style.display === "flex") renderDiscardModal();
@@ -1608,7 +1619,7 @@
     // is still the live, correctly-positioned element here.
     socket.on("creatureDied", (data) => {
       const el = cardEls[data.id];
-      if (el) spawnElementalBurst(parseFloat(el.style.left) + 54, parseFloat(el.style.top) + 75, data.colors);
+      if (el) spawnElementalBurst(parseFloat(el.style.left) + 54, parseFloat(el.style.top) + 75, data.colors, el);
     });
 
     // Non-combat damage (a burn spell, a drain effect, etc.) -- server now sends the source card's
@@ -1623,7 +1634,7 @@
       const cardEl = cardEls[data.targetId];
       if (cardEl) {
         const source = allCards[data.sourceCardId];
-        spawnElementalBurst(parseFloat(cardEl.style.left) + 54, parseFloat(cardEl.style.top) + 75, source && source.colors);
+        spawnElementalBurst(parseFloat(cardEl.style.left) + 54, parseFloat(cardEl.style.top) + 75, source && source.colors, cardEl);
       }
     });
 
@@ -4314,12 +4325,12 @@
     // the plain (uncolored) flash/float only, not a burst -- #fx-layer is scoped to the playmat, so
     // there's no on-board position to play one at for a sidebar player row.
     const ELEMENTAL_PROFILES = {
-      W: { particles: ["#fff8dc", "#ffe066", "#fffbe0"], glow: "rgba(255,224,102,0.55)" },
-      U: { particles: ["#7ec8ff", "#bfe9ff", "#2196f3"], glow: "rgba(79,195,247,0.55)" },
-      B: { particles: ["#5a4a6a", "#3a2e4a", "#8a7a9a"], glow: "rgba(90,74,106,0.55)", smoke: true },
-      R: { particles: ["#ff6a00", "#ff2d00", "#ffcc33"], glow: "rgba(255,90,0,0.6)" },
-      G: { particles: ["#4caf50", "#8bc34a", "#c5e1a5"], glow: "rgba(76,175,80,0.55)" },
-      C: { particles: ["#c0c0d0", "#e8e8f0", "#8a8a9a"], glow: "rgba(192,192,208,0.5)" }
+      W: { particles: ["#fff8dc", "#ffe066", "#fffbe0"], glow: "rgba(255,224,102,0.85)", ring: "#ffe066" },
+      U: { particles: ["#7ec8ff", "#bfe9ff", "#2196f3"], glow: "rgba(79,195,247,0.85)", ring: "#4fc3f7" },
+      B: { particles: ["#5a4a6a", "#3a2e4a", "#8a7a9a"], glow: "rgba(120,100,140,0.85)", ring: "#8a7a9a", smoke: true },
+      R: { particles: ["#ff6a00", "#ff2d00", "#ffcc33"], glow: "rgba(255,90,0,0.9)", ring: "#ff5a00" },
+      G: { particles: ["#4caf50", "#8bc34a", "#c5e1a5"], glow: "rgba(76,175,80,0.85)", ring: "#8bc34a" },
+      C: { particles: ["#c0c0d0", "#e8e8f0", "#8a8a9a"], glow: "rgba(210,210,225,0.8)", ring: "#c0c0d0" }
     };
     function elementalProfileFor(colors) {
       const key = (colors && colors.length === 1) ? colors[0] : null;
@@ -4328,7 +4339,12 @@
       // the rest" narrowing as everywhere else in this app.
       return (key && ELEMENTAL_PROFILES[key]) || ELEMENTAL_PROFILES.C;
     }
-    function spawnElementalBurst(x, y, colors) {
+    // Deliberately big, bright, and a little over-the-top -- particle count, travel distance, glow
+    // size, and the shockwave ring were all scaled up from an earlier, more restrained version that
+    // turned out too easy to miss during actual play. `targetEl`, when given, also gets a brief
+    // colored flash (spawnImpactFlash) directly on the card itself -- the single most reliable "you
+    // definitely saw that" cue, since it doesn't depend on where on the board you're looking.
+    function spawnElementalBurst(x, y, colors, targetEl) {
       const profile = elementalProfileFor(colors);
       const glow = document.createElement("div");
       glow.className = "fx-elemental-glow";
@@ -4336,29 +4352,46 @@
       glow.style.top = y + "px";
       glow.style.background = `radial-gradient(circle, ${profile.glow}, transparent 70%)`;
       document.getElementById("fx-layer").appendChild(glow);
-      setTimeout(() => glow.remove(), 550);
-      const count = 9;
+      setTimeout(() => glow.remove(), 800);
+      const ring = document.createElement("div");
+      ring.className = "fx-shockwave";
+      ring.style.left = x + "px";
+      ring.style.top = y + "px";
+      ring.style.borderColor = profile.ring;
+      document.getElementById("fx-layer").appendChild(ring);
+      setTimeout(() => ring.remove(), 650);
+      const count = 16;
       for (let i = 0; i < count; i++) {
         const p = document.createElement("div");
         const color = profile.particles[i % profile.particles.length];
         if (profile.smoke) {
           p.className = "fx-smoke";
-          p.style.setProperty("--dx", ((Math.random() - 0.5) * 30) + "px");
+          p.style.setProperty("--dx", ((Math.random() - 0.5) * 46) + "px");
           p.style.background = `radial-gradient(circle, ${color}, transparent 75%)`;
         } else {
           p.className = "fx-particle";
           const angle = (Math.PI * 2 * i) / count + (Math.random() * 0.4 - 0.2);
-          const dist = 26 + Math.random() * 26;
+          const dist = 55 + Math.random() * 55;
           p.style.setProperty("--dx", (Math.cos(angle) * dist) + "px");
-          p.style.setProperty("--dy", (Math.sin(angle) * dist - 8) + "px");
+          p.style.setProperty("--dy", (Math.sin(angle) * dist - 14) + "px");
           p.style.background = color;
-          p.style.color = color; // drives the box-shadow: 0 0 6px 1px currentColor glow
+          p.style.color = color; // drives the box-shadow: 0 0 16px 5px currentColor glow
         }
         p.style.left = x + "px";
         p.style.top = y + "px";
         document.getElementById("fx-layer").appendChild(p);
-        setTimeout(() => p.remove(), 950);
+        setTimeout(() => p.remove(), 1200);
       }
+      if (targetEl) spawnImpactFlash(targetEl, profile);
+    }
+    // Box-shadow/filter only (no transform) so it never fights a tapped card's static
+    // rotate(90deg), or any other transform state a card might already be in.
+    function spawnImpactFlash(el, profile) {
+      el.style.setProperty("--impact-color", profile.glow);
+      el.classList.remove("fx-impact-flash");
+      void el.offsetWidth; // restart the animation if it's somehow already mid-flash
+      el.classList.add("fx-impact-flash");
+      setTimeout(() => el.classList.remove("fx-impact-flash"), 500);
     }
     // Combat damage's own trigger point for spawnElementalBurst -- `attackers` is combat.attackers
     // (attackerId -> defenderId, i.e. the player being hit), read by the caller BEFORE the server's
@@ -4376,7 +4409,7 @@
           const attacker = allCards[attackerId];
           const x = parseFloat(el.style.left) + 54;
           const y = parseFloat(el.style.top) + 75;
-          spawnElementalBurst(x, y, attacker && attacker.colors);
+          spawnElementalBurst(x, y, attacker && attacker.colors, el);
         });
       });
     }
