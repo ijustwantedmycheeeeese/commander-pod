@@ -340,7 +340,12 @@ const CARD_ABILITIES = {
   // fireTrigger effect -- this ETB entry only starts that duration. The death half fires from
   // fireKardurDoomscourgeDeathTrigger, since it needs to scan for ANY attacking creature dying
   // table-wide, not just this card's own trigger/target machinery.
-  "kardur, doomscourge": [{ trigger: "etb", label: "Kardur, Doomscourge — opponents' creatures attack each combat, if able, until your next turn", requiresTarget: false, effects: [{ type: "startKardurForcedAttack" }] }]
+  "kardur, doomscourge": [{ trigger: "etb", label: "Kardur, Doomscourge — opponents' creatures attack each combat, if able, until your next turn", requiresTarget: false, effects: [{ type: "startKardurForcedAttack" }] }],
+  // "As this artifact enters, you may have it become a copy of any creature on the battlefield
+  // until end of turn, except it has haste." requiresTarget + the existing Cancel escape hatch on
+  // any pending target choice already gives the "may" semantics for free -- no separate optional-
+  // choice mechanism needed. See EFFECTS.becomeCopyUntilEOT for the actual copy.
+  "cursed mirror": [{ trigger: "etb", label: "Cursed Mirror — you may have it become a copy of any creature on the battlefield until end of turn, except it has haste", requiresTarget: true, targetKind: "creature", effects: [{ type: "becomeCopyUntilEOT" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -1085,6 +1090,31 @@ const EFFECTS = {
       card.grantedProtections.push(params.quality);
       broadcastCard(lobby, card);
     }
+  },
+  // Cursed Mirror -- "become a copy of any creature on the battlefield until end of turn, except
+  // it has haste." CR 707 copying is deep (a copy takes on every COPIABLE value -- name, type line,
+  // mana cost, colors, P/T, text, keywords/abilities, image; NOT counters or other permanents'
+  // temporary bonuses like equipment, which aren't copiable characteristics) -- scoped to exactly
+  // what this one card needs rather than a general copy-effect framework, same "seed the mechanism
+  // with the real card that needs it" precedent as every other subsystem this session. Snapshots
+  // every overwritten field on card._copyOriginal so cleanupTemporaryKeywords can revert them at
+  // end of turn, the same "this turn" sweep every other temporary grant in this app already uses.
+  becomeCopyUntilEOT(lobby, ctx, params) {
+    const mirror = lobby.cards[ctx.sourceCard.id];
+    const source = lobby.cards[params.chosenTargetId];
+    if (!mirror || !source || mirror.id === source.id || mirror._copyOriginal) return;
+    const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
+    const original = {};
+    COPY_FIELDS.forEach((f) => { original[f] = mirror[f]; });
+    original.zoneType = mirror.zoneType;
+    mirror._copyOriginal = original;
+    COPY_FIELDS.forEach((f) => { mirror[f] = source[f]; });
+    const hasHaste = (mirror.keywords || []).some((k) => (k || "").toLowerCase() === "haste");
+    if (!hasHaste) mirror.keywords = [...(mirror.keywords || []), "Haste"];
+    mirror.zoneType = classifyType(mirror.type);
+    broadcastCard(lobby, mirror);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"}'s Cursed Mirror becomes a copy of ${source.name || "a creature"}`);
   },
   // Serra's Emissary -- chosenTargetId here is the chosen CARD TYPE STRING (e.g. "Creature"), not
   // a real card/player id, reusing the same chosenTargetId-baking chooseTargetFor already does for
@@ -2020,9 +2050,16 @@ function cleanupTemporaryKeywords(lobby) {
     // alongside temporaryKeywords in the same pass rather than a second loop over lobby.cards.
     const hasTempKw = c.temporaryKeywords && c.temporaryKeywords.length;
     const hasGrantedProt = c.grantedProtections && c.grantedProtections.length;
-    if (hasTempKw || hasGrantedProt) {
+    // Cursed Mirror -- "until end of turn" copy revert. Restores every field
+    // EFFECTS.becomeCopyUntilEOT overwrote, using the snapshot it took before copying.
+    const hasCopy = !!c._copyOriginal;
+    if (hasTempKw || hasGrantedProt || hasCopy) {
       c.temporaryKeywords = [];
       c.grantedProtections = [];
+      if (hasCopy) {
+        Object.assign(c, c._copyOriginal);
+        c._copyOriginal = null;
+      }
       broadcastCard(lobby, c);
     }
   }
