@@ -633,8 +633,8 @@
           <li>Cards get a brief glow/pop-in when they enter the battlefield and fade out when they leave, attacking/blocking creatures pulse red/blue during combat, damage shows as a floating number (or a red flash on a player's row when it's life loss), and casting a spell gives it a quick golden pulse.</li>
           <li><strong>Free Cast (no cost)</strong> (right-click a hand card) represents an effect like Cascade or Through the Breach — casts it without paying its mana cost or checking whose turn it is, straight onto the stack like any other cast. A manual tool for whatever already-resolved effect earned it; nothing verifies you actually earned it.</li>
           <li><strong>Create Token</strong> (top bar) builds a token from scratch — name, type line, power/toughness, colors, and Flying/Haste checkboxes — since tokens aren't real cards and can't be looked up. A handful of common presets (Soldier, Zombie, Treasure, etc.) fill the form in one click. Art is optional: leaving it blank gives a Soldier/Zombie/Spirit/Goblin/Elemental/Treasure/Clue/Food token real art (one of 5 real printings, picked at random) since those exact names are recognized automatically; any other name gets a color-appropriate generated placeholder instead of a broken image.</li>
-          <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, skipped turn 1 for the starting player) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
-          <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. Defenders then get "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. First strike, deathtouch, trample, double strike, and lifelink are all factored into damage automatically when granted via Manage Keywords or an equipment/aura bonus. A shared combat view pops up for everyone at the table once attackers are declared, showing each attacker next to its blocker (or the player it's headed for) side by side. Some cards tax declaring attackers against their controller (Propaganda and similar) — the total cost across every attacker you're declaring is checked and paid before any of them tap.</li>
+          <li><strong>Start Game</strong> rolls a d20 for each player to decide turn order (highest goes first), then begins the turn structure — only the active player sees Next Phase. Untap (auto-untaps + resets land drops), Upkeep, and Draw (auto-draws, including for the player going first — no skip here) all auto-advance straight through to Main 1 with a single click, since there's never a decision to make there. Combat auto-skips straight to Main 2 the same way if you have no creatures to attack with.</li>
+          <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. A defender who needs to declare blockers gets a hard-to-miss centered banner (plus a sound cue) rather than just a small button — click it to open "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. First strike, deathtouch, trample, double strike, and lifelink are all factored into damage automatically when granted via Manage Keywords or an equipment/aura bonus. A shared combat view pops up for everyone at the table once attackers are declared, showing each attacker next to its blocker (or the player it's headed for) side by side. Some cards tax declaring attackers against their controller (Propaganda and similar) — the total cost across every attacker you're declaring is checked and paid before any of them tap.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
           <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it. Save one under a name in the <strong>Account</strong> modal to reuse it on any table later instead of pasting the URL every time — pick it from the dropdown next to Set/Clear and hit Apply. The <strong>Zone Opacity</strong> slider (same Settings panel) controls how solid the creature/artifact/mana/hand zone fills look, if a busy mat makes them hard to pick out -- piles aren't affected by it.</li>
@@ -681,6 +681,12 @@
       <h2>You have priority</h2>
       <p style="font-size:12px;color:#a89a70;max-width:320px;margin:0 0 8px;">Something's on the stack. Any hand card glowing gold on the board can be cast right now in response — click it to cast, same as any other time. Or pass, and once everyone passes in a row, the top of the stack resolves.</p>
       <button onclick="passPriority()">Pass</button>
+    </div>
+
+    <div class="floating-banner" id="declare-blockers-banner">
+      <h2>⚔ You're Being Attacked!</h2>
+      <p style="font-size:12px;color:#a89a70;max-width:320px;margin:0 0 8px;">Choose which of your creatures (if any) block each attacker, or take the damage.</p>
+      <button onclick="openBlockersModal()">Declare Blockers</button>
     </div>
 
     <div class="modal-overlay" id="stack-detail-modal">
@@ -2110,22 +2116,34 @@
       if (confirm(`Load "${name}"? This replaces your current library (and commander slots, if the deck has any).`)) socket.emit("loadDeck", name);
     }
 
+    // Whether the "you're being attacked" banner is currently up -- tracked separately from the
+    // banner's own display style so the sound cue below fires once per attack (right as the
+    // condition first becomes true), not on every unrelated re-render while it stays visible
+    // (renderCombatState runs on combatState/stackState/turnState alike).
+    let blockersBannerShown = false;
     function renderCombatState(c) {
       const btn = document.getElementById("combat-action-btn");
       const activeId = currentTurn.order[currentTurn.activeIndex];
+      const needsBlockers = currentStack.length === 0 && c.step === "declareBlockers" && (c.defendersPending || []).includes(myId);
       if (currentStack.length > 0) {
         btn.style.display = "none"; // combat can't move forward with something pending on the stack
       } else if (c.step === "declareAttackers" && activeId === myId) {
         btn.style.display = "inline-block";
         btn.innerText = "Declare Attackers";
         btn.onclick = openAttackersModal;
-      } else if (c.step === "declareBlockers" && (c.defendersPending || []).includes(myId)) {
+      } else if (needsBlockers) {
         btn.style.display = "inline-block";
         btn.innerText = "⚔ Declare Blockers!";
         btn.onclick = openBlockersModal;
       } else {
         btn.style.display = "none";
       }
+      // A small button-label change in the turn bar was too easy to miss -- this is the same real
+      // floating-banner treatment (centered, hard to overlook) already used for "you have priority,"
+      // plus a one-shot sound cue, since some players reported never noticing they needed to block.
+      document.getElementById("declare-blockers-banner").style.display = needsBlockers ? "flex" : "none";
+      if (needsBlockers && !blockersBannerShown) playTargetNeededCue();
+      blockersBannerShown = needsBlockers;
       renderCombatView(c);
     }
 
