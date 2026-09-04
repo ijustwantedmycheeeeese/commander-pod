@@ -813,7 +813,12 @@ const EFFECTS = {
     if (!lobby.kardurForcedAttackControllers.includes(ctx.controllerId)) lobby.kardurForcedAttackControllers.push(ctx.controllerId);
   },
   loseLife(lobby, ctx, params) {
-    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => applyLifeLoss(lobby, id, params.amount || 0));
+    const sourceCardId = ctx.sourceCard && ctx.sourceCard.id;
+    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
+      if (applyLifeLoss(lobby, id, params.amount || 0, sourceCardId)) {
+        io.to(lobby.id).emit("spellDamage", { targetId: id, amount: params.amount || 0, sourceCardId });
+      }
+    });
   },
   // Teferi's Protection -- "until your next turn, your life total can't change and you gain
   // protection from everything. All permanents you control phase out." Phasing (CR 702.26) is
@@ -857,7 +862,12 @@ const EFFECTS = {
     pushLog(lobby, `${p.name}'s life total can't change and they gain protection from everything -- all their permanents phase out (Teferi's Protection)`);
   },
   damageEachOpponent(lobby, ctx, params) {
-    effectTargets(lobby, ctx.controllerId, "eachOpponent").forEach((id) => applyLifeLoss(lobby, id, params.amount || 0));
+    const sourceCardId = ctx.sourceCard && ctx.sourceCard.id;
+    effectTargets(lobby, ctx.controllerId, "eachOpponent").forEach((id) => {
+      if (applyLifeLoss(lobby, id, params.amount || 0, sourceCardId)) {
+        io.to(lobby.id).emit("spellDamage", { targetId: id, amount: params.amount || 0, sourceCardId });
+      }
+    });
   },
   millCards(lobby, ctx, params) {
     effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
@@ -1216,17 +1226,25 @@ const EFFECTS = {
   // never stored on the card), so there's nothing to represent short of destroying it outright.
   damageTarget(lobby, ctx, params) {
     let amount = params.amount || 0;
+    const sourceCardId = ctx.sourceCard && ctx.sourceCard.id;
     // Twinflame Tyrant doubling only applies to an OPPONENT (or their permanent) -- never to the
     // controller's own life total or creatures, matching its real "an opponent" wording.
     const p = lobby.players[params.chosenTargetId];
     if (p) {
       if (params.chosenTargetId !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
       amount = reduceDamageForVictim(lobby, params.chosenTargetId, amount);
-      applyLifeLoss(lobby, params.chosenTargetId, amount, ctx.sourceCard && ctx.sourceCard.id); return;
+      if (applyLifeLoss(lobby, params.chosenTargetId, amount, sourceCardId)) {
+        io.to(lobby.id).emit("spellDamage", { targetId: params.chosenTargetId, amount, sourceCardId });
+      }
+      return;
     }
     const card = lobby.cards[params.chosenTargetId];
     if (!card) return;
     if (card.owner !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
+    // Emitted for the visual burst regardless of whether this ends up lethal -- a creature target
+    // taking sub-lethal damage still has nothing MECHANICAL to represent (see the comment on this
+    // effect's doc block above), but there's no reason it shouldn't visibly react.
+    io.to(lobby.id).emit("spellDamage", { targetId: card.id, amount, sourceCardId });
     const bonus = attachedBonusFor(lobby, card);
     const stat = staticBonusFor(lobby, card);
     const effToughness = parsePT(card.toughness) + (card.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
@@ -3133,6 +3151,13 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
 // build the ability instance from.
 function fireDeathTriggers(lobby, card) {
   if (!lobby.turn.started) return;
+  // Client-visible signal for the color-coded death VFX (elemental burst keyed off the dying
+  // creature's own colors) -- covers every death path in this app in one place, since they all
+  // already route through this function. Emitted here (not folded into cardRemove, which ALSO
+  // fires for bounce-to-hand/exile, neither of which is a "death") and BEFORE
+  // sendToGraveyardInternal/exileCardInternal actually delete the card, so the client still has
+  // the card's board position to play the burst at when this arrives.
+  if (card.zoneType === "creature") io.to(lobby.id).emit("creatureDied", { id: card.id, colors: card.colors || [] });
   getAutomatedAbilities(card.name, "death").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalTrigger(lobby, "deathYouControl", card.owner);
   fireLiesaReturnToHandTrigger(lobby, card);
