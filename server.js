@@ -695,7 +695,13 @@ const SPELL_ABILITIES = {
   "orim's chant": { label: "Orim's Chant — choose one", modes: [
     { label: "Orim's Chant — target player can't cast spells this turn", requiresTarget: true, targetKind: "player", effects: [{ type: "restrictCantCastSpells" }] },
     { label: "Orim's Chant, kicked (pay {W} more) — target player can't cast spells, and creatures can't attack, this turn", requiresTarget: true, targetKind: "player", effects: [{ type: "restrictCantCastSpells" }, { type: "restrictCreaturesCantAttack" }] }
-  ] }
+  ] },
+  // "Until your next turn, your life total can't change and you gain protection from everything.
+  // All permanents you control phase out. Exile Teferi's Protection." The card exiles ITSELF as
+  // part of resolving, instead of going to the graveyard like every other instant/sorcery --
+  // exileInsteadOfGraveyard (read by resolveStackTop) is the one flag needed for that, reusable by
+  // any future self-exiling spell.
+  "teferi's protection": { label: "Teferi's Protection — life total can't change, protection from everything, phase out all your permanents until your next turn", effects: [{ type: "teferisProtection" }], exileInsteadOfGraveyard: true }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -756,14 +762,41 @@ const EFFECTS = {
     if (!lobby.kardurForcedAttackControllers.includes(ctx.controllerId)) lobby.kardurForcedAttackControllers.push(ctx.controllerId);
   },
   loseLife(lobby, ctx, params) {
-    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
-      const p = lobby.players[id]; if (p) p.life -= params.amount || 0;
+    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => applyLifeLoss(lobby, id, params.amount || 0));
+  },
+  // Teferi's Protection -- "until your next turn, your life total can't change and you gain
+  // protection from everything. All permanents you control phase out." Phasing (CR 702.26) is
+  // modeled the same way graveyard/exile already are: move the real card objects out of
+  // lobby.cards into a player-scoped array (player.phasedOut), restored at the controller's own
+  // next Untap step (see advanceOnePhase) -- the same moment lifeLocked/protectionFromEverything
+  // also clear, matching the real "phase in before you untap" + "until your next turn" timing.
+  // Anything ATTACHED to a phased permanent (an aura/equipment this same player also controls) is
+  // already included in this same filter, so it naturally phases out alongside its host; an
+  // opponent's aura on one of this player's permanents is not un-attached -- a disclosed, rare edge
+  // case (no reparenting/detach step exists for that scenario).
+  teferisProtection(lobby, ctx) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.lifeLocked = true;
+    p.protectionFromEverything = true;
+    const toPhase = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack");
+    p.phasedOut = (p.phasedOut || []).concat(toPhase);
+    toPhase.forEach((c) => {
+      delete lobby.cards[c.id];
+      delete lobby.targets[c.id];
+      io.to(lobby.id).emit("cardRemove", c.id);
+      delete lobby.combat.attackers[c.id];
+      delete lobby.combat.blocks[c.id];
+      Object.keys(lobby.combat.blocks).forEach((atkId) => {
+        lobby.combat.blocks[atkId] = (lobby.combat.blocks[atkId] || []).filter((bid) => bid !== c.id);
+      });
     });
+    broadcastCombat(lobby);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name}'s life total can't change and they gain protection from everything -- all their permanents phase out (Teferi's Protection)`);
   },
   damageEachOpponent(lobby, ctx, params) {
-    effectTargets(lobby, ctx.controllerId, "eachOpponent").forEach((id) => {
-      const p = lobby.players[id]; if (p) p.life -= params.amount || 0;
-    });
+    effectTargets(lobby, ctx.controllerId, "eachOpponent").forEach((id) => applyLifeLoss(lobby, id, params.amount || 0));
   },
   millCards(lobby, ctx, params) {
     effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
@@ -1088,7 +1121,7 @@ const EFFECTS = {
     const p = lobby.players[params.chosenTargetId];
     if (p) {
       if (params.chosenTargetId !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
-      p.life -= amount; return;
+      applyLifeLoss(lobby, params.chosenTargetId, amount); return;
     }
     const card = lobby.cards[params.chosenTargetId];
     if (!card) return;
@@ -1147,7 +1180,7 @@ const EFFECTS = {
   tutorToHand(lobby, ctx, params) {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
-    if (params.lifeLoss) { p.life -= params.lifeLoss; checkEliminations(lobby); }
+    if (params.lifeLoss) { applyLifeLoss(lobby, ctx.controllerId, params.lifeLoss); checkEliminations(lobby); }
     p.pendingTutor = { typeFilter: params.typeFilter || null };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter });
@@ -1248,10 +1281,7 @@ const EFFECTS = {
   // each creature TO its own controller's life total, not damage to the creature itself.
   eachCreatureDamagesController(lobby, ctx, params) {
     const amt = params.amount || 1;
-    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => {
-      const p = lobby.players[c.owner];
-      if (p) p.life -= amt;
-    });
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => applyLifeLoss(lobby, c.owner, amt));
     broadcastPlayers(lobby);
     checkEliminations(lobby);
   },
@@ -1989,7 +2019,9 @@ function targetIsUntargetableBy(lobby, targetCard, controllerId, sourceCard) {
 function cardTypeProtectionBlocks(lobby, protectedPlayerId, sourceCard) {
   if (!lobby.settings || !lobby.settings.enforceTargetingRestrictions) return false;
   const p = lobby.players[protectedPlayerId];
-  if (!p || !p.protectionFromCardType || !sourceCard) return false;
+  if (!p || !sourceCard) return false;
+  if (p.protectionFromEverything) return true; // Teferi's Protection
+  if (!p.protectionFromCardType) return false;
   return (sourceCard.type || "").toLowerCase().includes(p.protectionFromCardType.toLowerCase());
 }
 
@@ -2242,6 +2274,9 @@ function playersView(lobby, viewerId) {
       poison: p.poison,
       protectionFromCardType: p.protectionFromCardType || null,
       cantCastSpells: !!p.cantCastSpells,
+      lifeLocked: !!p.lifeLocked,
+      protectionFromEverything: !!p.protectionFromEverything,
+      phasedOutCount: (p.phasedOut || []).length,
       boardMat: p.boardMat || null,
       boardMatFit: p.boardMatFit || null,
       pileArt: p.pileArt || { library: null, graveyard: null, exile: null },
@@ -2932,8 +2967,19 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
 function applyLifeGain(lobby, playerId, amount) {
   const p = lobby.players[playerId];
   if (!p || amount <= 0) return;
+  if (p.lifeLocked) return; // Teferi's Protection -- "your life total can't change"
   p.life += amount;
   fireGlobalTrigger(lobby, "selfGainsLife", playerId);
+}
+// The loss-side counterpart to applyLifeGain -- same lifeLocked check, no trigger to fire (nothing
+// in this app currently cares about "whenever you lose life"). Every raw `p.life -=` site should
+// route through this instead, so Teferi's Protection's lock is enforced uniformly rather than only
+// at whichever sites happened to get updated.
+function applyLifeLoss(lobby, playerId, amount) {
+  const p = lobby.players[playerId];
+  if (!p || amount <= 0) return;
+  if (p.lifeLocked) return; // Teferi's Protection -- "your life total can't change"
+  p.life -= amount;
 }
 
 // Fires every authored "attacks" ability for `card` (self-referential only). Called from
@@ -3005,7 +3051,10 @@ function resolveStackTop(lobby) {
       // prompt for here. Falls back to the plain SPELL_ABILITIES effects for an untargeted spell.
       const effects = card._resolvedSpellEffects || (getSpellAbility(card.name) || {}).effects;
       if (effects) executeSpellEffectsNow(lobby, card, effects);
-      sendToGraveyardInternal(lobby, card);
+      // A handful of real cards (Teferi's Protection) exile themselves as part of resolving,
+      // instead of the normal graveyard destination every other instant/sorcery uses.
+      if ((getSpellAbility(card.name) || {}).exileInsteadOfGraveyard) exileCardInternal(lobby, card);
+      else sendToGraveyardInternal(lobby, card);
       if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
     } else {
       card.zoneType = classifyType(card.type);
@@ -3291,6 +3340,17 @@ function advanceOnePhase(lobby) {
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
+    // Teferi's Protection -- "until your next turn" and phased-out permanents both resolve right
+    // here: permanents phase back in "before you untap during your untap step" (CR 702.26e), so
+    // this runs BEFORE the untap loop below, letting that same loop untap anything that phases back
+    // in tapped exactly as if it had been on the battlefield the whole time.
+    if (activePlayer.phasedOut && activePlayer.phasedOut.length) {
+      activePlayer.phasedOut.forEach((c) => { lobby.cards[c.id] = c; broadcastCard(lobby, c); });
+      pushLog(lobby, `${activePlayer.name}'s permanents phase back in`);
+      activePlayer.phasedOut = [];
+    }
+    activePlayer.lifeLocked = false;
+    activePlayer.protectionFromEverything = false;
     for (const id in lobby.cards) {
       if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped) {
         lobby.cards[id].tapped = false;
@@ -3424,14 +3484,16 @@ function resolveCombatDamage(lobby) {
             const toPlayer = toPlayerBase * damageMultiplierFor(lobby, attacker.owner);
             if (toPlayer > 0) {
               const defender = lobby.players[defenderId];
-              if (defender) {
+              // Teferi's Protection -- see the non-trample branch below for why the whole event is
+              // skipped rather than just zeroing the life change.
+              if (defender && !defender.protectionFromEverything) {
                 // CR 702.90c -- infect converts combat damage to a PLAYER into that many poison
                 // counters instead of life loss. Creature-vs-creature infect damage (-1/-1 counters
                 // instead of marked damage) is NOT modeled -- falls back to normal lethal-toughness
                 // marked damage against a blocker, a disclosed simplification; poisoning opponents
                 // is infect's primary win condition and the part worth having.
                 if (hasKw(attacker, "infect")) { defender.poison = (defender.poison || 0) + toPlayer; }
-                else { defender.life -= toPlayer; }
+                else { applyLifeLoss(lobby, defenderId, toPlayer); }
                 dmgEvents.push({ targetId: defenderId, amount: toPlayer });
                 pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
                 fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
@@ -3462,17 +3524,21 @@ function resolveCombatDamage(lobby) {
         // effect, not damage (so no lifelink/cmdr-damage/dmgEvents/combatDamageToPlayer trigger --
         // real Magic is explicit this creature deals no combat damage at all this combat).
         const defender = lobby.players[defenderId];
-        if (defender && defender.life > 1) {
+        if (defender && defender.life > 1 && !defender.lifeLocked) {
           defender.life = 1;
           pushLog(lobby, `${attacker.name} sets ${defender.name}'s life total to 1`);
         }
       } else if (attackerActs) {
         const { power: atkPower } = effPT(attacker);
         const defender = lobby.players[defenderId];
-        if (defender && atkPower > 0) {
+        // Teferi's Protection -- "protection from everything" means no source can deal this player
+        // damage at all (CR 702.16e), not just that their life total happens not to move -- skip the
+        // whole damage event (no poison, no commander-damage tracking either) rather than just
+        // zeroing the life change.
+        if (defender && atkPower > 0 && !defender.protectionFromEverything) {
           const dealt = atkPower * damageMultiplierFor(lobby, attacker.owner);
           if (hasKw(attacker, "infect")) defender.poison = (defender.poison || 0) + dealt;
-          else defender.life -= dealt;
+          else applyLifeLoss(lobby, defenderId, dealt);
           if (attacker.isCommander) {
             defender.cmdr = (defender.cmdr || 0) + dealt; // kept as the quick-glance total
             const key = commanderSlotKey(lobby, attacker);
@@ -3806,6 +3872,7 @@ io.on("connection", (socket) => {
       color: nextColor(),
       life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0,
       protectionFromCardType: null, // Serra's Emissary -- "you and creatures you control have protection from the chosen card type"
+      lifeLocked: false, protectionFromEverything: false, phasedOut: [], // Teferi's Protection
       boardMat: defaultBoardMat ? defaultBoardMat.url : null,
       boardMatFit: defaultBoardMat ? sanitizeImgFit(defaultBoardMat) : null,
       pileArt: {
@@ -4033,6 +4100,7 @@ io.on("connection", (socket) => {
   socket.on("statChange", ({ key, val }) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id] || !["life", "cmdr", "poison"].includes(key)) return;
     if (key === "life" && val > 0) applyLifeGain(lobby, socket.id, val);
+    else if (key === "life" && val < 0) applyLifeLoss(lobby, socket.id, -val);
     else lobby.players[socket.id][key] += val;
     // Manual life adjustment can trigger elimination just like combat can; the manual cmdr/poison
     // buttons only ever touch the flat aggregate/poison counters, never cmdrDamage[key] itself
@@ -4338,7 +4406,7 @@ io.on("connection", (socket) => {
     if (cost.tap) { card.tapped = true; broadcastCard(lobby, card); }
     if (cost.mana) { p.mana = remainingMana; broadcastPlayers(lobby); }
     if (cost.life) {
-      p.life -= cost.life;
+      applyLifeLoss(lobby, socket.id, cost.life);
       checkEliminations(lobby); // paying life is a real way to die -- check immediately, not just at resolution
       broadcastPlayers(lobby);
     }
@@ -4615,7 +4683,7 @@ io.on("connection", (socket) => {
     if (entry.cost && entry.cost.life) {
       // Real Magic never blocks paying life as a cost, even at 1 or below -- same precedent as
       // fetchlands' cost.life.
-      p.life -= entry.cost.life;
+      applyLifeLoss(lobby, socket.id, entry.cost.life);
       checkEliminations(lobby);
       broadcastPlayers(lobby);
     }
