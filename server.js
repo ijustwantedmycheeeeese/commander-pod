@@ -517,7 +517,27 @@ const ACTIVATED_ABILITIES = {
   // "Activate only as a sorcery" isn't checked (this table has no timing-restriction vocabulary
   // for activated abilities) -- a disclosed narrowing, same as everywhere else timing nuances
   // aren't modeled.
-  "whip of erebos": [{ cost: { mana: "{2}{B}{B}", tap: true }, label: "Whip of Erebos — return target creature card from your graveyard to the battlefield with haste, exile it at the next end step", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateWithHasteExileAtEndStep" }] }]
+  "whip of erebos": [{ cost: { mana: "{2}{B}{B}", tap: true }, label: "Whip of Erebos — return target creature card from your graveyard to the battlefield with haste, exile it at the next end step", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateWithHasteExileAtEndStep" }] }],
+  // "{T}: Target creature you control gains protection from the color of your choice until end of
+  // turn." The real card presents "of your choice" as ONE activation with a color picker; this
+  // engine has no such two-step (pick a target, THEN pick a color) choice flow, so it's modeled as
+  // five separate buttons -- one per color -- each its own complete activated ability, same "reuse
+  // the existing multi-button UI instead of building a new modal" precedent Windcrag Siege's ETB
+  // mode-choice already established. See grantProtectionUntilEOT for where the grant actually lands.
+  "mother of runes": ["White", "Blue", "Black", "Red", "Green"].map((color) => ({
+    cost: { tap: true },
+    label: `Mother of Runes — target creature you control gains protection from ${color} until end of turn`,
+    requiresTarget: true, targetKind: "ownCreature",
+    effects: [{ type: "grantProtectionUntilEOT", quality: color.toLowerCase() }]
+  })),
+  // Same shape as Mother of Runes, but "ANOTHER target creature you control" (targetKind
+  // otherOwnCreature excludes Giver itself) and a sixth "colorless" option this card alone has.
+  "giver of runes": ["White", "Blue", "Black", "Red", "Green", "Colorless"].map((color) => ({
+    cost: { tap: true },
+    label: `Giver of Runes — another target creature you control gains protection from ${color} until end of turn`,
+    requiresTarget: true, targetKind: "otherOwnCreature",
+    effects: [{ type: "grantProtectionUntilEOT", quality: color.toLowerCase() }]
+  }))
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1033,6 +1053,20 @@ const EFFECTS = {
       if (!(card.keywords || []).includes(params.keyword)) { card.keywords = [...(card.keywords || []), params.keyword]; broadcastCard(lobby, card); }
     } else {
       grantTemporaryKeyword(lobby, card, params.keyword);
+    }
+  },
+  // Giver of Runes / Mother of Runes -- "target creature you control gains protection from the
+  // color of your choice UNTIL END OF TURN." params.quality (baked into the ACTIVATED_ABILITIES
+  // entry, one per color/colorless -- see the card's own comment there for why) is a plain quality
+  // string in the exact format allProtectionQualities already expects. card.grantedProtections is
+  // the granted-side counterpart to card.temporaryKeywords, swept at the same cleanup point.
+  grantProtectionUntilEOT(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card || !params.quality) return;
+    if (!card.grantedProtections) card.grantedProtections = [];
+    if (!card.grantedProtections.includes(params.quality)) {
+      card.grantedProtections.push(params.quality);
+      broadcastCard(lobby, card);
     }
   },
   // Serra's Emissary -- chosenTargetId here is the chosen CARD TYPE STRING (e.g. "Creature"), not
@@ -1945,8 +1979,13 @@ function grantTemporaryKeyword(lobby, card, keyword) {
 function cleanupTemporaryKeywords(lobby) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
-    if (c.temporaryKeywords && c.temporaryKeywords.length) {
+    // Giver of Runes/Mother of Runes' granted protection is "until end of turn" too -- swept
+    // alongside temporaryKeywords in the same pass rather than a second loop over lobby.cards.
+    const hasTempKw = c.temporaryKeywords && c.temporaryKeywords.length;
+    const hasGrantedProt = c.grantedProtections && c.grantedProtections.length;
+    if (hasTempKw || hasGrantedProt) {
       c.temporaryKeywords = [];
+      c.grantedProtections = [];
       broadcastCard(lobby, c);
     }
   }
@@ -2005,11 +2044,20 @@ const CARD_TYPE_CHOICES = ["Creature", "Instant", "Sorcery", "Artifact", "Enchan
 // creature type ("from Demons and from Dragons", matched via simple singular/plural stemming
 // against the source's own type line) -- "protection from everything" (Progenitus-style) always
 // matches. No sourceCard (e.g. a triggered ability with no real card object) never matches.
+// Union of a creature's PRINTED protection (parsedProtectionQualities) and any GRANTED protection
+// (Giver of Runes/Mother of Runes -- "target creature you control gains protection from the color
+// of your choice UNTIL END OF TURN") -- the latter stored as card.grantedProtections, an array of
+// plain quality strings in the exact same format parsedProtectionQualities already produces, swept
+// at the same end-of-turn cleanup point as card.temporaryKeywords.
+function allProtectionQualities(card) {
+  return parsedProtectionQualities(card).concat(card.grantedProtections || []);
+}
 function sourceMatchesProtection(targetCard, sourceCard) {
-  const qualities = parsedProtectionQualities(targetCard);
+  const qualities = allProtectionQualities(targetCard);
   if (!qualities.length || !sourceCard) return false;
   return qualities.some((q) => {
     if (q === "everything") return true;
+    if (q === "colorless") return (sourceCard.colors || []).length === 0;
     if (PROTECTION_COLOR_WORDS[q]) return (sourceCard.colors || []).includes(PROTECTION_COLOR_WORDS[q]);
     const singular = q.replace(/s$/, "");
     return (sourceCard.type || "").toLowerCase().includes(singular);
@@ -2700,6 +2748,22 @@ function resolveChosenTarget(lobby, entry, targetId) {
   }
   if (targetKind === "cardType") {
     if (!CARD_TYPE_CHOICES.includes(targetId)) return { ok: false, error: "Choose a card type." };
+    return { ok: true };
+  }
+  // Mother of Runes -- "target creature you control." Self-targeting is always legal (protection
+  // never restricts your own creatures from your own abilities, same precedent as
+  // targetIsUntargetableBy's "owner === controller" bypass), so no untargetable check is needed.
+  if (targetKind === "ownCreature") {
+    const c = lobby.cards[targetId];
+    if (!c || c.owner !== entry.controllerId || c.zoneType !== "creature") return { ok: false, error: "Choose a creature you control." };
+    return { ok: true };
+  }
+  // Giver of Runes -- "ANOTHER target creature you control" -- same as ownCreature but excludes the
+  // activating permanent itself.
+  if (targetKind === "otherOwnCreature") {
+    const c = lobby.cards[targetId];
+    if (!c || c.owner !== entry.controllerId || c.zoneType !== "creature") return { ok: false, error: "Choose another creature you control." };
+    if (entry.sourceCard && c.id === entry.sourceCard.id) return { ok: false, error: "Choose ANOTHER creature you control, not this one." };
     return { ok: true };
   }
   if (targetKind === "ownGraveyardCreature") {

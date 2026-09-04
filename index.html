@@ -1274,11 +1274,17 @@
       return m[1].split(/,| and /i).map((s) => s.replace(/^\s*from\s+/i, "").trim().toLowerCase()).filter(Boolean);
     }
     const PROTECTION_COLOR_WORDS = { white: "W", blue: "U", black: "B", red: "R", green: "G" };
+    // Giver of Runes/Mother of Runes' granted (not printed) protection -- see server.js's
+    // allProtectionQualities for the authoritative version this mirrors.
+    function allProtectionQualities(card) {
+      return parsedProtectionQualities(card).concat(card.grantedProtections || []);
+    }
     function sourceMatchesProtection(targetCard, sourceCard) {
-      const qualities = parsedProtectionQualities(targetCard);
+      const qualities = allProtectionQualities(targetCard);
       if (!qualities.length || !sourceCard) return false;
       return qualities.some((q) => {
         if (q === "everything") return true;
+        if (q === "colorless") return (sourceCard.colors || []).length === 0;
         if (PROTECTION_COLOR_WORDS[q]) return (sourceCard.colors || []).includes(PROTECTION_COLOR_WORDS[q]);
         const singular = q.replace(/s$/, "");
         return (sourceCard.type || "").toLowerCase().includes(singular);
@@ -4283,7 +4289,7 @@
         const hints = [];
         if (atkFlying) hints.push("flying -- only flying/reach can block");
         if (atkMenace) hints.push("menace -- needs 2+ blockers or none");
-        if (atk && parsedProtectionQualities(atk).length && currentLobbySettings.enforceTargetingRestrictions) hints.push("protection from " + parsedProtectionQualities(atk).join("/"));
+        if (atk && allProtectionQualities(atk).length && currentLobbySettings.enforceTargetingRestrictions) hints.push("protection from " + allProtectionQualities(atk).join("/"));
         const hintHtml = hints.length ? ` <span style="color:#8a7a55;font-size:11px;">(${hints.join(", ")})</span>` : "";
         const checkboxes = legalBlockers.map((c) => `
           <label style="display:flex;align-items:center;gap:4px;font-size:12px;margin:2px 0;">
