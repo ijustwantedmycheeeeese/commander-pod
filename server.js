@@ -3677,14 +3677,12 @@ function advanceOnePhase(lobby) {
   if (activePlayer && turn.phase === "Upkeep") fireGlobalTrigger(lobby, "upkeep", activeId);
   // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
   if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
+  // Real Magic has the player going first skip their very first draw step -- deliberately NOT
+  // followed here per an explicit house-rule request: everyone draws for the turn, including
+  // whoever's turn 1 it is.
   if (activePlayer && turn.phase === "Draw") {
-    const isVeryFirstTurn = turn.turnNumber === 1 && turn.activeIndex === 0;
-    if (!isVeryFirstTurn) {
-      const drew = drawN(lobby, activeId, 1);
-      if (drew) pushLog(lobby, `${activePlayer.name} drew a card for the turn`);
-    } else {
-      pushLog(lobby, `${activePlayer.name} skips their draw (playing first)`);
-    }
+    const drew = drawN(lobby, activeId, 1);
+    if (drew) pushLog(lobby, `${activePlayer.name} drew a card for the turn`);
   }
   broadcastTurn(lobby);
   broadcastCombat(lobby);
@@ -4538,13 +4536,21 @@ io.on("connection", (socket) => {
       if (!timing.ok) { socket.emit("actionError", timing.error); return; }
       const castCheck = canCastSpells(lobby, socket.id, card);
       if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
-      const result = attemptPlay(p, card, zoneType, x);
+      // Whether this is a land drop (free, no stack) or a spell cast (pays a cost, uses the stack)
+      // is always the CARD's own real type, never the client-supplied `zoneType` -- that value is
+      // purely "which Y-pixel row was the mouse over when released" (see zoneForY in index.html),
+      // with no relationship to what the card actually is. Trusting it directly meant a land
+      // dropped even slightly outside the Lands row got miscast as a spell straight onto the stack
+      // (and, the other direction, a spell dropped in the Lands row got played for free as a land)
+      // -- a real, reported bug ("lands randomly get added to the stack"), not a hypothetical.
+      const realZoneType = classifyType(card.type);
+      const result = attemptPlay(p, card, realZoneType, x);
       if (!result.ok) { socket.emit("actionError", result.error); return; }
-      if (zoneType === "mana" || !lobby.turn.started) {
+      if (realZoneType === "mana" || !lobby.turn.started) {
         // Lands aren't spells -- no stack, no priority window, resolves immediately like today.
         // Pregame (no turn structure yet, no turn.order to hold a priority round) stays
         // unrestricted the same way it always has -- everything just resolves immediately.
-        card.zoneType = zoneType;
+        card.zoneType = realZoneType;
         card.faceDown = false;
         // A card sitting in hand was stamped with whatever turn it was drawn on (or 0, pregame) --
         // that's stale the moment it actually enters the battlefield, which is what summoning
@@ -5655,7 +5661,13 @@ io.on("connection", (socket) => {
     rolls.forEach((r) => pushLog(lobby, `${lobby.players[r.sid].name} rolled a ${r.roll} for turn order`));
     lobby.turn.order = rolls.map((r) => r.sid);
     lobby.turn.activeIndex = 0;
-    lobby.turn.phase = "Main 1";
+    // Starts at Untap (the real first phase of turn 1) rather than jumping straight to Main 1 --
+    // Untap's own side effect (reset land drops, untap permanents) is a manual no-op here anyway
+    // since a fresh turn 1 has zero permanents and landsPlayedThisTurn is already 0 below, but
+    // starting here lets the auto-advance loop right after genuinely walk through Upkeep and Draw,
+    // which is what makes the player going first actually draw for turn 1 (see advanceOnePhase's
+    // own Draw-phase comment for why that's a deliberate house-rule departure from real Magic).
+    lobby.turn.phase = "Untap";
     lobby.turn.turnNumber = 1;
     lobby.turn.started = true;
     lobby.turn.phaseStartedAt = Date.now();
@@ -5666,10 +5678,11 @@ io.on("connection", (socket) => {
       lobby.players[pid].mana = EMPTY_MANA();
       lobby.players[pid].landsPlayedThisTurn = 0;
     }
+    pushLog(lobby, `${lobby.players[lobby.turn.order[0]].name} goes first! Turn order: ${lobby.turn.order.map((id) => (lobby.players[id] ? lobby.players[id].name : "?")).join(" → ")}`);
+    while (shouldAutoAdvance(lobby)) advanceOnePhase(lobby);
     broadcastTurn(lobby);
     broadcastCombat(lobby);
     broadcastPlayers(lobby);
-    pushLog(lobby, `${lobby.players[lobby.turn.order[0]].name} goes first! Turn order: ${lobby.turn.order.map((id) => (lobby.players[id] ? lobby.players[id].name : "?")).join(" → ")}`);
   });
 
   socket.on("nextPhase", () => {
