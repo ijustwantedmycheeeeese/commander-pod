@@ -2313,6 +2313,78 @@ function sanitizeImgUrl(s) {
   return /^(https?:\/\/|\/uploads\/)/i.test(v) ? v : "";
 }
 
+// Real Scryfall token art for the same 8 "common" tokens the client's Create Token quick-presets
+// already cover (see TOKEN_PRESETS in index.html) -- 5 real printings each, so a token created with
+// no Art URL gets genuine art instead of the client's generated gradient placeholder (which is now
+// only a fallback for a token name that doesn't match any of these, e.g. a custom-named one).
+// Picked once at creation time and baked onto the card, matching how a real physical token has one
+// fixed printing for its whole life -- not re-rolled on every render. Keyed by the token's own name
+// lowercased/trimmed (case-insensitive, exact match against the SIMPLE token name, e.g. "Soldier" --
+// a custom type line like "Zombie Soldier" won't match either list on purpose, since that's not
+// unambiguously one of these two).
+const DEFAULT_TOKEN_ART = {
+  "soldier": [
+    "https://cards.scryfall.io/normal/front/5/e/5ef2f34e-0ff2-4157-9d4a-73ecf4cd449b.jpg",
+    "https://cards.scryfall.io/normal/front/e/c/ecd686bf-d14b-491c-b0c5-88fc8f0472f9.jpg",
+    "https://cards.scryfall.io/normal/front/c/4/c459f2ec-2aa3-44f6-999f-b1467dd4e27c.jpg",
+    "https://cards.scryfall.io/normal/front/6/4/6455d903-6996-448f-9148-9068febecb00.jpg",
+    "https://cards.scryfall.io/normal/front/a/f/af191656-5e62-440f-b63a-705cfed314e7.jpg"
+  ],
+  "zombie": [
+    "https://cards.scryfall.io/normal/front/4/c/4cecd5c6-d6c8-4cd5-97a3-cddaf051af15.jpg",
+    "https://cards.scryfall.io/normal/front/b/8/b82be730-c63b-4c2b-99f4-476befdb95cb.jpg",
+    "https://cards.scryfall.io/normal/front/8/1/8150833a-9c83-4d00-ae2f-470088700fdb.jpg",
+    "https://cards.scryfall.io/normal/front/c/d/cd499ed5-f600-4551-a713-ac6b6e894fec.jpg",
+    "https://cards.scryfall.io/normal/front/e/b/eb7b2c61-b903-4669-b9a3-110418a35593.jpg"
+  ],
+  "spirit": [
+    "https://cards.scryfall.io/normal/front/0/0/004f2ea4-0477-49b2-ad06-5aac7991103d.jpg",
+    "https://cards.scryfall.io/normal/front/f/2/f22410b3-5c0b-4282-9b0b-5ba61229b6e7.jpg",
+    "https://cards.scryfall.io/normal/front/a/0/a0aa2f5e-9809-4e97-b9b2-9c9a322a8e21.jpg",
+    "https://cards.scryfall.io/normal/front/1/d/1d9b18e5-d842-4114-b395-ff5dd42c94d9.jpg",
+    "https://cards.scryfall.io/normal/front/5/7/57b674ef-f541-4ee8-9727-1c5b3c0c8f4e.jpg"
+  ],
+  "goblin": [
+    "https://cards.scryfall.io/normal/front/0/9/09faad62-42ff-4e37-b8a5-d8e8a0f6d096.jpg",
+    "https://cards.scryfall.io/normal/front/e/2/e265ca24-96c0-4654-a8f3-bbffe288970a.jpg",
+    "https://cards.scryfall.io/normal/front/7/0/7072dea6-0d99-47fa-a83d-c8607e6a4bbd.jpg",
+    "https://cards.scryfall.io/normal/front/c/d/cd6cd0d3-7973-49e6-9c1c-6f516a5d5fe5.jpg",
+    "https://cards.scryfall.io/normal/front/9/8/98ce0500-d9b4-4218-bcc6-dd6194068958.jpg"
+  ],
+  "elemental": [
+    "https://cards.scryfall.io/normal/front/0/0/008695e6-6d6f-4c16-bf05-377e8cc5f5ff.jpg",
+    "https://cards.scryfall.io/normal/front/7/7/7737cbbf-659e-4a8d-9918-50652d6c0863.jpg",
+    "https://cards.scryfall.io/normal/front/c/5/c5ad13b4-bbf5-4c98-868f-4d105eaf8833.jpg",
+    "https://cards.scryfall.io/normal/front/d/b/db67bc06-b6c9-49a0-beef-4d35842497cb.jpg",
+    "https://cards.scryfall.io/normal/front/b/7/b7047838-ac9f-4ca1-9827-73d87098124f.jpg"
+  ],
+  "treasure": [
+    "https://cards.scryfall.io/normal/front/d/1/d1892b78-7663-4cbd-a732-9a4b0b18d4c8.jpg",
+    "https://cards.scryfall.io/normal/front/c/6/c6e096bb-ad9e-4a8b-8b42-26852fa32c1d.jpg",
+    "https://cards.scryfall.io/normal/front/0/b/0bb11342-bc1d-4eea-b0b0-94799be2602a.jpg",
+    "https://cards.scryfall.io/normal/front/f/9/f909bd95-58a1-4299-9570-87724145fc85.jpg",
+    "https://cards.scryfall.io/normal/front/b/4/b4f61b5e-9c53-40b1-b93e-3ffa351ff052.jpg"
+  ],
+  "clue": [
+    "https://cards.scryfall.io/normal/front/5/e/5e644586-888f-4e2e-8d66-8aa02bd79ec1.jpg",
+    "https://cards.scryfall.io/normal/front/c/3/c321b9e4-ab7e-4e8a-988f-5463c776d685.jpg",
+    "https://cards.scryfall.io/normal/front/8/d/8db9a248-d380-48e9-850c-38b2907332c1.jpg",
+    "https://cards.scryfall.io/normal/front/9/8/98bdb578-e81e-40f9-9c06-b2867158baef.jpg",
+    "https://cards.scryfall.io/normal/front/4/c/4c9669e6-e093-4f88-9699-a1a32793bfa9.jpg"
+  ],
+  "food": [
+    "https://cards.scryfall.io/normal/front/2/7/276dedb8-3d41-499c-8804-bb1471fcb06f.jpg",
+    "https://cards.scryfall.io/normal/front/1/7/174eb62b-b02a-4533-8822-eacc9dcc0a20.jpg",
+    "https://cards.scryfall.io/normal/front/1/1/110f41a6-1ca5-463e-8a6d-fdf021842b43.jpg",
+    "https://cards.scryfall.io/normal/front/d/6/d6fbb5c7-9cc4-4528-8fc5-ec7a9d19a92e.jpg",
+    "https://cards.scryfall.io/normal/front/d/4/d4a47380-3e51-4c1d-9ffa-472d4f97d36b.jpg"
+  ]
+};
+function pickDefaultTokenArt(name) {
+  const options = DEFAULT_TOKEN_ART[(name || "").trim().toLowerCase()];
+  return options ? options[Math.floor(Math.random() * options.length)] : "";
+}
+
 // A crop/zoom transform for a custom image (pile art, board mat) -- scale is a zoom multiplier on
 // top of a cover-fit baseline, x/y are the object-position percentages used to pan within it.
 function sanitizeImgFit({ scale, x, y } = {}) {
@@ -2475,8 +2547,9 @@ function spawnBattlefieldCard(lobby, data) {
   const p = lobby.players[owner];
   const id = newId();
   const resolvedZoneType = zoneType || classifyType(data.type);
+  const sanitizedImg = sanitizeImgUrl(data.img);
   const card = {
-    id, name: sanitizeCardStr(data.name, 200), img: sanitizeImgUrl(data.img), type: sanitizeCardStr(data.type || "", 100), manaCost: sanitizeCardStr(data.manaCost || "", 50),
+    id, name: sanitizeCardStr(data.name, 200), img: sanitizedImg || pickDefaultTokenArt(data.name), type: sanitizeCardStr(data.type || "", 100), manaCost: sanitizeCardStr(data.manaCost || "", 50),
     cmc: data.cmc || 0, colors: data.colors || [], colorIdentity: data.colorIdentity || [],
     power: data.power, toughness: data.toughness, loyalty: data.loyalty,
     text: sanitizeCardStr(data.text || "", 3000), keywords: data.keywords || [], producedMana: data.producedMana || null,
