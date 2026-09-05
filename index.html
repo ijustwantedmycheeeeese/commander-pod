@@ -392,11 +392,12 @@
           <button class="secondary" onclick="logout()">Log Out</button>
         </div>
         <!-- Only ever shown for the "wingus" account (see renderExportDataButton) -- a personal
-             data-export button, not a general feature. Pulls every saved deck (plus a couple of
-             other account fields) into one JSON file, for feeding back into a future session to
-             find real, currently-unautomated cards worth adding to CARD_ABILITIES/SPELL_ABILITIES. -->
+             data-export button, not a general feature. Pulls every saved deck across EVERY account
+             on this server, plus the full card archive (every real card any player has ever looked
+             up), into one JSON file, for feeding back into a future session to find real,
+             currently-unautomated cards worth adding to CARD_ABILITIES/SPELL_ABILITIES. -->
         <div class="flex-row" id="export-data-row" style="display:none;margin-top:8px;">
-          <button class="secondary" onclick="exportAccountData()">Export My Decks (wingus only)</button>
+          <button class="secondary" onclick="exportAccountData()">Export Server Data (wingus only)</button>
         </div>
       </div>
     </div>
@@ -1166,8 +1167,9 @@
 
     // Personal data-export button -- only ever shown/functional for the "wingus" account (server
     // enforces this too, at /api/export -- this client-side check is purely so nobody else even
-    // sees the button, not the actual security boundary). Exports every saved deck to a downloadable
-    // JSON file, for feeding into a future session to find real, currently-unautomated cards.
+    // sees the button, not the actual security boundary). Exports every saved deck across every
+    // account, plus the full card archive, to a downloadable JSON file, for feeding into a future
+    // session to find real, currently-unautomated cards.
     function renderExportDataButton() {
       document.getElementById("export-data-row").style.display = myUsername === "wingus" ? "flex" : "none";
     }
