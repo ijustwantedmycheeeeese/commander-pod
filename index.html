@@ -575,6 +575,7 @@
       <button data-action="play">Play to Battlefield</button>
       <button data-action="freeCast" title="Represents an effect like Cascade -- cast without paying its mana cost">Free Cast (no cost)</button>
       <button id="context-menu-altcost" style="display:none;"></button>
+      <button id="context-menu-cycle" style="display:none;"></button>
       <button data-action="toHand">Return to Hand</button>
       <button data-action="tap">Tap</button>
       <button data-action="flip">Flip Face Up/Down</button>
@@ -4794,6 +4795,14 @@
         altCostEl.onclick = () => { socket.emit("castWithAltCost", card.id); contextMenu.style.display = "none"; };
       } else {
         altCostEl.style.display = "none";
+      }
+      const cycleEl = document.getElementById("context-menu-cycle");
+      if (isMine && card.zoneType === "hand" && card.cycleOption) {
+        cycleEl.style.display = "block";
+        cycleEl.textContent = card.cycleOption.label;
+        cycleEl.onclick = () => { socket.emit("cycleCard", card.id); contextMenu.style.display = "none"; };
+      } else {
+        cycleEl.style.display = "none";
       }
     }
 
