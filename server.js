@@ -6863,6 +6863,25 @@ io.on("connection", (socket) => {
     socket.to(lobby.id).emit("cursorMoved", { playerId: socket.id, x: cx, y: cy, boardOwner: String(boardOwner || "") });
   });
 
+  // Draws attention to a spot on the board -- right-click on empty board space, client-side (see
+  // the matching `contextmenu` listener). A light per-player cooldown (1s) keeps this from being
+  // spammed into an actual flashing nuisance; unlike cursorMove this DOES include the sender in the
+  // broadcast (so pinging gives you your own visual confirmation it went out) and DOES log it, since
+  // a ping is a deliberate, occasional attention-getter rather than continuous passive telemetry.
+  socket.on("ping", ({ x, y, boardOwner }) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p) return;
+    if (!lobby.lastPingAt) lobby.lastPingAt = {};
+    const now = Date.now();
+    if (now - (lobby.lastPingAt[socket.id] || 0) < 1000) return;
+    lobby.lastPingAt[socket.id] = now;
+    const cx = Math.max(0, Math.min(100, Number(x) || 0));
+    const cy = Math.max(0, Math.min(100, Number(y) || 0));
+    const color = p.cursorColor || p.color || "#f0e6c8";
+    io.to(lobby.id).emit("pinged", { playerId: socket.id, name: p.name, x: cx, y: cy, boardOwner: String(boardOwner || ""), color });
+    pushLog(lobby, `${p.name} pinged the board`);
+  });
+
   // Cursor color is enforced unique PER LOBBY (unlike the plain nametag `color` above, which has no
   // such guarantee) -- rejects a pick that's already in use by someone else currently seated here,
   // rather than silently letting two cursors look identical. null clears back to the default
