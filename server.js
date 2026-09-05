@@ -4151,12 +4151,17 @@ app.get("/api/iceServers", (req, res) => {
 });
 
 // Personal export, deliberately restricted to exactly one account ("wingus") -- not a general
-// user-data-export feature, just a way to pull every saved deck's real card data (name/type/text/
-// colors/cmc/power/toughness/keywords, the same shape toEntry() already produces) out of this app
-// and into a file that can be handed to a future session, to find real cards actually being played
-// that aren't automated yet in CARD_ABILITIES/SPELL_ABILITIES. The username check is the actual
-// security boundary (client-side button visibility is just so nobody else even sees it) -- every
-// other account gets a plain 403, same as an unauthenticated request would.
+// user-data-export feature, just a way to pull real card data out of this app and into a file that
+// can be handed to a future session, to find real cards actually being played that aren't automated
+// yet in CARD_ABILITIES/SPELL_ABILITIES. The username check is the actual security boundary
+// (client-side button visibility is just so nobody else even sees it) -- every other account gets
+// a plain 403, same as an unauthenticated request would.
+// Deliberately server-wide, not just the requester's own decks -- `decks` (every account's saved
+// decks, same {commanders, library} shape toEntry() produces) and `cardArchive` (lowercase card
+// name -> full Scryfall-derived data, populated by /api/spawn every time ANY player has ever looked
+// up a real card, whether or not it ended up in a saved deck -- broader coverage than decks alone).
+// Deliberately excludes `users` (would mean shipping password hashes/session data) and saved board
+// mats/pile art/avatars (irrelevant to card automation).
 app.get("/api/export", (req, res) => {
   const token = req.query.token;
   const requestingUsername = sessionUsername(token);
@@ -4164,10 +4169,11 @@ app.get("/api/export", (req, res) => {
   if (requestingUsername !== "wingus") return res.status(403).json({ error: "This export is only available on the wingus account." });
   const payload = {
     exportedAt: new Date().toISOString(),
-    username: requestingUsername,
-    decks: decks[requestingUsername] || {}
+    requestedBy: requestingUsername,
+    decksByAccount: decks,
+    cardArchive
   };
-  res.setHeader("Content-Disposition", `attachment; filename="archon-export-${requestingUsername}-${Date.now()}.json"`);
+  res.setHeader("Content-Disposition", `attachment; filename="archon-export-${Date.now()}.json"`);
   res.json(payload);
 });
 
