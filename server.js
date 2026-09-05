@@ -3618,6 +3618,24 @@ function advancePhase(lobby) {
   while (shouldAutoAdvance(lobby)) advanceOnePhase(lobby);
 }
 
+// Turn 1's Untap/Upkeep/Draw auto-advance (see advanceOnePhase's Draw-phase comment for why the
+// player going first draws too, a deliberate house-rule departure from real Magic) used to run
+// synchronously inside startGame itself, before anyone had even seen the Opening Hand prompt --
+// the very first player's turn-1 draw landed in their hand, then the moment they clicked "Draw 7"
+  // for their actual opening hand, returnAllHandToLibrary wiped that already-drawn card straight back
+  // into the library along with it, which looked exactly like the game silently deleting a card.
+// Called from keepHand every time a player finishes their opening hand, so it fires exactly once,
+// right as the LAST player keeps theirs -- everyone's opening 7 is settled before turn 1 actually
+// starts moving, same order real Magic uses.
+function beginTurnFlowOnceHandsReady(lobby) {
+  if (!lobby.turn.started || lobby.turn.turnNumber !== 1 || lobby.turn.phase !== "Untap") return;
+  if (!Object.values(lobby.players).every((p) => p.handKept)) return;
+  while (shouldAutoAdvance(lobby)) advanceOnePhase(lobby);
+  broadcastTurn(lobby);
+  broadcastCombat(lobby);
+  broadcastPlayers(lobby);
+}
+
 function advanceOnePhase(lobby) {
   const turn = lobby.turn;
   if (!turn.started || turn.order.length === 0) return;
@@ -5385,6 +5403,7 @@ io.on("connection", (socket) => {
     p.handKept = true;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} kept their hand and is ready`);
+    beginTurnFlowOnceHandsReady(lobby);
   });
 
   // ---- persistent decks (account-scoped, not lobby-scoped) ----
@@ -5688,10 +5707,12 @@ io.on("connection", (socket) => {
     lobby.turn.activeIndex = 0;
     // Starts at Untap (the real first phase of turn 1) rather than jumping straight to Main 1 --
     // Untap's own side effect (reset land drops, untap permanents) is a manual no-op here anyway
-    // since a fresh turn 1 has zero permanents and landsPlayedThisTurn is already 0 below, but
-    // starting here lets the auto-advance loop right after genuinely walk through Upkeep and Draw,
-    // which is what makes the player going first actually draw for turn 1 (see advanceOnePhase's
-    // own Draw-phase comment for why that's a deliberate house-rule departure from real Magic).
+    // since a fresh turn 1 has zero permanents and landsPlayedThisTurn is already 0 below. The
+    // auto-advance through Upkeep/Draw (which is what makes the player going first actually draw
+    // for turn 1 -- see advanceOnePhase's own Draw-phase comment for why that's a deliberate
+    // house-rule departure from real Magic) is DELIBERATELY NOT run here -- see
+    // beginTurnFlowOnceHandsReady, called from keepHand once every player has kept their opening
+    // hand, so that first-turn draw can't land before the Opening Hand prompt has even been seen.
     lobby.turn.phase = "Untap";
     lobby.turn.turnNumber = 1;
     lobby.turn.started = true;
@@ -5704,7 +5725,6 @@ io.on("connection", (socket) => {
       lobby.players[pid].landsPlayedThisTurn = 0;
     }
     pushLog(lobby, `${lobby.players[lobby.turn.order[0]].name} goes first! Turn order: ${lobby.turn.order.map((id) => (lobby.players[id] ? lobby.players[id].name : "?")).join(" → ")}`);
-    while (shouldAutoAdvance(lobby)) advanceOnePhase(lobby);
     broadcastTurn(lobby);
     broadcastCombat(lobby);
     broadcastPlayers(lobby);
