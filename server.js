@@ -345,7 +345,19 @@ const CARD_ABILITIES = {
   // until end of turn, except it has haste." requiresTarget + the existing Cancel escape hatch on
   // any pending target choice already gives the "may" semantics for free -- no separate optional-
   // choice mechanism needed. See EFFECTS.becomeCopyUntilEOT for the actual copy.
-  "cursed mirror": [{ trigger: "etb", label: "Cursed Mirror — you may have it become a copy of any creature on the battlefield until end of turn, except it has haste", requiresTarget: true, targetKind: "creature", effects: [{ type: "becomeCopyUntilEOT" }] }]
+  "cursed mirror": [{ trigger: "etb", label: "Cursed Mirror — you may have it become a copy of any creature on the battlefield until end of turn, except it has haste", requiresTarget: true, targetKind: "creature", effects: [{ type: "becomeCopyUntilEOT" }] }],
+  // Batch added from the same live-decklist gap-analysis pass as SPELL_ABILITIES/ACTIVATED_ABILITIES
+  // below. typeFilter is a plain type-line substring match, same shape tutorToHand already supports
+  // for Weathered Wayfarer-style cards.
+  "goblin matron": [{ trigger: "etb", label: "Goblin Matron — search your library for a Goblin card, put it into your hand", requiresTarget: false, effects: [{ type: "tutorToHand", typeFilter: "goblin" }] }],
+  // "Whenever you cast an instant or sorcery spell, this creature deals 2 damage to each opponent."
+  // See fireGlobalTrigger's spellTypeFilter comment for how the instant-or-sorcery restriction works.
+  "guttersnipe": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], label: "Guttersnipe — deal 2 damage to each opponent", requiresTarget: false, effects: [{ type: "damageEachOpponent", amount: 2 }] }],
+  // "Whenever Krenko attacks, put a +1/+1 counter on it, then create a number of 1/1 red Goblin
+  // creature tokens equal to Krenko's power." Effects resolve strictly in array order, so
+  // createTokensEqualToSelfPower correctly sees the counter addCountersToSelf just added -- see its
+  // own comment.
+  "krenko, tin street kingpin": [{ trigger: "attack", label: "Krenko, Tin Street Kingpin — +1/+1 counter, then create Goblin tokens equal to its power", requiresTarget: false, effects: [{ type: "addCountersToSelf", amount: 1 }, { type: "createTokensEqualToSelfPower", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -542,7 +554,15 @@ const ACTIVATED_ABILITIES = {
     label: `Giver of Runes — another target creature you control gains protection from ${color} until end of turn`,
     requiresTarget: true, targetKind: "otherOwnCreature",
     effects: [{ type: "grantProtectionUntilEOT", quality: color.toLowerCase() }]
-  }))
+  })),
+  // Batch added from the same live-decklist gap-analysis pass as SPELL_ABILITIES below.
+  "goblin motivator": [{ cost: { tap: true }, label: "Goblin Motivator — target creature gains haste until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Haste" }] }],
+  "skirk prospector": [{ cost: { sacrifice: true }, manaAbility: true, label: "Skirk Prospector — Sacrifice: Add {R}", effects: [{ type: "addFixedMana", colors: ["R"] }] }],
+  "wayfarer's bauble": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Wayfarer's Bauble — search for a basic land, tapped", effects: [{ type: "searchLandTypes", basicOnly: true, types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], entersTapped: true }] }],
+  // "{T}: Create X 1/1 red Goblin creature tokens, where X is the number of Goblins you control."
+  // See createTokensEqualToTypeCountControlled's own comment for why X is computed inside the
+  // effect itself rather than threaded in as a param.
+  "krenko, mob boss": [{ cost: { tap: true }, label: "Krenko, Mob Boss — create Goblin tokens equal to Goblins you control", effects: [{ type: "createTokensEqualToTypeCountControlled", typeFilter: ["goblin"], name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -735,7 +755,30 @@ const SPELL_ABILITIES = {
   // ordinary "target creature" choice (the overwhelmingly common real use case -- punching back an
   // attacking creature) -- a disclosed, narrow inaccuracy shared with every other "choice" this app
   // has ever represented as a target. See applyLifeLoss for where the actual redirect happens.
-  "deflecting palm": { label: "Deflecting Palm — the next time target creature would deal you damage this turn, prevent it and deal that much to its controller instead", effects: [{ type: "deflectingPalm" }], requiresTarget: true, targetKind: "creature" }
+  "deflecting palm": { label: "Deflecting Palm — the next time target creature would deal you damage this turn, prevent it and deal that much to its controller instead", effects: [{ type: "deflectingPalm" }], requiresTarget: true, targetKind: "creature" },
+  // Batch added from a live-decklist gap-analysis pass (exported real decks cross-referenced
+  // against what's already automated) -- every entry below maps directly onto an existing (or, for
+  // a few shared shapes, a small new) EFFECTS function; oracle text confirmed against each card's
+  // own real Scryfall-derived text captured in this app's card archive. Modal ("Choose one/two —")
+  // spells, Overload/alternate-cost effects, and a handful of genuinely bespoke mechanics were left
+  // out of this pass -- see the "not automated yet" note in this codebase's own memory for the full
+  // list and why.
+  "negate": { label: "Negate — counter target spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spell" },
+  "rampant growth": { label: "Rampant Growth — search for a basic land, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] },
+  "farseek": { label: "Farseek — search for a Plains, Island, Swamp, or Mountain, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain"], entersTapped: true }] },
+  "anguished unmaking": { label: "Anguished Unmaking — exile target nonland permanent, lose 3 life", effects: [{ type: "exileTarget" }, { type: "loseLife", target: "controller", amount: 3 }], requiresTarget: true, targetKind: "permanent" },
+  "vandalblast": { label: "Vandalblast — destroy target artifact", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "artifact" },
+  "damn": { label: "Damn — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "cyclonic rift": { label: "Cyclonic Rift — return target nonland permanent to its owner's hand", effects: [{ type: "bounceTargetToHand" }], requiresTarget: true, targetKind: "permanent" },
+  "beast within": { label: "Beast Within — destroy target permanent, its controller gets a 3/3 Beast", effects: [{ type: "destroyTargetCreateTokenForController", tokenName: "Beast", tokenType: "Token Creature — Beast", power: "3", toughness: "3", colors: ["G"] }], requiresTarget: true, targetKind: "permanent" },
+  "generous gift": { label: "Generous Gift — destroy target permanent, its controller gets a 3/3 Elephant", effects: [{ type: "destroyTargetCreateTokenForController", tokenName: "Elephant", tokenType: "Token Creature — Elephant", power: "3", toughness: "3", colors: ["G"] }], requiresTarget: true, targetKind: "permanent" },
+  "reanimate": { label: "Reanimate — put target creature card from a graveyard onto the battlefield, lose life equal to its mana value", effects: [{ type: "reanimateLoseLifeEqualToCmc" }], requiresTarget: true, targetKind: "anyGraveyardCreature" },
+  "vampiric tutor": { label: "Vampiric Tutor — search your library for a card, put it on top, lose 2 life", effects: [{ type: "tutorToHand", toTopOfLibrary: true, lifeLoss: 2 }] },
+  "faithless looting": { label: "Faithless Looting — draw two cards, then discard two cards", effects: [{ type: "drawCards", amount: 2 }, { type: "targetPlayerDiscards", self: true, amount: 2 }] },
+  "doomskar": { label: "Doomskar — destroy all creatures", effects: [{ type: "destroyAllCreatures" }] },
+  "time wipe": { label: "Time Wipe — return a creature you control to hand, then destroy all creatures", effects: [{ type: "bounceTargetToHand" }, { type: "destroyAllCreatures" }], requiresTarget: true, targetKind: "ownCreature" },
+  "chain reaction": { label: "Chain Reaction — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] },
+  "blasphemous act": { label: "Blasphemous Act — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -895,6 +938,41 @@ const EFFECTS = {
       });
     }
   },
+  // Krenko, Mob Boss -- "Create X 1/1 red Goblin creature tokens, where X is the number of Goblins
+  // you control." Computed fresh here (params.typeFilter, e.g. ["goblin"]) rather than threaded in
+  // as an amount, same "the activated-ability path has no generic dynamic-amount pipeline, so the
+  // effect just computes what it needs" approach as damageAllCreaturesTable above. Krenko himself
+  // counts toward his own total (he's a Goblin), matching the real card.
+  createTokensEqualToTypeCountControlled(lobby, ctx, params) {
+    const filter = params.typeFilter || [];
+    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && filter.some((t) => (c.type || "").toLowerCase().includes(t))).length;
+    for (let i = 0; i < n; i++) {
+      spawnBattlefieldCard(lobby, {
+        name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
+        power: params.power, toughness: params.toughness, colors: params.colors || [],
+        keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature")
+      });
+    }
+  },
+  // Krenko, Tin Street Kingpin -- "put a +1/+1 counter on it, THEN create a number of tokens equal
+  // to Krenko's power" -- the counter-add effect (addCountersToSelf) runs first in this ability's
+  // own effects array, so by the time this one runs, looking the card back up fresh from
+  // lobby.cards already reflects the just-added counter (effects in one array resolve strictly in
+  // order, not in a single snapshot) -- no separate "current power" plumbing needed.
+  createTokensEqualToSelfPower(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    const bonus = attachedBonusFor(lobby, card);
+    const stat = staticBonusFor(lobby, card);
+    const n = Math.max(0, parsePT(card.power) + (card.counters || 0) + bonus.powerBonus + stat.powerBonus);
+    for (let i = 0; i < n; i++) {
+      spawnBattlefieldCard(lobby, {
+        name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
+        power: params.power, toughness: params.toughness, colors: params.colors || [],
+        keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature")
+      });
+    }
+  },
   // Only meaningful for an ETB trigger -- by the time a death trigger resolves, the source card is
   // already gone. No-ops safely rather than modeling "last known information."
   addCountersToSelf(lobby, ctx, params) {
@@ -933,6 +1011,32 @@ const EFFECTS = {
     }
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
+  },
+  // Beast Within / Generous Gift -- "Destroy target permanent. Its controller creates a 3/3 green
+  // [X] creature token." The token goes to the DESTROYED permanent's own controller, not the
+  // caster, so its owner has to be captured BEFORE destruction removes the card from lobby.cards.
+  // Same indestructible/regeneration handling as destroyTarget just above -- duplicated rather than
+  // shared since it's only these two cards, same "small duplication over a shared helper for two
+  // call sites" precedent as the rest of this file.
+  destroyTargetCreateTokenForController(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const tokenOwnerId = card.owner;
+    if (effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "indestructible")) return;
+    if (card.regenerationShield > 0) {
+      card.regenerationShield -= 1;
+      card.tapped = true;
+      broadcastCard(lobby, card);
+      pushLog(lobby, `${card.name || "A creature"} regenerates instead of being destroyed`);
+      return;
+    }
+    fireDeathTriggers(lobby, card);
+    sendToGraveyardInternal(lobby, card);
+    spawnBattlefieldCard(lobby, {
+      name: params.tokenName || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
+      power: params.power, toughness: params.toughness, colors: params.colors || [],
+      keywords: params.keywords || [], owner: tokenOwnerId, zoneType: classifyType(params.tokenType || "Token Creature")
+    });
   },
   exileTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
@@ -1150,6 +1254,21 @@ const EFFECTS = {
     broadcastPlayers(lobby); // the graveyard array just shrank
     fireEtbTriggers(lobby, card);
   },
+  // Reanimate -- same core reanimation as reanimateFromGraveyard, plus "you lose life equal to that
+  // card's mana value," a genuinely dynamic cost this engine has nowhere else to source except the
+  // reanimated card's own entry. Life loss is applied AFTER the creature is already on the
+  // battlefield (matches the real card's own clause order), so a lethal loss here still leaves the
+  // reanimated creature in play -- checkEliminations handles the caster's own death normally.
+  reanimateLoseLifeEqualToCmc(lobby, ctx, params) {
+    const found = findAndRemoveGraveyardEntry(lobby, params.chosenTargetId);
+    if (!found) return;
+    const card = spawnBattlefieldCard(lobby, { ...found.entry, owner: ctx.controllerId, zoneType: classifyType(found.entry.type) });
+    broadcastPlayers(lobby);
+    fireEtbTriggers(lobby, card);
+    applyLifeLoss(lobby, ctx.controllerId, found.entry.cmc || 0);
+    checkEliminations(lobby);
+    broadcastPlayers(lobby);
+  },
   // Whip of Erebos's activated reanimation -- same core effect as reanimateFromGraveyard, plus
   // haste (temporary, via the real until-end-of-turn keyword system) and a real delayed trigger
   // exiling that SAME card at the next end step (not just "when it would leave the battlefield" --
@@ -1268,13 +1387,17 @@ const EFFECTS = {
   // just previously only ever set from the End Step overflow check. A second discard becoming due
   // before this one resolves would overwrite it (single slot, not a queue) -- accepted as a rare-
   // edge-case limitation, matching this app's existing no-queueing-of-that-particular-state precedent.
+  // params.self (Faithless Looting/Frantic Search's OWN discard, no "target player" on the card at
+  // all) routes this at the controller instead of requiring a real target choice -- same effect,
+  // just skips queueTargetChoice entirely since there's nothing to choose.
   targetPlayerDiscards(lobby, ctx, params) {
-    const p = lobby.players[params.chosenTargetId];
+    const playerId = params.self ? ctx.controllerId : params.chosenTargetId;
+    const p = lobby.players[playerId];
     if (!p) return;
-    const handCount = Object.values(lobby.cards).filter((c) => c.owner === params.chosenTargetId && c.zoneType === "hand").length;
+    const handCount = Object.values(lobby.cards).filter((c) => c.owner === playerId && c.zoneType === "hand").length;
     const count = Math.min(params.amount || 1, handCount);
     if (count <= 0) return;
-    lobby.turn.pendingDiscard = { playerId: params.chosenTargetId, count };
+    lobby.turn.pendingDiscard = { playerId, count };
     broadcastTurn(lobby);
     pushLog(lobby, `${p.name} must discard ${count} card${count === 1 ? "" : "s"}`);
   },
@@ -1296,11 +1419,14 @@ const EFFECTS = {
   // finishes it" shape as searchLandTypes above, just landing in hand instead of onto the
   // battlefield and (optionally) restricted to a type substring instead of "must be a land". Life
   // loss (Grim Tutor) is paid immediately, same as any other cost -- real Magic never blocks it.
+  // params.toTopOfLibrary (Vampiric Tutor: "...then shuffle and put that card on top") -- same
+  // pending-choice flow as the plain hand-tutoring case, just a different final destination, see
+  // the tutorCard handler.
   tutorToHand(lobby, ctx, params) {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
     if (params.lifeLoss) { applyLifeLoss(lobby, ctx.controllerId, params.lifeLoss); checkEliminations(lobby); }
-    p.pendingTutor = { typeFilter: params.typeFilter || null };
+    p.pendingTutor = { typeFilter: params.typeFilter || null, toTopOfLibrary: !!params.toTopOfLibrary };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter });
     broadcastPlayers(lobby);
@@ -1440,6 +1566,43 @@ const EFFECTS = {
     const amount = params.dealtToPlayerAmount;
     if (!defenderId || !amount) return;
     Object.values(lobby.cards).filter((c) => c.owner === defenderId && c.zoneType === "creature").forEach((c) => {
+      const bonus = attachedBonusFor(lobby, c);
+      const stat = staticBonusFor(lobby, c);
+      const effToughness = parsePT(c.toughness) + (c.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
+      if (amount >= effToughness) { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); }
+    });
+  },
+  // A real board wipe (Doomskar and similar "Destroy all creatures" sorceries) -- same
+  // indestructible/regeneration handling as destroyTarget, applied table-wide. Foretell/alternate
+  // casting costs some of these cards have aren't modeled -- they just cast (and wipe) normally for
+  // their printed mana cost, same "the effect works, the alt-cost timing trick doesn't" narrowing
+  // already used elsewhere (Cursed Mirror's Haste, Whip of Erebos's exile timing).
+  destroyAllCreatures(lobby, ctx, params) {
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => {
+      if (effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "indestructible")) return;
+      if (c.regenerationShield > 0) {
+        c.regenerationShield -= 1;
+        c.tapped = true;
+        broadcastCard(lobby, c);
+        pushLog(lobby, `${c.name || "A creature"} regenerates instead of being destroyed`);
+        return;
+      }
+      fireDeathTriggers(lobby, c);
+      sendToGraveyardInternal(lobby, c);
+    });
+  },
+  // Chain Reaction / Blasphemous Act -- "deals X damage to each creature, where X is the number of
+  // creatures on the battlefield." X is computed fresh here (BEFORE anything dies, matching the real
+  // card's "counted as the spell begins to resolve" timing) rather than threaded in as a param, since
+  // nothing upstream of a plain SPELL_ABILITIES entry has any way to know it. Same no-indestructible-
+  // check precedent as damageAllCreaturesOfPlayer just above (a deliberately narrower case than the
+  // real combat-lethal/destroyTarget checks) -- Blasphemous Act's own dynamic cost reduction ("costs
+  // {1} less for each creature") isn't modeled either, same "the effect works, the cost math
+  // doesn't" narrowing as destroyAllCreatures above.
+  damageAllCreaturesTable(lobby, ctx, params) {
+    const amount = Object.values(lobby.cards).filter((c) => c.zoneType === "creature").length;
+    if (!amount) return;
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => {
       const bonus = attachedBonusFor(lobby, c);
       const stat = staticBonusFor(lobby, c);
       const effToughness = parsePT(c.toughness) + (c.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
@@ -3225,6 +3388,9 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
     if (c.owner !== forPlayerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
     getAutomatedAbilities(c.name, eventType).forEach((ability) => {
       if (ability.colorFilter && !(eventCard && (eventCard.colors || []).includes(ability.colorFilter))) return;
+      // Guttersnipe-style "whenever you cast an INSTANT OR SORCERY spell" -- same shape as
+      // colorFilter just above, checked against the cast card's own type line instead of its colors.
+      if (ability.spellTypeFilter && !(eventCard && ability.spellTypeFilter.some((t) => (eventCard.type || "").toLowerCase().includes(t)))) return;
       fireTrigger(lobby, c, ability);
     });
   }
@@ -5362,11 +5528,17 @@ io.on("connection", (socket) => {
       return;
     }
     p.library.splice(index, 1);
+    const toTop = p.pendingTutor.toTopOfLibrary;
     shuffle(p.library);
-    spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
+    if (toTop) {
+      p.library.unshift(entry);
+      pushLog(lobby, `${p.name} searched their library and put a card on top`);
+    } else {
+      spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
+      pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
+    }
     p.pendingTutor = null;
     broadcastPlayers(lobby);
-    pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
   });
   socket.on("cancelTutor", () => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
@@ -5767,7 +5939,7 @@ io.on("connection", (socket) => {
     if (lobby.turn.phase === "End Step") {
       const handCount = Object.values(lobby.cards).filter((c) => c.owner === activeId && c.zoneType === "hand").length;
       if (handCount > 7 && !hasNoMaxHandSize(lobby, activeId)) {
-        lobby.turn.pendingDiscard = { playerId: activeId, count: handCount - 7 };
+        lobby.turn.pendingDiscard = { playerId: activeId, count: handCount - 7, advanceAfter: true };
         broadcastTurn(lobby);
         pushLog(lobby, `${lobby.players[activeId].name} must discard down to 7 cards`);
         return;
@@ -5787,10 +5959,15 @@ io.on("connection", (socket) => {
       if (!card || card.owner !== socket.id || card.zoneType !== "hand") { socket.emit("actionError", "Invalid discard selection."); return; }
     }
     const p = lobby.players[socket.id];
+    const advanceAfter = pd.advanceAfter;
     ids.forEach((id) => sendToGraveyardInternal(lobby, lobby.cards[id]));
-    pushLog(lobby, `${p.name} discarded ${ids.length} card(s) to hand size`);
+    pushLog(lobby, `${p.name} discarded ${ids.length} card(s)${advanceAfter ? " to hand size" : ""}`);
     lobby.turn.pendingDiscard = null;
-    advancePhase(lobby);
+    // Only the End Step hand-size cleanup (nextPhase's own check, flagged via advanceAfter) should
+    // actually move the turn forward once resolved -- a mid-turn discard from a spell effect
+    // (Faithless Looting's own "discard two cards," Mind Rot targeting an opponent, etc.) has
+    // nothing to do with advancing the turn and must not silently skip straight to the next phase.
+    if (advanceAfter) advancePhase(lobby);
   });
 
   // ---- stack / priority ----
