@@ -599,7 +599,21 @@ const ACTIVATED_ABILITIES = {
   // Its "{T}: Add one mana..." half needs no table entry at all -- no extra cost/multi-color-at-once
   // shape (unlike a signet), so it's already covered by the free single-tap-for-mana shortcut's own
   // dependsOnCommanderColorIdentity narrowing. Only the sacrifice-to-draw half needs one.
-  "commander's sphere": [{ cost: { sacrifice: true }, label: "Commander's Sphere — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }]
+  "commander's sphere": [{ cost: { sacrifice: true }, label: "Commander's Sphere — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  // Its ETB reveal-or-tapped choice needs no table entry -- see checkRevealFromHandChoice, a
+  // generic text-pattern mechanism. Only this tap-for-haste half is name-based.
+  "flamekin village": [{ cost: { mana: "{R}", tap: true }, label: "Flamekin Village — target creature gains haste until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Haste" }] }],
+  // "{T}, Sacrifice: search for a basic land, put it onto the battlefield tapped, then shuffle.
+  // Then if you control four or more lands, untap that land." See searchLandTypes/fetchLand's own
+  // comments for untapIfLandCountAtLeast.
+  "fabled passage": [{ cost: { tap: true, sacrifice: true }, label: "Fabled Passage — search for a basic land, tapped (untaps at 4+ lands)", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, untapIfLandCountAtLeast: 4 }] }],
+  // "{2}, {T}, Sacrifice: search for up to two basic lands that share a land type, put them onto
+  // the battlefield tapped, then shuffle." The "share a land type" cross-referential constraint
+  // between the two picks isn't checked (this app's fetch validation only ever matches a SINGLE
+  // pick against a type list, with no memory of a prior pick in the same search) -- same "close
+  // approximation, trust the player" precedent as every other unchecked condition in this file;
+  // reuses the same thenEffects-chained-second-fetch shape Cultivate already established.
+  "myriad landscape": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Myriad Landscape — search for up to two basic lands, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1590,10 +1604,13 @@ const EFFECTS = {
   // params.thenEffects (Cultivate's own "...and the other into your hand") -- same "bundle the
   // follow-up, don't let it run as a plain sibling effect" fix as scryN's own comment explains;
   // fetchLand (below) is what actually runs it, once THIS fetch is really done.
+  // params.untapIfLandCountAtLeast (Fabled Passage's "then if you control four or more lands,
+  // untap that land") -- checked by fetchLand once the fetched land is already on the battlefield,
+  // so the count naturally includes it, matching real Magic's own "after it enters" timing.
   searchLandTypes(lobby, ctx, params) {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
-    p.pendingFetch = { types: params.types || [], basicOnly: !!params.basicOnly, forceTapped: !!params.entersTapped, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
+    p.pendingFetch = { types: params.types || [], basicOnly: !!params.basicOnly, forceTapped: !!params.entersTapped, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id, untapIfLandCountAtLeast: params.untapIfLandCountAtLeast || null };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibrary", { types: p.pendingFetch.types, basicOnly: p.pendingFetch.basicOnly });
   },
@@ -3549,6 +3566,7 @@ function fireEtbTriggers(lobby, card) {
   if (!lobby.turn.started) return;
   applyEntersTappedByOpponentEffect(lobby, card);
   checkShockLandChoice(lobby, card);
+  checkRevealFromHandChoice(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
   // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
@@ -3580,6 +3598,34 @@ function checkShockLandChoice(lobby, card) {
     playerId: card.owner, controllerId: card.owner, sourceCard: card,
     label: `${card.name} — pay ${lifeCost} life to have it enter untapped`, costLabel: `Pay ${lifeCost} life`,
     cost: { life: lifeCost }, declinedEffects: [{ type: "tapSelf" }]
+  });
+}
+// "As this land enters, you may reveal a [Type] (or [Type]) card from your hand. If you don't,
+// this land enters tapped." (Flamekin Village, Frostboil Snarl, Game Trail, and the whole real
+// cycle they belong to) -- same shape as a shockland's life payment, just a REVEAL instead of a
+// real resource cost, so cost is empty ({}) rather than {life: N} -- payOptionalCost only ever
+// checks cost.mana/cost.life/cost.sacrificeCount, so an empty cost object correctly costs nothing
+// and just resolves. Unlike a shockland (which is always a real choice), revealing is only a real
+// choice when a qualifying card actually exists in hand -- same CR 603.3c "no legal way to satisfy
+// it" auto-fizzle precedent used elsewhere in this file, so a hand with no match skips the prompt
+// and goes straight to tapped, matching what real Magic would force anyway.
+function revealFromHandChoiceFromText(text) {
+  const m = (text || "").match(/as this land enters, you may reveal an? ([a-z]+)(?:\s+or\s+(?:an? )?([a-z]+))? card from (?:your )?hand\.\s*if you don'?t, this land enters tapped/i);
+  if (!m) return null;
+  return { types: [m[1], m[2]].filter(Boolean) };
+}
+function checkRevealFromHandChoice(lobby, card) {
+  if (card.tapped) return;
+  const rc = revealFromHandChoiceFromText(card.text);
+  if (!rc) return;
+  const hasMatch = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "hand" && rc.types.some((t) => (c.type || "").toLowerCase().includes(t.toLowerCase())));
+  if (!hasMatch) { card.tapped = true; broadcastCard(lobby, card); return; }
+  const typeLabel = rc.types.join(" or ");
+  const article = /^[aeiou]/i.test(typeLabel) ? "an" : "a";
+  queueOptionalPayment(lobby, {
+    playerId: card.owner, controllerId: card.owner, sourceCard: card,
+    label: `${card.name} — reveal ${article} ${typeLabel} card from hand to have it enter untapped`, costLabel: `Reveal ${article} ${typeLabel} card`,
+    cost: {}, declinedEffects: [{ type: "tapSelf" }]
   });
 }
 // "Artifacts and creatures your opponents control enter tapped" (Blind Obedience) -- a static
@@ -5882,6 +5928,13 @@ io.on("connection", (socket) => {
     shuffle(p.library);
     const card = spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
     if (p.pendingFetch.forceTapped && !card.tapped) { card.tapped = true; broadcastCard(lobby, card); }
+    // Fabled Passage -- "then if you control four or more lands, untap that land." Counted AFTER
+    // the fetched land is already on the battlefield, so it counts itself, same as real Magic.
+    const untapThreshold = p.pendingFetch.untapIfLandCountAtLeast;
+    if (untapThreshold && card.tapped) {
+      const landCount = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "mana").length;
+      if (landCount >= untapThreshold) { card.tapped = false; broadcastCard(lobby, card); }
+    }
     const thenEffects = p.pendingFetch.thenEffects;
     const sourceCardId = p.pendingFetch.sourceCardId;
     p.pendingFetch = null;
