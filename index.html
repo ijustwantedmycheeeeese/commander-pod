@@ -112,7 +112,13 @@
     .remote-cursor-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #100c08; box-shadow: 0 0 4px rgba(0,0,0,0.6); }
     /* Hard size cap regardless of the source image's real dimensions -- a custom cursor icon (static
        or animated GIF) must never be able to cover a meaningful chunk of the board. */
-    .remote-cursor-icon { width: 22px; height: 22px; object-fit: contain; border-radius: 4px; filter: drop-shadow(0 0 3px rgba(0,0,0,0.8)); }
+    /* A fixed-size, overflow:hidden window -- the real .remote-cursor-icon <img> inside is stretched
+       to fill it (inset:0) and then object-fit/object-position/transform:scale do their normal
+       pan-and-zoom thing (same pattern pile art/board mat already use), clipped to this box no
+       matter how far zoomed in. Without a separate clipping wrapper, scaling the img directly would
+       grow the whole 22px box itself on screen instead of zooming into its content. */
+    .remote-cursor-icon-wrap { position: relative; width: 22px; height: 22px; border-radius: 4px; overflow: hidden; filter: drop-shadow(0 0 3px rgba(0,0,0,0.8)); }
+    .remote-cursor-icon { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
     .cursor-swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #4a3820; cursor: pointer; position: relative; }
     .cursor-swatch.selected { border-color: #f0e6c8; box-shadow: 0 0 0 2px #100c08, 0 0 0 4px #f0e6c8; }
     .cursor-swatch.taken { cursor: not-allowed; opacity: 0.35; }
@@ -884,6 +890,7 @@
           <div class="flex-row" style="margin-bottom:12px;">
             <button class="mini-btn" onclick="setCursorIconFromInput()">Set Icon</button>
             <button class="mini-btn secondary" onclick="document.getElementById('cursor-icon-file').click()">Upload...</button>
+            <button class="mini-btn secondary" onclick="openCropEditor('cursor')" title="Crop, zoom, and pan the cursor icon">Crop...</button>
             <button class="mini-btn secondary" onclick="clearCursorIcon()">Clear Icon</button>
           </div>
 
@@ -1133,11 +1140,13 @@
         <button class="mini-btn secondary" onclick="cropLoadPreset()">Load</button>
         <button class="mini-btn secondary" onclick="cropSaveAsPreset()">Save As...</button>
       </div>
-      <div class="flex-row" style="margin-top:10px;">
-        <button class="mini-btn secondary" onclick="setCropAsDefault()" title="Auto-applies this photo and framing to every new table you join">★ Set as My Default</button>
-        <button class="mini-btn secondary" onclick="clearCropDefault()">Clear My Default</button>
+      <div id="crop-default-row">
+        <div class="flex-row" style="margin-top:10px;">
+          <button class="mini-btn secondary" onclick="setCropAsDefault()" title="Auto-applies this photo and framing to every new table you join">★ Set as My Default</button>
+          <button class="mini-btn secondary" onclick="clearCropDefault()">Clear My Default</button>
+        </div>
+        <div id="crop-default-status" style="font-size:11px;color:#8a7a55;margin-top:4px;"></div>
       </div>
-      <div id="crop-default-status" style="font-size:11px;color:#8a7a55;margin-top:4px;"></div>
       <div class="flex-row" style="margin-top:12px;">
         <button onclick="saveCropEditor()">Apply</button>
         <button class="secondary" onclick="clearCropTarget()" title="Removes the photo entirely, reverting to the app's plain built-in look">Remove Photo</button>
@@ -2516,9 +2525,9 @@
       el.innerText = matches ? "✓ This is your default for new tables." : "You have a default set, but it's a different photo than your current mat.";
     }
 
-    // ---------------- crop/zoom editor (board mat + pile art) ----------------
-    // One shared modal for both targets -- cropTarget tracks which one Apply/Clear should act on.
-    let cropTarget = null; // { kind: "boardMat" } or { kind: "pile", zone: "library"|"graveyard"|"exile" }
+    // ---------------- crop/zoom editor (board mat + pile art + cursor icon) ----------------
+    // One shared modal for all three targets -- cropTarget tracks which one Apply/Clear should act on.
+    let cropTarget = null; // { kind: "boardMat" } or { kind: "pile", zone: "library"|"graveyard"|"exile" } or { kind: "cursor" }
     let cropLastSrc = "";
     function openCropEditor(kind, zone) {
       cropTarget = { kind, zone };
@@ -2534,6 +2543,11 @@
         // wrong box shape to preview it in.
         document.getElementById("crop-preview-box").style.aspectRatio = "3000 / 1260";
         if (me && me.boardMat) current = { url: me.boardMat, ...(me.boardMatFit || { scale: 1, x: 50, y: 50 }) };
+      } else if (kind === "cursor") {
+        document.getElementById("crop-modal-title").innerText = "Edit Cursor Icon";
+        // Matches the real .remote-cursor-icon render size (22x22, a square) -- see its own CSS.
+        document.getElementById("crop-preview-box").style.aspectRatio = "1 / 1";
+        if (me && me.cursorIcon) current = { url: me.cursorIcon, ...(me.cursorIconFit || { scale: 1, x: 50, y: 50 }) };
       } else {
         document.getElementById("crop-modal-title").innerText = `Edit ${capitalize(zone)} Art`;
         document.getElementById("crop-preview-box").style.aspectRatio = "250 / 310";
@@ -2546,6 +2560,9 @@
       cropLastSrc = current ? current.url : "";
       document.getElementById("crop-preset-row").style.display = kind === "pile" ? "flex" : "none";
       if (kind === "pile") renderCropPresetSelect();
+      // Cursor style isn't a persisted, cross-table account preference (see the Live Cursor
+      // section's own scoping) -- no "Set/Clear My Default" for it, same as presets above.
+      document.getElementById("crop-default-row").style.display = kind === "cursor" ? "none" : "block";
       renderCropDefaultStatus();
       cropUpdatePreview();
       document.getElementById("crop-modal").style.display = "flex";
@@ -2684,6 +2701,9 @@
         document.getElementById("board-mat-url").value = url;
         socket.emit("setBoardMat", url);
         socket.emit("setBoardMatFit", { scale, x, y });
+      } else if (cropTarget.kind === "cursor") {
+        document.getElementById("cursor-icon-url").value = url;
+        socket.emit("setCursorIcon", { url, scale, x, y });
       } else {
         socket.emit("setPileArt", { zone: cropTarget.zone, url, scale, x, y });
       }
@@ -2694,6 +2714,9 @@
       if (cropTarget.kind === "boardMat") {
         document.getElementById("board-mat-url").value = "";
         socket.emit("setBoardMat", "");
+      } else if (cropTarget.kind === "cursor") {
+        document.getElementById("cursor-icon-url").value = "";
+        socket.emit("setCursorIcon", { url: "" });
       } else {
         socket.emit("setPileArt", { zone: cropTarget.zone, url: "" });
       }
@@ -4273,13 +4296,16 @@
       const mine = players[myId] && players[myId].cursorColor;
       socket.emit("setCursorColor", mine === color ? null : color);
     }
+    // Setting straight from the URL/upload field (no explicit crop step) always lands on the
+    // server's own sanitizeImgFit default (centered, no zoom) -- open "Crop..." instead for a
+    // specific framing.
     function setCursorIconFromInput() {
       const url = document.getElementById("cursor-icon-url").value.trim();
-      socket.emit("setCursorIcon", url);
+      socket.emit("setCursorIcon", { url });
     }
     function clearCursorIcon() {
       document.getElementById("cursor-icon-url").value = "";
-      socket.emit("setCursorIcon", "");
+      socket.emit("setCursorIcon", { url: "" });
     }
 
     // Shared by cursor tracking and pinging below -- both need "where on #playmat, as a percentage,
@@ -4350,14 +4376,23 @@
         c.el.className = "remote-cursor";
         layer.appendChild(c.el);
       }
-      // Rebuilt every call (not just on first creation) so a color/icon change picked in Settings
-      // shows up on an already-visible cursor immediately, not just on its next reposition.
+      // The markup (color/icon/name) only gets rebuilt when it actually CHANGED since the last
+      // render, tracked via a plain fingerprint string -- rebuilding it on every position update
+      // (up to ~15/sec, since that's how often a moving cursor re-fires this) would tear down and
+      // recreate the <img> element every single time for an icon cursor, which restarts a GIF's own
+      // animation from frame 1 on every rebuild -- it never gets far enough to visibly play at all.
+      // Repositioning (left/top) is real per-move state and still happens on every call.
       const p = players[playerId];
       const color = p.cursorColor || p.color || "#f0e6c8";
-      const marker = p.cursorIcon
-        ? `<img class="remote-cursor-icon" src="${escapeHtml(p.cursorIcon)}">`
-        : `<div class="remote-cursor-dot" style="background:${color};"></div>`;
-      c.el.innerHTML = `${marker}<div class="remote-cursor-label" style="background:${color};">${escapeHtml(p.name || "?")}</div>`;
+      const fit = p.cursorIconFit || { scale: 1, x: 50, y: 50 };
+      const fingerprint = `${color}|${p.cursorIcon || ""}|${fit.scale}|${fit.x}|${fit.y}|${p.name || ""}`;
+      if (c.el.dataset.fingerprint !== fingerprint) {
+        c.el.dataset.fingerprint = fingerprint;
+        const marker = p.cursorIcon
+          ? `<div class="remote-cursor-icon-wrap"><img class="remote-cursor-icon" src="${escapeHtml(p.cursorIcon)}" style="object-position:${fit.x}% ${fit.y}%;transform:scale(${fit.scale});"></div>`
+          : `<div class="remote-cursor-dot" style="background:${color};"></div>`;
+        c.el.innerHTML = `${marker}<div class="remote-cursor-label" style="background:${color};">${escapeHtml(p.name || "?")}</div>`;
+      }
       c.el.style.left = c.x + "%";
       c.el.style.top = c.y + "%";
     }
