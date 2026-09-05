@@ -4754,7 +4754,7 @@ app.get("/api/export", (req, res) => {
 
 // Board mat / avatar image uploads, an alternative to pasting a URL (both feed the exact same
 // boardMat/avatar string fields -- this just fills that field in for you instead of replacing it).
-const UPLOAD_MIME_EXT = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" };
+const UPLOAD_MIME_EXT = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
 const upload = multer({
   storage: multer.diskStorage({
     destination: UPLOAD_DIR,
@@ -4773,7 +4773,7 @@ app.post("/api/upload", (req, res) => {
   if (!sessionUsername(token)) return res.status(401).json({ success: false, error: "Not authenticated" });
   upload.single("file")(req, res, (err) => {
     if (err) return res.json({ success: false, error: err.code === "LIMIT_FILE_SIZE" ? "File too large (5MB max)." : "Upload failed." });
-    if (!req.file) return res.json({ success: false, error: "Only PNG, JPG, or WEBP images are supported." });
+    if (!req.file) return res.json({ success: false, error: "Only PNG, JPG, WEBP, or GIF images are supported." });
     res.json({ success: true, url: "/uploads/" + req.file.filename });
   });
 });
@@ -6716,6 +6716,20 @@ io.on("connection", (socket) => {
     const lobby = currentLobby(); if (!lobby) return;
     const target = io.sockets.sockets.get(toId);
     if (target && target.data.lobbyId === lobby.id) target.emit("voiceSignal", { fromId: socket.id, data });
+  });
+
+  // Live cursor position -- purely ephemeral, never stored in lobby state (no reconnect/persistence
+  // need for a mouse position). x/y are percentages of the sender's own #playmat element, clamped
+  // here so a malicious/buggy client can't push a wildly out-of-range value that breaks the
+  // receiving client's layout math. boardOwner is whichever player's board tab the sender currently
+  // has open -- every receiving client only renders this cursor while ITS OWN activeBoardOwner
+  // matches, so a cursor never appears to be pointing at a board tab the sender isn't even looking
+  // at (relayed to everyone in the lobby; the visibility filtering all happens client-side).
+  socket.on("cursorMove", ({ x, y, boardOwner }) => {
+    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
+    const cx = Math.max(0, Math.min(100, Number(x) || 0));
+    const cy = Math.max(0, Math.min(100, Number(y) || 0));
+    socket.to(lobby.id).emit("cursorMoved", { playerId: socket.id, x: cx, y: cy, boardOwner: String(boardOwner || "") });
   });
 
   // ---- misc ----

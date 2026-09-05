@@ -107,6 +107,10 @@
 
     /* ---- visual effects ---- */
     #fx-layer { position: absolute; inset: 0; pointer-events: none; z-index: 55; }
+    #cursor-layer { position: absolute; inset: 0; pointer-events: none; z-index: 56; }
+    .remote-cursor { position: absolute; transform: translate(-2px, -2px); transition: left 0.08s linear, top 0.08s linear; display: flex; align-items: center; gap: 4px; }
+    .remote-cursor-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #100c08; box-shadow: 0 0 4px rgba(0,0,0,0.6); }
+    .remote-cursor-label { font-size: 10px; padding: 1px 5px; border-radius: 4px; color: #100c08; white-space: nowrap; font-weight: 600; }
     @keyframes cardEnterAnim { 0% { opacity: 0; transform: scale(0.4) rotate(-6deg); filter: brightness(2.2) drop-shadow(0 0 18px #d4af37); } 65% { opacity: 1; transform: scale(1.08) rotate(1deg); } 100% { opacity: 1; transform: scale(1) rotate(0deg); filter: none; } }
     .card.card-enter { animation: cardEnterAnim 0.45s ease-out; }
     @keyframes cardLeaveAnim { 0% { opacity: 1; transform: scale(1) rotate(0deg); filter: none; } 100% { opacity: 0; transform: scale(0.55) rotate(20deg); filter: brightness(0.3) saturate(0); } }
@@ -530,7 +534,7 @@
         </div>
         <div id="board-tabs"></div>
         <div id="table-wrapper">
-          <div id="playmat"><img id="playmat-mat-img" alt=""><div id="fx-layer"></div></div>
+          <div id="playmat"><img id="playmat-mat-img" alt=""><div id="fx-layer"></div><div id="cursor-layer"></div></div>
         </div>
       </div>
 
@@ -604,6 +608,7 @@
         <h2 id="zone-modal-title">Zone</h2>
         <div style="display:flex;gap:16px;">
           <div style="flex:1.3;min-width:280px;">
+            <input type="text" id="zone-modal-search" placeholder="Search by name..." oninput="filterZoneModal(this.value)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 10px;background:#171310;border:1px solid #5a4423;border-radius:6px;color:#e8dcc4;font-size:13px;">
             <div id="zone-modal-body"></div>
           </div>
           <div id="zone-modal-preview-col">
@@ -616,10 +621,11 @@
 
     <div class="modal-overlay" id="attackers-modal">
       <div class="modal-box">
+        <button class="modal-close-x" onclick="peekCloseAttackersModal()" title="Close to look around -- nothing is declared, reopen with the Declare Attackers button whenever you're ready">✕</button>
         <h2>Declare Attackers</h2>
         <div id="attackers-modal-body"></div>
         <div class="modal-close-row">
-          <button class="secondary" id="no-attacks-btn" onclick="closeAttackersModal()">No Attacks</button>
+          <button class="secondary" id="no-attacks-btn" onclick="declareNoAttacks()">No Attacks</button>
           <button id="confirm-attacks-btn" onclick="confirmAttackers()">Confirm Attacks</button>
         </div>
       </div>
@@ -627,6 +633,7 @@
 
     <div class="modal-overlay" id="blockers-modal">
       <div class="modal-box">
+        <button class="modal-close-x" onclick="peekCloseBlockersModal()" title="Close to look around -- nothing is declared, reopen with the Declare Blockers button whenever you're ready">✕</button>
         <h2>Declare Blockers</h2>
         <div id="blockers-modal-body"></div>
         <div class="modal-close-row">
@@ -799,7 +806,7 @@
           <div class="mm-label">Appearance</div>
           <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Board Mat</div>
           <input type="text" id="board-mat-url" placeholder="Image URL for your board background..." style="width:100%;margin-bottom:6px;">
-          <input type="file" id="board-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'board-mat-url')">
+          <input type="file" id="board-mat-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="uploadImageFile(this, 'board-mat-url')">
           <div class="flex-row" style="margin-bottom:6px;">
             <button class="mini-btn" onclick="setBoardMat()">Set</button>
             <button class="mini-btn secondary" onclick="clearBoardMat()">Clear</button>
@@ -890,7 +897,7 @@
         <div class="flex-row" style="margin-bottom:2px;">
           <button class="mini-btn secondary" onclick="openTokenArtPicker()">Choose Art...</button>
           <button class="mini-btn secondary" onclick="document.getElementById('tok-img-file').click()">Upload...</button>
-          <input type="file" id="tok-img-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'tok-img')">
+          <input type="file" id="tok-img-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="uploadImageFile(this, 'tok-img')">
         </div>
         <div style="font-size:11px;color:#a89a70;margin-bottom:10px;">"Choose Art" searches Scryfall live for every real printing of this exact token name. Leave Art blank instead for automatic real art on the presets above, or a generated placeholder for anything else.</div>
         <div class="mm-label">Colors</div>
@@ -987,7 +994,7 @@
         <div class="flex-row" style="align-items:center;margin-bottom:10px;">
           <img id="account-avatar-preview" src="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;background:#2a2a30;display:none;border:2px solid #5a4423;">
           <input type="text" id="account-avatar-url" placeholder="Avatar image URL..." oninput="previewAccountAvatar()" style="flex:1;">
-          <input type="file" id="account-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'account-avatar-url', previewAccountAvatar)">
+          <input type="file" id="account-avatar-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="uploadImageFile(this, 'account-avatar-url', previewAccountAvatar)">
           <button class="mini-btn secondary" onclick="document.getElementById('account-avatar-file').click()">Upload...</button>
         </div>
 
@@ -1006,7 +1013,7 @@
         <div class="mm-hint" style="margin-top:-6px;margin-bottom:6px;">Save a mat once, then pick it from any table's Board Mat menu instead of pasting the URL again.</div>
         <div class="flex-row" style="align-items:center;margin-bottom:6px;">
           <input type="text" id="new-mat-url" placeholder="Mat image URL..." style="flex:1;">
-          <input type="file" id="new-mat-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'new-mat-url')">
+          <input type="file" id="new-mat-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="uploadImageFile(this, 'new-mat-url')">
           <button class="mini-btn secondary" onclick="document.getElementById('new-mat-file').click()">Upload...</button>
         </div>
         <div class="flex-row" style="margin-bottom:10px;">
@@ -1045,7 +1052,7 @@
       <button class="modal-close-x" onclick="closeCropEditor()" title="Close">✕</button>
       <h2 id="crop-modal-title">Edit Image</h2>
       <input type="text" id="crop-source-url" placeholder="Image URL..." oninput="cropSourceChanged()" style="width:100%;margin-bottom:6px;">
-      <input type="file" id="crop-source-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'crop-source-url', cropSourceChanged)">
+      <input type="file" id="crop-source-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="uploadImageFile(this, 'crop-source-url', cropSourceChanged)">
       <div class="flex-row" style="margin-bottom:10px;">
         <button class="mini-btn secondary" onclick="document.getElementById('crop-source-file').click()">Upload...</button>
         <button class="mini-btn secondary" onclick="cropResetFit()">Fit to Space</button>
@@ -2175,7 +2182,7 @@
         tab.className = "board-tab" + (pid === activeBoardOwner ? " active" : "");
         tab.style.borderBottomColor = p.color;
         tab.innerText = p.name + (pid === myId ? " (you)" : "");
-        tab.onclick = () => { activeBoardOwner = pid; renderBoardTabs(); renderVisibleBoard(); renderMyStatus(); renderManaPool(); };
+        tab.onclick = () => { activeBoardOwner = pid; renderBoardTabs(); renderVisibleBoard(); renderMyStatus(); renderManaPool(); renderAllCursors(); };
         bar.appendChild(tab);
       });
     }
@@ -3553,6 +3560,9 @@
     function openZoneModal(ownerId, zoneName) {
       const p = players[ownerId];
       if (!p) return;
+      const searchEl = document.getElementById("zone-modal-search");
+      searchEl.value = "";
+      searchEl.style.display = "block";
       const isMine = ownerId === myId;
       let list;
       if (zoneName === "library") {
@@ -3591,6 +3601,7 @@
       }
       if (list.length === 0) {
         body.innerHTML += "<div style='color:#8a7a55;padding:10px;'>Empty.</div>";
+        searchEl.style.display = "none"; // nothing to search when the zone is empty
       } else {
         list.forEach((entry, idx) => {
           const row = document.createElement("div");
@@ -3625,6 +3636,7 @@
               actions += ` <button class="mini-btn" style="background:#7f9fd4;" onclick="chooseTargetFor('${entry.id}')">Target This</button>`;
             }
           }
+          row.dataset.name = (entry.name || "").toLowerCase();
           row.innerHTML = `<img src="${escapeHtml(cardArtSrc(entry))}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
           row.onmouseenter = () => zoneModalPreview(entry);
           body.appendChild(row);
@@ -3633,6 +3645,15 @@
       document.getElementById("zone-modal").style.display = "flex";
     }
     function closeZoneModal() { document.getElementById("zone-modal").style.display = "none"; }
+    // Plain client-side substring filter over the already-rendered rows (each stamped with its own
+    // lowercase name via row.dataset.name in openZoneModal) -- no server round trip, works
+    // identically for library/graveyard/exile since they all render through the same function.
+    function filterZoneModal(query) {
+      const q = query.trim().toLowerCase();
+      document.querySelectorAll("#zone-modal-body .zone-card-row").forEach((row) => {
+        row.style.display = (!q || (row.dataset.name || "").includes(q)) ? "" : "none";
+      });
+    }
 
     // Docked preview column for the zone modal (library/graveyard/exile) -- a floating preview
     // panel would sit behind the modal's own dark backdrop and look washed out, so this renders
@@ -3737,7 +3758,7 @@
           <button class="mini-btn secondary" onclick="document.getElementById('de-art-file').click()">Upload...</button>
           <button class="mini-btn" onclick="deSetCustomArt()">Set</button>
         </div>
-        <input type="file" id="de-art-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="uploadImageFile(this, 'de-art-url')">`;
+        <input type="file" id="de-art-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="uploadImageFile(this, 'de-art-url')">`;
     }
     function dePreviewByIndex(kind, i) {
       dePreviewedRef = { kind, index: i };
@@ -4048,6 +4069,63 @@
       await pc.setLocalDescription(offer);
       socket.emit("voiceSignal", { toId, data: { type: "offer", sdp: offer } });
     });
+
+    // ---------------- live cursor tracking ----------------
+    // Broadcasts your own mouse position (as % of #playmat, so it lines up regardless of zoom/
+    // scroll/viewport-size differences between players) whenever it's over the board, throttled to
+    // ~15fps -- plenty smooth for "where is everyone looking/pointing" without spamming a socket
+    // event on every pixel of native mousemove. Purely ephemeral: no server-side persistence, no
+    // reconnect handling needed, matches the same relay-and-forget shape voiceSignal already uses.
+    let lastCursorEmit = 0;
+    const otherCursors = {}; // playerId -> { x, y, boardOwner, lastSeen, el }
+    document.getElementById("table-wrapper").addEventListener("mousemove", (e) => {
+      const now = Date.now();
+      if (now - lastCursorEmit < 66) return;
+      lastCursorEmit = now;
+      const rect = playmat.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      if (x < 0 || x > 100 || y < 0 || y > 100) return; // mouse is over the wrapper but off the actual playmat (e.g. scrolled margin)
+      socket.emit("cursorMove", { x, y, boardOwner: activeBoardOwner });
+    });
+    socket.on("cursorMoved", ({ playerId, x, y, boardOwner }) => {
+      if (!otherCursors[playerId]) otherCursors[playerId] = {};
+      Object.assign(otherCursors[playerId], { x, y, boardOwner, lastSeen: Date.now() });
+      renderOneCursor(playerId);
+    });
+    function renderOneCursor(playerId) {
+      const c = otherCursors[playerId];
+      const layer = document.getElementById("cursor-layer");
+      const visible = c && c.boardOwner === activeBoardOwner && players[playerId];
+      if (!visible) {
+        if (c && c.el) { c.el.remove(); c.el = null; }
+        return;
+      }
+      if (!c.el) {
+        c.el = document.createElement("div");
+        c.el.className = "remote-cursor";
+        const color = players[playerId].color || "#f0e6c8";
+        c.el.innerHTML = `<div class="remote-cursor-dot" style="background:${color};"></div><div class="remote-cursor-label" style="background:${color};">${escapeHtml(players[playerId].name || "?")}</div>`;
+        layer.appendChild(c.el);
+      }
+      c.el.style.left = c.x + "%";
+      c.el.style.top = c.y + "%";
+    }
+    // Re-evaluate every known cursor's visibility whenever the VIEWER switches tabs -- otherwise a
+    // cursor last positioned on a different board tab would keep showing, now overlaid on the
+    // newly-selected one, until its owner happened to move their mouse again.
+    function renderAllCursors() { Object.keys(otherCursors).forEach(renderOneCursor); }
+    // A cursor whose owner stopped moving (switched tabs away from the board entirely, or is just
+    // idle) fades out of relevance -- swept every couple seconds rather than lingering forever.
+    setInterval(() => {
+      const now = Date.now();
+      Object.keys(otherCursors).forEach((pid) => {
+        if (now - (otherCursors[pid].lastSeen || 0) > 4000) {
+          if (otherCursors[pid].el) otherCursors[pid].el.remove();
+          delete otherCursors[pid];
+        }
+      });
+    }, 2000);
 
     // ---------------- board / card rendering ----------------
 
@@ -4899,9 +4977,18 @@
       const n = document.querySelectorAll("#attackers-modal-body .atk-check:checked").length;
       el.innerText = n === 0 ? "Click a creature to attack with it." : `${n} creature${n === 1 ? "" : "s"} set to attack.`;
     }
-    function closeAttackersModal() {
+    // The explicit "I choose to attack with nothing" submission -- unlike peekCloseAttackersModal
+    // below, this really does declare (an empty) attack and moves combat forward.
+    function declareNoAttacks() {
       document.getElementById("attackers-modal").style.display = "none";
       socket.emit("declareAttackers", {});
+    }
+    // Just hides the modal -- nothing is submitted, combat stays parked at declareAttackers exactly
+    // as it was. The turn-bar's own "Declare Attackers" button (renderCombatState) stays live the
+    // whole time this step is active, so reopening later to actually look at the board first and
+    // then decide is always one click away.
+    function peekCloseAttackersModal() {
+      document.getElementById("attackers-modal").style.display = "none";
     }
     function confirmAttackers() {
       const assignments = {};
@@ -4976,6 +5063,11 @@
         Object.entries(currentCombat.attackers || {}).forEach(([cardId, defId]) => { if (defId === myId) assignments[cardId] = []; });
       }
       socket.emit("declareBlockers", assignments);
+      document.getElementById("blockers-modal").style.display = "none";
+    }
+    // Same "just hide it, submit nothing" peek as peekCloseAttackersModal -- the "⚔ Declare
+    // Blockers!" turn-bar button stays live the whole time this step needs your answer.
+    function peekCloseBlockersModal() {
       document.getElementById("blockers-modal").style.display = "none";
     }
   </script>
