@@ -181,6 +181,11 @@ function clearFailedLogins(username) { delete loginAttempts[username]; }
 const COLORS = ["#ef4444", "#3b82f6", "#22c55e", "#eab308", "#a855f7", "#ec4899", "#14b8a6", "#f97316"];
 let colorIndex = 0;
 function nextColor() { return COLORS[colorIndex++ % COLORS.length]; }
+// A separate, fixed 10-color palette for the live cursor-tracking dot -- deliberately its OWN list
+// rather than reusing COLORS above, since COLORS is assigned via a global round-robin counter with
+// no real per-lobby uniqueness guarantee (fine for a name-tag color, not fine for "no two players
+// share a cursor color," which setCursorColor below actually enforces per lobby).
+const CURSOR_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#6366f1", "#a855f7", "#ec4899", "#78716c"];
 function randInt(n) { return Math.floor(Math.random() * n); }
 function newId() { return "c_" + Date.now() + "_" + randInt(100000); }
 // "ab_" prefix keeps a triggered-ability stack instance's id visually distinct from a real card id
@@ -3017,6 +3022,8 @@ function playersView(lobby, viewerId) {
       boardMat: p.boardMat || null,
       boardMatFit: p.boardMatFit || null,
       pileArt: p.pileArt || { library: null, graveyard: null, exile: null },
+      cursorColor: p.cursorColor || null,
+      cursorIcon: p.cursorIcon || null,
       mulligans: p.mulligans,
       handKept: p.handKept,
       openingHandDrawn: !!p.openingHandDrawn,
@@ -4934,7 +4941,8 @@ io.on("connection", (socket) => {
       library: [], graveyard: [], exile: [],
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
-      mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0
+      mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0,
+      cursorColor: null, cursorIcon: null // live cursor tracking's own style -- see setCursorColor/setCursorIcon; null color falls back to the player's own `color` above
     };
 
     if (lobby.turn.started) {
@@ -6853,6 +6861,31 @@ io.on("connection", (socket) => {
     const cx = Math.max(0, Math.min(100, Number(x) || 0));
     const cy = Math.max(0, Math.min(100, Number(y) || 0));
     socket.to(lobby.id).emit("cursorMoved", { playerId: socket.id, x: cx, y: cy, boardOwner: String(boardOwner || "") });
+  });
+
+  // Cursor color is enforced unique PER LOBBY (unlike the plain nametag `color` above, which has no
+  // such guarantee) -- rejects a pick that's already in use by someone else currently seated here,
+  // rather than silently letting two cursors look identical. null clears back to the default
+  // (falls back to the player's own `color` client-side).
+  socket.on("setCursorColor", (color) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p) return;
+    if (color === null) { p.cursorColor = null; broadcastPlayers(lobby); return; }
+    if (!CURSOR_COLORS.includes(color)) return;
+    const taken = Object.entries(lobby.players).some(([id, other]) => id !== socket.id && other.cursorColor === color);
+    if (taken) { socket.emit("actionError", "Someone else at this table already has that cursor color."); return; }
+    p.cursorColor = color;
+    broadcastPlayers(lobby);
+  });
+
+  // A custom cursor image (static or animated GIF) instead of the plain dot -- the actual on-screen
+  // size cap is enforced client-side via CSS (a huge source image must never be able to cover the
+  // board), this only validates the URL itself the same way every other image field in this app does.
+  socket.on("setCursorIcon", (url) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p) return;
+    p.cursorIcon = url ? sanitizeImgUrl(url) : null;
+    broadcastPlayers(lobby);
   });
 
   // See setUndo's own comment for the full scope/reasoning -- this just runs whatever revert
