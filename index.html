@@ -918,6 +918,23 @@
       </div>
     </div>
 
+    <!-- Scry N (Ponder/Preordain and any future scry card) -- server holds the real order in
+         pendingScry; this just lets the player reorder the "keep on top" list (up/down arrows,
+         no drag) and move cards to/from a "send to bottom" list before submitting. -->
+    <div class="modal-overlay" id="scry-modal">
+      <div class="modal-box" style="max-width:420px;">
+        <h2 id="scry-modal-title">Scry</h2>
+        <p style="font-size:12px;color:#a89a70;">Top of library first. Reorder with the arrows, or send a card to the bottom.</p>
+        <div style="font-size:12px;color:#d4af37;font-weight:600;margin-top:8px;">Keep on top (in this order)</div>
+        <div id="scry-top-list" style="margin:4px 0 10px;"></div>
+        <div style="font-size:12px;color:#a89a70;font-weight:600;">Send to the bottom</div>
+        <div id="scry-bottom-list" style="margin:4px 0;"></div>
+        <div class="modal-close-row">
+          <button onclick="submitScry()">Done</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Generic in-app replacement for window.confirm() -- native confirm/alert/prompt dialogs
          force the browser out of fullscreen the moment they appear (real behavior, not a bug in
          this app's own code), so anything shown while at the table needs to be a real DOM modal
@@ -2892,6 +2909,62 @@
       closeZoneModal();
     }
     function landDropBonus(delta) { socket.emit("landDropBonus", delta); }
+
+    // Scry N (Ponder/Preordain, EFFECTS.scryN) -- server sends just the top N cards' data (private,
+    // never broadcast to anyone else). scryTopOrder is the current top-to-bottom order of ORIGINAL
+    // indices being kept; scryBottomIndices holds whatever's been moved out of that list, in the
+    // order the player moved them (their final relative order once they land at the real bottom).
+    let scryCards = null, scryTopOrder = [], scryBottomIndices = [];
+    socket.on("scryPrompt", (data) => {
+      scryCards = data.cards;
+      scryTopOrder = scryCards.map((c) => c.index);
+      scryBottomIndices = [];
+      renderScryModal();
+      document.getElementById("scry-modal").style.display = "flex";
+    });
+    function renderScryModal() {
+      const byIndex = Object.fromEntries(scryCards.map((c) => [c.index, c]));
+      const row = (idx, showUp, showDown, toBottomLabel) => {
+        const c = byIndex[idx];
+        return `<div class="zone-card-row">
+          <img class="zone-card-thumb" src="${escapeHtml(cardArtSrc(c))}" alt="">
+          <span class="zone-card-name">${escapeHtml(c.name || "Card")}</span>
+          <div class="zone-card-actions">
+            ${showUp ? `<button class="mini-btn secondary" onclick="moveScryCard(${idx},-1)" title="Move up">↑</button>` : ""}
+            ${showDown ? `<button class="mini-btn secondary" onclick="moveScryCard(${idx},1)" title="Move down">↓</button>` : ""}
+            <button class="mini-btn secondary" onclick="toggleScryBottom(${idx})">${toBottomLabel}</button>
+          </div>
+        </div>`;
+      };
+      document.getElementById("scry-top-list").innerHTML = scryTopOrder.length
+        ? scryTopOrder.map((idx, i) => row(idx, i > 0, i < scryTopOrder.length - 1, "Send to bottom ↓")).join("")
+        : `<div style="font-size:12px;color:#8a7a55;">(nothing kept on top)</div>`;
+      document.getElementById("scry-bottom-list").innerHTML = scryBottomIndices.length
+        ? scryBottomIndices.map((idx) => row(idx, false, false, "Keep on top ↑")).join("")
+        : `<div style="font-size:12px;color:#8a7a55;">(none)</div>`;
+    }
+    function moveScryCard(idx, dir) {
+      const i = scryTopOrder.indexOf(idx);
+      const j = i + dir;
+      if (i === -1 || j < 0 || j >= scryTopOrder.length) return;
+      [scryTopOrder[i], scryTopOrder[j]] = [scryTopOrder[j], scryTopOrder[i]];
+      renderScryModal();
+    }
+    function toggleScryBottom(idx) {
+      if (scryTopOrder.includes(idx)) {
+        scryTopOrder = scryTopOrder.filter((i) => i !== idx);
+        scryBottomIndices.push(idx);
+      } else {
+        scryBottomIndices = scryBottomIndices.filter((i) => i !== idx);
+        scryTopOrder.push(idx);
+      }
+      renderScryModal();
+    }
+    function submitScry() {
+      socket.emit("resolveScry", { keepIndices: scryTopOrder });
+      scryCards = null;
+      document.getElementById("scry-modal").style.display = "none";
+    }
 
     // Hand size limit (7): server blocks ending the turn past End Step until this resolves.
     function checkPendingDiscard() {

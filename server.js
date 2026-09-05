@@ -818,7 +818,15 @@ const SPELL_ABILITIES = {
     { label: "Austere Command — destroy all enchantments", requiresTarget: false, effects: [{ type: "destroyAllMatching", typeIncludes: ["enchantment"] }] },
     { label: "Austere Command — destroy all creatures with mana value 3 or less", requiresTarget: false, effects: [{ type: "destroyAllMatching", zoneTypeFilter: "creature", cmcMax: 3 }] },
     { label: "Austere Command — destroy all creatures with mana value 4 or greater", requiresTarget: false, effects: [{ type: "destroyAllMatching", zoneTypeFilter: "creature", cmcMin: 4 }] }
-  ] }
+  ] },
+  // Preordain's "Scry 2, then draw a card" is a direct match for scryN + drawCards. Ponder's real
+  // text ("look at the top three, put them back in any order, you may shuffle instead") has no
+  // "bottom" option and an optional shuffle rather than scry's send-to-bottom -- approximated with
+  // the same scryN(3) prompt (reorder by keeping all 3 on top in the chosen order; sending some/all
+  // to the bottom approximates "shuffle" well enough) -- a disclosed simplification, not an exact
+  // match to Ponder's own wording.
+  "preordain": { label: "Preordain — scry 2, then draw a card", effects: [{ type: "scryN", amount: 2, thenEffects: [{ type: "drawCards", amount: 1 }] }] },
+  "ponder": { label: "Ponder — look at the top 3, reorder or send some to the bottom, then draw a card", effects: [{ type: "scryN", amount: 3, thenEffects: [{ type: "drawCards", amount: 1 }] }] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -1495,6 +1503,30 @@ const EFFECTS = {
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter });
     broadcastPlayers(lobby);
+  },
+  // Scry N (Ponder/Preordain and a very common real keyword ability) -- looks at the top N cards
+  // PRIVATELY (emitted only to this player's own socket, never broadcast) and lets them choose,
+  // per card, top or bottom; cards kept on top can be reordered, cards sent to the bottom keep their
+  // original relative order (a real, disclosed simplification -- true Magic lets you order those
+  // too, not worth a second reorder UI for the rare case anyone cares which of several cards is
+  // 3rd-from-bottom vs 4th). See the resolveScry handler for how the response is applied.
+  // params.thenEffects (Preordain/Ponder's own "...then draw a card") -- a plain sibling effect in
+  // the SAME effects array (e.g. [{type:"scryN"}, {type:"drawCards"}]) would run IMMEDIATELY after
+  // this returns, since scryN itself only sets up the pending choice and returns right away rather
+  // than blocking for the player's real response -- the draw would fire against the PRE-scry library
+  // order, not the reordered one. Bundling the follow-up here instead means resolveScry (below) is
+  // what actually runs it, correctly AFTER the reorder is applied.
+  scryN(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const n = Math.min(params.amount || 1, p.library.length);
+    if (n === 0) {
+      (params.thenEffects || []).forEach((e) => { const fn = EFFECTS[e.type]; if (fn) fn(lobby, ctx, e); });
+      return;
+    }
+    p.pendingScry = { count: n, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("scryPrompt", { cards: p.library.slice(0, n).map((e, i) => ({ index: i, name: e.name, img: e.img, type: e.type })) });
   },
   // Kaalia of the Vast's signature ability: puts the chosen hand card (already validated against
   // handTypeFilter by resolveChosenTarget) onto the battlefield tapped AND attacking the same
@@ -5682,6 +5714,32 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
     }
     p.pendingTutor = null;
+    broadcastPlayers(lobby);
+  });
+  // Answers a pending EFFECTS.scryN prompt. keepIndices is the FINAL top-to-bottom order (each a
+  // real index into the original top-N slice) of cards being kept on top -- anything from that
+  // slice NOT listed goes to the bottom, in their original relative order (see scryN's own comment
+  // for why). An index appearing twice, or out of range, is just filtered out rather than erroring --
+  // there's no way for a legitimate client to send that, so silently ignoring it is enough.
+  socket.on("resolveScry", ({ keepIndices }) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p || !p.pendingScry) return;
+    const { count: n, thenEffects, sourceCardId } = p.pendingScry;
+    const top = p.library.slice(0, n);
+    const rest = p.library.slice(n);
+    const seen = new Set();
+    const keepOrder = (Array.isArray(keepIndices) ? keepIndices : []).filter((i) => Number.isInteger(i) && i >= 0 && i < n && !seen.has(i) && seen.add(i));
+    const keep = keepOrder.map((i) => top[i]);
+    const toBottom = top.filter((_, i) => !seen.has(i));
+    p.library = [...keep, ...rest, ...toBottom];
+    p.pendingScry = null;
+    pushLog(lobby, `${p.name} finished scrying`);
+    // Run any bundled follow-up (Preordain/Ponder's own "then draw a card") now, AFTER the reorder
+    // is actually applied -- see scryN's own comment for why this can't just be a sibling effect.
+    if (thenEffects) {
+      const ctx = { controllerId: socket.id, sourceCard: sourceCardId ? { id: sourceCardId } : null };
+      thenEffects.forEach((e) => { const fn = EFFECTS[e.type]; if (fn) fn(lobby, ctx, e); });
+    }
     broadcastPlayers(lobby);
   });
   socket.on("cancelTutor", () => {
