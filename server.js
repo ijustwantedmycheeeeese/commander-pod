@@ -369,7 +369,10 @@ const CARD_ABILITIES = {
   "tireless tracker": [
     { trigger: "landfall", label: "Tireless Tracker — investigate (create a Clue token)", requiresTarget: false, effects: [{ type: "createToken", name: "Clue", tokenType: "Token Artifact — Clue", img: "https://cards.scryfall.io/normal/front/5/e/5e644586-888f-4e2e-8d66-8aa02bd79ec1.jpg" }] },
     { trigger: "deathYouControl", sourceNameFilter: "clue", label: "Tireless Tracker — +1/+1 counter (sacrificed a Clue)", requiresTarget: false, effects: [{ type: "addCountersToSelf", amount: 1 }] }
-  ]
+  ],
+  // See EFFECTS.attachSelfToTarget for the attach itself; the indestructible grant is already
+  // generic (equipEffectsFromText) once attached.
+  "mithril coat": [{ trigger: "etb", label: "Mithril Coat — attach to target legendary creature you control", requiresTarget: true, targetKind: "ownCreature", effects: [{ type: "attachSelfToTarget" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -592,7 +595,11 @@ const ACTIVATED_ABILITIES = {
   "clue": [{ cost: { mana: "{2}", sacrifice: true }, label: "Clue — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   // See EFFECTS.createTokenCopyWithHaste/sacrificeChosenCardById for the actual copy + delayed
   // sacrifice. targetKind otherOwnCreature already excludes Kiki-Jiki itself, matching "another".
-  "kiki-jiki, mirror breaker": [{ cost: { tap: true }, label: "Kiki-Jiki, Mirror Breaker — create a hasty token copy of another creature you control, sacrifice it at the next end step", requiresTarget: true, targetKind: "otherOwnCreature", effects: [{ type: "createTokenCopyWithHaste" }] }]
+  "kiki-jiki, mirror breaker": [{ cost: { tap: true }, label: "Kiki-Jiki, Mirror Breaker — create a hasty token copy of another creature you control, sacrifice it at the next end step", requiresTarget: true, targetKind: "otherOwnCreature", effects: [{ type: "createTokenCopyWithHaste" }] }],
+  // Its "{T}: Add one mana..." half needs no table entry at all -- no extra cost/multi-color-at-once
+  // shape (unlike a signet), so it's already covered by the free single-tap-for-mana shortcut's own
+  // dependsOnCommanderColorIdentity narrowing. Only the sacrifice-to-draw half needs one.
+  "commander's sphere": [{ cost: { sacrifice: true }, label: "Commander's Sphere — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1330,6 +1337,21 @@ const EFFECTS = {
     broadcastCard(lobby, mirror);
     const p = lobby.players[ctx.controllerId];
     pushLog(lobby, `${p ? p.name : "Someone"}'s Cursed Mirror becomes a copy of ${source.name || "a creature"}`);
+  },
+  // Mithril Coat -- "When Mithril Coat enters, attach it to target legendary creature you control."
+  // The actual grant ("Equipped creature has indestructible") is already handled generically by
+  // equipEffectsFromText/attachedBonusFor once attached -- this effect only needs to do the
+  // attaching itself, same plain `attachedTo` assignment the manual attachCard handler uses.
+  // "legendary" isn't checked -- this app's targetKind vocabulary has no legendary-status filter,
+  // same disclosed simplification as Kiki-Jiki's "nonlegendary" restriction.
+  attachSelfToTarget(lobby, ctx, params) {
+    const self = lobby.cards[ctx.sourceCard.id];
+    const target = lobby.cards[params.chosenTargetId];
+    if (!self || !target) return;
+    self.attachedTo = target.id;
+    broadcastCard(lobby, self);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"}'s ${self.name || "card"} attaches to ${target.name || "a creature"}`);
   },
   // Serra's Emissary -- chosenTargetId here is the chosen CARD TYPE STRING (e.g. "Creature"), not
   // a real card/player id, reusing the same chosenTargetId-baking chooseTargetFor already does for
@@ -2355,6 +2377,24 @@ function entersTapped(card) {
   return true;
 }
 
+// Cycling ("Cycling {cost} ({cost}, Discard this card: Draw a card.)") -- a generic, NAME-
+// INDEPENDENT text-pattern mechanism (like Command Tower's mana or shocklands' pay-life choice),
+// detected straight from oracle text so it works for any card with this ability, no per-card table
+// entry needed. "Basic landcycling" is the one common variant with a different resulting effect
+// (search a land into hand instead of drawing) -- reuses tutorToHand's existing typeFilter:"land"
+// shape, the same already-accepted "any land, not strictly a basic" simplification Weathered
+// Wayfarer's activated ability already uses. Untyped "Cycling" is checked FIRST: "landcycling" has
+// no word boundary before "cycling" (it's one continuous word), so the plain regex below correctly
+// never matches inside "Basic landcycling" and doesn't need an explicit exclusion.
+function cyclingCostFromText(text) {
+  const t = text || "";
+  let m = t.match(/\bbasic landcycling \{([^}]+)\}/i);
+  if (m) return { kind: "basicLand", cost: `{${m[1]}}` };
+  m = t.match(/\bcycling \{([^}]+)\}/i);
+  if (m) return { kind: "draw", cost: `{${m[1]}}` };
+  return null;
+}
+
 // Exotic Orchard / Reflecting Pool-style sources derive their color from OTHER permanents on the
 // battlefield rather than having a fixed set of their own -- detected via oracle text since
 // there's no structured field for it. Deliberately narrow to the opponent-facing wording so a
@@ -2893,10 +2933,15 @@ function maskCard(card, viewerId) {
   }
   // Same "live-computed, only shown when a real option exists" precedent as activatedAbilities
   // below, just for a HAND card's alternative-cost casting instead of a battlefield permanent's
-  // activated ability -- see castWithAltCost.
+  // activated ability -- see castWithAltCost. Cycling is checked alongside it (a card could in
+  // principle have both, though none in this app's automation does yet) -- see the cycleCard handler.
   if (card.zoneType === "hand" && card.owner === viewerId) {
+    const extra = {};
     const alt = getAltCost(card.name);
-    if (alt) return { ...card, altCastOption: { label: alt.label } };
+    if (alt) extra.altCastOption = { label: alt.label };
+    const cyc = cyclingCostFromText(card.text);
+    if (cyc) extra.cycleOption = { label: `Cycling ${cyc.cost}` };
+    if (Object.keys(extra).length) return { ...card, ...extra };
   }
   // Live-computed, never stored on the card itself -- lets the client show a real, correctly-labeled
   // "Activate: ..." context-menu entry only when one actually exists. Safe to send: nothing secret,
@@ -5192,6 +5237,28 @@ io.on("connection", (socket) => {
     } else {
       castSpell(lobby, card, socket.id, " without paying its mana cost");
     }
+  });
+
+  // Cycling -- "{cost}, Discard this card: Draw a card" (or, for Basic landcycling, search a land
+  // into hand instead). Not a spell cast at all (no stack, no timing restriction -- real Magic
+  // allows cycling any time you have priority, including at instant speed on any turn), so this
+  // skips checkTiming/canCastSpells entirely, same "this isn't really casting" precedent freeCastCard
+  // above already establishes for a different reason.
+  socket.on("cycleCard", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[id];
+    const p = lobby.players[socket.id];
+    if (!card || !p || card.owner !== socket.id || card.zoneType !== "hand") return;
+    const cyc = cyclingCostFromText(card.text);
+    if (!cyc) return;
+    const remaining = canAffordAndPay(p.mana, parseManaCost(cyc.cost), 0);
+    if (!remaining) { socket.emit("actionError", `Not enough mana to cycle ${card.name || "this card"}.`); return; }
+    p.mana = remaining;
+    sendToGraveyardInternal(lobby, card);
+    pushLog(lobby, `${p.name} cycles ${card.name || "a card"}`);
+    if (cyc.kind === "basicLand") EFFECTS.tutorToHand(lobby, { controllerId: socket.id }, { typeFilter: "land" });
+    else drawN(lobby, socket.id, 1);
+    broadcastPlayers(lobby);
   });
 
   // Sephara, Sky's Blade and any future ALT_COSTS card -- "you may pay X rather than pay this
