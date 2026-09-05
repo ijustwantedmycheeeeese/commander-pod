@@ -70,15 +70,22 @@ const DECKS_FILE = DATA_DIR + "/decks.json";
 const MATS_FILE = DATA_DIR + "/mats.json";
 const PILE_MATS_FILE = DATA_DIR + "/pile_mats.json";
 const CARD_ARCHIVE_FILE = DATA_DIR + "/card_archive.json";
+const COLLECTION_FILE = DATA_DIR + "/collection.json";
 let users = loadJSON(USERS_FILE, {});
 let decks = loadJSON(DECKS_FILE, {});
 let mats = loadJSON(MATS_FILE, {}); // username -> { matName: url } -- account-wide, unlike the per-table active boardMat
 let pileMats = loadJSON(PILE_MATS_FILE, {}); // username -> { presetName: {url,scale,x,y} } -- same idea, for pile art
 let cardArchive = loadJSON(CARD_ARCHIVE_FILE, {}); // lowercase card name -> full extracted card data
+// username -> { archiveKey(name): {name,type,img} } -- a personal "I own this in real life" list,
+// entirely independent of any saved deck (a card can be checked off here without being in any
+// deck, and being in a deck doesn't check it off automatically). Only the display fields are kept,
+// same "just enough to render a row" scope as mats/pileMats.
+let collection = loadJSON(COLLECTION_FILE, {});
 function saveUsers() { saveJSON(USERS_FILE, users); }
 function saveDecks() { saveJSON(DECKS_FILE, decks); }
 function saveMats() { saveJSON(MATS_FILE, mats); }
 function savePileMats() { saveJSON(PILE_MATS_FILE, pileMats); }
+function saveCollection() { saveJSON(COLLECTION_FILE, collection); }
 function saveCardArchive() { saveJSON(CARD_ARCHIVE_FILE, cardArchive); }
 function archiveKey(name) { return (name || "").toLowerCase().trim(); }
 function archiveCard(fields) {
@@ -4842,7 +4849,8 @@ io.on("connection", (socket) => {
     defaultName: (users[username] && users[username].defaultName) || null,
     defaultBoardMat: (users[username] && users[username].defaultBoardMat) || null,
     defaultPileArt: (users[username] && users[username].defaultPileArt) || null,
-    automatedCardNames: getAllAutomatedCardNames()
+    automatedCardNames: getAllAutomatedCardNames(),
+    collection: collection[username] || {}
   });
 
   // A reconnecting browser (network blip, tab refresh, server restart) resumes its seat silently
@@ -6175,6 +6183,26 @@ io.on("connection", (socket) => {
     socket.emit("deckList", Object.keys(decks[username]));
   });
 
+  // ---- personal "I own this in real life" collection (account-scoped, independent of any deck) ----
+
+  // Toggle, not a separate add/remove pair -- a card row's checkbox always reflects "is this
+  // already in my collection," so one event that flips whichever way it currently isn't covers
+  // both directions without the client needing to know which one to send.
+  socket.on("toggleCollectionCard", (data) => {
+    const key = archiveKey(data && data.name);
+    if (!key || UNSAFE_OBJECT_KEYS.has(key)) return;
+    if (!collection[username]) collection[username] = {};
+    if (collection[username][key]) {
+      delete collection[username][key];
+    } else {
+      // Only the display fields -- this isn't a second copy of the card archive, just enough to
+      // render a row in the collection list without a card actually being on any board/deck.
+      collection[username][key] = { name: sanitizeCardStr(data.name, 200), type: sanitizeCardStr(data.type || "", 100), img: sanitizeImgUrl(data.img) };
+    }
+    saveCollection();
+    socket.emit("collectionUpdated", collection[username]);
+  });
+
   // ---- saved board mats (account-scoped, like decks -- distinct from the per-table active
   // boardMat on lobby.players, which is unaffected by any of this) ----
 
@@ -6362,6 +6390,26 @@ io.on("connection", (socket) => {
   socket.on("getDeckData", (name) => {
     const deck = decks[username] && decks[username][name];
     socket.emit("deckData", { name, data: deck || null });
+  });
+
+  // The user's own "card library" for building a new deck -- every unique card (by name) that
+  // appears in ANY of their other saved decks (commander slots included), deduplicated, so the
+  // Deck Editor can offer "add from what I already have elsewhere" instead of retyping/pasting a
+  // full list every time. Independent of the "I own this" collection above -- this reads real
+  // saved decklists, not the ownership checklist (see the two-separate-things scoping decision).
+  socket.on("getCardPool", () => {
+    const seen = {};
+    const pool = [];
+    Object.values(decks[username] || {}).forEach((deck) => {
+      [...(deck.commanders || []).filter(Boolean), ...(deck.library || [])].forEach((c) => {
+        const key = archiveKey(c.name);
+        if (!key || seen[key]) return;
+        seen[key] = true;
+        pool.push({ name: c.name, type: c.type || "", img: c.img || "" });
+      });
+    });
+    pool.sort((a, b) => a.name.localeCompare(b.name));
+    socket.emit("cardPool", pool);
   });
 
   // Applies an in-progress editor draft directly to the live game, without requiring a save first.

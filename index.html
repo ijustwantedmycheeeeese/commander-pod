@@ -308,6 +308,7 @@
     .de-library-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1c170f; font-size: 12px; cursor: pointer; }
     .de-library-row:last-child { border-bottom: none; }
     .de-library-row .de-lr-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .de-own-check { display: flex; align-items: center; gap: 3px; font-size: 10px; color: #8a7a55; white-space: nowrap; cursor: pointer; }
     /* Visually separates the three alternative ways to add cards (search / paste / import) so
        they read as distinct options instead of one continuous, undifferentiated form. */
     .de-add-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b5d42; }
@@ -385,6 +386,7 @@
       <div class="mm-section">
         <div class="mm-label">Decks</div>
         <button onclick="openDeckEditor()">Deck Editor</button>
+        <button class="secondary" onclick="openCollectionModal()">My Collection</button>
         <div class="mm-hint">Build or edit a deck — up to 99 cards, up to 2 commanders</div>
         <div id="deck-list" style="margin-top:10px;"></div>
         <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
@@ -434,6 +436,7 @@
             <input type="text" id="de-card-search" placeholder="Add a card by name..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)" style="flex:1;" onkeydown="if(event.key==='Enter'){deAddCardFromSearch();}">
             <button class="mini-btn" onclick="deAddCardFromSearch()">Add</button>
           </div>
+          <button class="mini-btn secondary" style="margin-top:6px;" onclick="openCardPoolModal()" title="Pick from every unique card across your OTHER saved decks">Add From My Other Decks...</button>
           <div class="de-library-count">Library: <strong id="de-count">0</strong> / 99 <span id="de-automation-count" style="color:#8a7a55;"></span></div>
           <div class="de-library-list" id="de-library-list"></div>
           <div class="de-add-divider">or paste a list</div>
@@ -601,6 +604,24 @@
       <button data-action="toLibrary">Return to Library (Top)</button>
       <hr>
       <button data-action="remove" style="color:#f87171;">Remove Permanently</button>
+    </div>
+
+    <div class="modal-overlay" id="cardpool-modal">
+      <div class="modal-box modal-box-wide">
+        <button class="modal-close-x" onclick="closeCardPoolModal()" title="Close">✕</button>
+        <h2>Add From My Other Decks <span style="font-size:12px;color:#8a7a55;font-weight:normal;">— every unique card across your other saved decks</span></h2>
+        <input type="text" id="cardpool-search" placeholder="Search by name..." oninput="renderCardPoolModal()" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 10px;background:#171310;border:1px solid #5a4423;border-radius:6px;color:#e8dcc4;font-size:13px;">
+        <div id="cardpool-modal-body" style="max-height:60vh;overflow-y:auto;"></div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="collection-modal">
+      <div class="modal-box modal-box-wide">
+        <button class="modal-close-x" onclick="closeCollectionModal()" title="Close">✕</button>
+        <h2>My Collection <span style="font-size:12px;color:#8a7a55;font-weight:normal;">— cards you've checked off as owned in real life</span></h2>
+        <input type="text" id="collection-search" placeholder="Search by name..." oninput="renderCollectionModal()" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 10px;background:#171310;border:1px solid #5a4423;border-radius:6px;color:#e8dcc4;font-size:13px;">
+        <div id="collection-modal-body" style="max-height:60vh;overflow-y:auto;"></div>
+      </div>
     </div>
 
     <div class="modal-overlay" id="zone-modal">
@@ -1497,6 +1518,9 @@
     let myDefaultBoardMat = null; // {url,scale,x,y}|null -- auto-applied to every NEW table, distinct from mySavedMats (a named library you apply by hand)
     let myDefaultPileArt = { library: null, graveyard: null, exile: null }; // same idea, one slot per zone
     let automatedCardNames = new Set(); // lowercase card names with some automation, sent once at auth time -- see deckAutomationCoverage
+    let myCollection = {}; // archiveKey(name) -> {name,type,img} -- the "I own this" list, independent of any deck
+    function ckey(name) { return (name || "").toLowerCase().trim(); }
+    socket.on("collectionUpdated", (c) => { myCollection = c || {}; deRenderLibrary(); renderCollectionModal(); });
 
     // Auth succeeded — land on the Main Menu (lobby list arrives separately via "lobbyList").
     socket.on("authOk", (data) => {
@@ -1516,6 +1540,7 @@
       mySavedMats = data.mats || {};
       mySavedPileMats = data.pileMats || {};
       automatedCardNames = new Set(data.automatedCardNames || []);
+      myCollection = data.collection || {};
       renderSavedMatsList();
       renderSavedMatSelect();
       renderSavedPileMatsList();
@@ -3855,12 +3880,89 @@
       }
       list.innerHTML = deckEditor.library.map((c, i) => `
         <div class="de-library-row" onmouseenter="dePreviewByIndex('lib', ${i})" onclick="dePreviewByIndex('lib', ${i})">
+          <label class="de-own-check" title="I own this in real life" onclick="event.stopPropagation();">
+            <input type="checkbox" ${myCollection[ckey(c.name)] ? "checked" : ""} onchange="deToggleOwned(${i})"> Own
+          </label>
           <span class="de-lr-name">${escapeHtml(c.name)}</span>
           <span>${manaCostPips(c.manaCost)}</span>
           <button class="mini-btn" onclick="event.stopPropagation(); deRemoveLibraryCard(${i})">×</button>
         </div>`).join("");
     }
     function deRemoveLibraryCard(i) { deckEditor.library.splice(i, 1); deRenderLibrary(); }
+    // The checkbox always reflects current membership, so a plain toggle (not separate add/remove
+    // calls) is all the server needs -- see the matching toggleCollectionCard handler.
+    function deToggleOwned(i) {
+      const c = deckEditor.library[i];
+      if (!c) return;
+      socket.emit("toggleCollectionCard", { name: c.name, type: c.type, img: c.img });
+    }
+
+    // ---------------- Card pool (add from my other saved decks) ----------------
+    let myCardPool = []; // [{name,type,img}], refreshed via getCardPool each time the picker opens
+    socket.on("cardPool", (pool) => { myCardPool = pool || []; renderCardPoolModal(); });
+    function openCardPoolModal() {
+      document.getElementById("cardpool-search").value = "";
+      socket.emit("getCardPool");
+      document.getElementById("cardpool-modal-body").innerHTML = "<div style='color:#8a7a55;padding:10px;'>Loading...</div>";
+      document.getElementById("cardpool-modal").style.display = "flex";
+    }
+    function closeCardPoolModal() { document.getElementById("cardpool-modal").style.display = "none"; }
+    function renderCardPoolModal() {
+      const body = document.getElementById("cardpool-modal-body");
+      if (!body || document.getElementById("cardpool-modal").style.display !== "flex") return;
+      const q = (document.getElementById("cardpool-search").value || "").trim().toLowerCase();
+      // Already-in-this-draft cards are skipped -- adding the same card twice via this picker would
+      // just silently duplicate a row with no feedback, same "don't offer what's already there"
+      // precedent the rest of this editor follows.
+      const draftKeys = new Set(deckEditor.library.map((c) => ckey(c.name)));
+      const entries = myCardPool.filter((c) => !draftKeys.has(ckey(c.name)) && (!q || (c.name || "").toLowerCase().includes(q)));
+      if (!entries.length) {
+        body.innerHTML = `<div style='color:#8a7a55;padding:10px;'>${myCardPool.length ? "No matches (or everything matching is already in this deck)." : "No other saved decks to pull cards from yet."}</div>`;
+        return;
+      }
+      body.innerHTML = entries.map((c) => `
+        <div class="zone-card-row">
+          <img src="${escapeHtml(cardArtSrc(c))}" class="zone-card-thumb">
+          <div class="zone-card-name">${escapeHtml(c.name)}</div>
+          <div class="zone-card-actions"><button class="mini-btn" onclick="addFromCardPool('${c.name.replace(/'/g, "\\'")}')">Add</button></div>
+        </div>`).join("");
+    }
+    // Re-fetches the real full card data (mana cost, text, colors, etc.) via the same /api/spawn
+    // path deAddCardFromSearch already uses -- the pool itself only carries display fields, not
+    // enough to actually add a working card to the draft.
+    function addFromCardPool(name) {
+      if (deckEditor.library.length >= 99) { document.getElementById("de-status").innerText = "Library is full (99/99)."; return; }
+      fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) { deckEditor.library.push(data); deRenderLibrary(); renderCardPoolModal(); }
+          else alert("Card lookup failed! Check spelling.");
+        });
+    }
+
+    // ---------------- My Collection viewer (Main Menu) ----------------
+    function openCollectionModal() {
+      document.getElementById("collection-search").value = "";
+      renderCollectionModal();
+      document.getElementById("collection-modal").style.display = "flex";
+    }
+    function closeCollectionModal() { document.getElementById("collection-modal").style.display = "none"; }
+    function renderCollectionModal() {
+      const body = document.getElementById("collection-modal-body");
+      if (!body) return; // defensive -- the element is always in the DOM, this just guards the rare case this runs before first page render
+      const q = (document.getElementById("collection-search").value || "").trim().toLowerCase();
+      const entries = Object.values(myCollection).filter((c) => !q || (c.name || "").toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name));
+      if (!entries.length) {
+        body.innerHTML = `<div style='color:#8a7a55;padding:10px;'>${Object.keys(myCollection).length ? "No matches." : "Nothing checked off yet -- check \"Own\" next to a card in the Deck Editor to add it here."}</div>`;
+        return;
+      }
+      body.innerHTML = entries.map((c) => `
+        <div class="zone-card-row">
+          <img src="${escapeHtml(cardArtSrc(c))}" class="zone-card-thumb">
+          <div class="zone-card-name">${escapeHtml(c.name)}</div>
+          <div class="zone-card-actions"><button class="mini-btn secondary" onclick="socket.emit('toggleCollectionCard', {name:'${c.name.replace(/'/g, "\\'")}'})">Remove</button></div>
+        </div>`).join("");
+    }
 
     function deAddCardFromSearch() {
       const input = document.getElementById("de-card-search");
