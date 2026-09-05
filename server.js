@@ -3042,6 +3042,40 @@ function pushLog(lobby, msg) {
   io.to(lobby.id).emit("log", msg);
 }
 
+// ---------------- single-slot per-player "undo my last action" ----------------
+// Deliberately narrow: this is NOT a generic state-snapshot/replay system (which would need to
+// reason correctly about every possible downstream trigger cascade -- a much bigger and riskier
+// build). Instead, each undoable action captures its own hand-written revert closure at the exact
+// moment it happens, covering only the small set of actions that are 100% safe to cleanly reverse
+// with no side effects left dangling: tapping (see the `tap`/`resolveManaChoice` handlers, which
+// only ever add mana as a side effect -- reverted exactly), a manual counter nudge, and a manual
+// life/cmdr/poison nudge (only offered when nothing ELSE happened as a result -- see statChange's
+// own stack-length/elimination check). Land drops, zone moves, and casting anything are NOT
+// undoable here on purpose: any of those can cascade into ETB/death triggers, optional payments,
+// or other players' reactions that a bare "put the card back" can't cleanly unwind.
+// Single slot per player (a new undoable action simply replaces whatever was pending before -- you
+// can only ever undo the MOST RECENT thing, not reach back further), and it expires both on a
+// short TTL (checked at undo time, see the `undo` handler) and unconditionally the moment the
+// phase changes (advanceOnePhase calls clearAllUndo) -- once anyone has had a chance to react to
+// new game state, undoing something from before that point would be a retroactive surprise, not a
+// misclick fix.
+const UNDO_TTL_MS = 30000;
+function setUndo(lobby, playerId, label, revert) {
+  if (!lobby.lastAction) lobby.lastAction = {};
+  lobby.lastAction[playerId] = { label, revert, ts: Date.now(), turnNumber: lobby.turn.turnNumber, phase: lobby.turn.phase };
+  const sock = io.sockets.sockets.get(playerId);
+  if (sock) sock.emit("undoAvailable", { label });
+}
+function clearUndo(lobby, playerId) {
+  if (lobby.lastAction) delete lobby.lastAction[playerId];
+  const sock = io.sockets.sockets.get(playerId);
+  if (sock) sock.emit("undoAvailable", null);
+}
+function clearAllUndo(lobby) {
+  if (!lobby.lastAction) return;
+  for (const playerId in lobby.lastAction) clearUndo(lobby, playerId);
+}
+
 // Every legitimate way cards enter a lobby other than spawnCard/copyCard is naturally bounded (a
 // deck is capped at 99 library entries, an opening hand is 7, commanders are at most 2) -- those
 // two are the only genuinely unbounded paths, since either can be called in a tight client-side
@@ -4214,6 +4248,7 @@ function beginTurnFlowOnceHandsReady(lobby) {
 function advanceOnePhase(lobby) {
   const turn = lobby.turn;
   if (!turn.started || turn.order.length === 0) return;
+  clearAllUndo(lobby); // a new phase is a real "everyone's had a chance to see this" boundary
   const oldPhase = turn.phase;
   let idx = PHASES.indexOf(turn.phase);
   // An extra combat phase (Aurelia, Combat Celebrant, ...) re-enters Combat instead of advancing
@@ -5106,16 +5141,32 @@ io.on("connection", (socket) => {
   });
 
   socket.on("statChange", ({ key, val }) => {
-    const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id] || !["life", "cmdr", "poison"].includes(key)) return;
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p || !["life", "cmdr", "poison"].includes(key)) return;
+    const before = p[key];
+    const stackLenBefore = lobby.stack.length;
     if (key === "life" && val > 0) applyLifeGain(lobby, socket.id, val);
     else if (key === "life" && val < 0) applyLifeLoss(lobby, socket.id, -val);
-    else lobby.players[socket.id][key] += val;
+    else p[key] += val;
     // Manual life adjustment can trigger elimination just like combat can; the manual cmdr/poison
     // buttons only ever touch the flat aggregate/poison counters, never cmdrDamage[key] itself
     // (only resolveCombatDamage writes that), so this is really just the life <= 0 path in
     // practice for this call site -- included anyway since checkEliminations checks both.
     checkEliminations(lobby);
     broadcastPlayers(lobby);
+    // Only offer undo when nothing ELSE happened as a side effect of this change -- a life change
+    // that fired a real trigger (Vilis drawing cards, Ajani's Pridemate's counter, both routed
+    // through the stack) or that just eliminated the player can't be cleanly reverted by putting
+    // the number back alone, so this stays un-undoable rather than silently leaving those other
+    // effects in place. Also skips entirely if the value didn't actually move (Teferi's
+    // Protection's lifeLocked silently no-ops applyLifeGain/applyLifeLoss) -- nothing to undo.
+    const delta = p[key] - before;
+    if (delta !== 0 && lobby.stack.length === stackLenBefore && !p.eliminated) {
+      setUndo(lobby, socket.id, `${key} ${delta > 0 ? "+" : ""}${delta}`, () => {
+        const pp = lobby.players[socket.id];
+        if (pp) { pp[key] -= delta; broadcastPlayers(lobby); }
+      });
+    }
   });
 
   // A voluntary version of what checkEliminations does automatically -- reuses eliminatePlayer
@@ -5350,6 +5401,19 @@ io.on("connection", (socket) => {
     if (card.tapped) return;
     card.tapped = true;
     broadcastCard(lobby, card);
+    // The mana half (if any) is filled in below once it's known -- manaAdded stays untouched (no
+    // mana to revert) for a plain tap-only source, or for one that only ever emits a chooseMana
+    // prompt (untapping here already invalidates that prompt, since resolveManaChoice itself checks
+    // card.tapped before adding anything).
+    const manaAdded = { color: null };
+    setUndo(lobby, socket.id, `Tap ${card.name || "a card"}`, () => {
+      const c = lobby.cards[id];
+      if (c && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
+      if (manaAdded.color) {
+        const pp = lobby.players[socket.id];
+        if (pp) { pp.mana[manaAdded.color] = Math.max(0, (pp.mana[manaAdded.color] || 0) - 1); broadcastPlayers(lobby); }
+      }
+    });
     // A card with its own real ACTIVATED_ABILITIES manaAbility entry (a signet: "{1}, T: Add {W}
     // {B}.") has a genuine mana COST to pay and/or produces more than one color simultaneously --
     // neither of which this auto-mana shortcut (built for free, single-choice sources) can
@@ -5379,6 +5443,7 @@ io.on("connection", (socket) => {
     if (color && ["W", "U", "B", "R", "G", "C"].includes(color)) {
       const p = lobby.players[socket.id];
       p.mana[color] = (p.mana[color] || 0) + 1;
+      manaAdded.color = color;
       broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
     } else if (options ? options.length > 1 : (Array.isArray(card.producedMana) && card.producedMana.length > 1)) {
@@ -5400,6 +5465,12 @@ io.on("connection", (socket) => {
     p.mana[color] = (p.mana[color] || 0) + 1;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
+    setUndo(lobby, socket.id, `Tap ${card.name || "a card"} for {${color}}`, () => {
+      const c = lobby.cards[cardId];
+      if (c && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
+      const pp = lobby.players[socket.id];
+      if (pp) { pp.mana[color] = Math.max(0, (pp.mana[color] || 0) - 1); broadcastPlayers(lobby); }
+    });
   });
 
   socket.on("flip", (id) => {
@@ -5421,6 +5492,10 @@ io.on("connection", (socket) => {
     if (!card || card.owner !== socket.id || card.zoneType === "hand" || card.zoneType === "stack") return;
     card.counters = (card.counters || 0) + delta;
     broadcastCard(lobby, card);
+    setUndo(lobby, socket.id, `${delta > 0 ? "+" : ""}${delta} counter on ${card.name || "a card"}`, () => {
+      const c = lobby.cards[id];
+      if (c) { c.counters = (c.counters || 0) - delta; broadcastCard(lobby, c); }
+    });
   });
 
   // Activates a player-initiated ability from ACTIVATED_ABILITIES (see its comment for scope).
@@ -6730,6 +6805,22 @@ io.on("connection", (socket) => {
     const cx = Math.max(0, Math.min(100, Number(x) || 0));
     const cy = Math.max(0, Math.min(100, Number(y) || 0));
     socket.to(lobby.id).emit("cursorMoved", { playerId: socket.id, x: cx, y: cy, boardOwner: String(boardOwner || "") });
+  });
+
+  // See setUndo's own comment for the full scope/reasoning -- this just runs whatever revert
+  // closure is currently pending for the calling player, if any, and if it hasn't gone stale.
+  socket.on("undo", () => {
+    const lobby = currentLobby(); if (!lobby || !lobby.lastAction) return;
+    const entry = lobby.lastAction[socket.id];
+    if (!entry) return;
+    const expired = Date.now() - entry.ts > UNDO_TTL_MS || entry.turnNumber !== lobby.turn.turnNumber || entry.phase !== lobby.turn.phase;
+    delete lobby.lastAction[socket.id];
+    const sock = io.sockets.sockets.get(socket.id);
+    if (sock) sock.emit("undoAvailable", null);
+    if (expired) { socket.emit("actionError", "That's no longer available to undo."); return; }
+    entry.revert();
+    const p = lobby.players[socket.id];
+    pushLog(lobby, `${p ? p.name : "Someone"} undid: ${entry.label}`);
   });
 
   // ---- misc ----

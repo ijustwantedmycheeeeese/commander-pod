@@ -531,6 +531,7 @@
           <button id="start-game-btn" class="mini-btn" onclick="startGame()">Start Game</button>
           <button id="next-phase-btn" class="mini-btn" onclick="nextPhaseFn()" style="display:none;">Next Phase →</button>
           <button id="combat-action-btn" class="mini-btn" style="display:none;"></button>
+          <button id="undo-btn" class="mini-btn secondary" style="display:none;margin-left:auto;" onclick="socket.emit('undo')"></button>
         </div>
         <div id="board-tabs"></div>
         <div id="table-wrapper">
@@ -4126,6 +4127,20 @@
         }
       });
     }, 2000);
+
+    // ---------------- undo (last action only) ----------------
+    // Purely reactive to the server's own single-slot-per-player state (see setUndo/clearUndo in
+    // server.js) -- this button never decides on its own whether something is undoable, it just
+    // shows/hides based on what the server last told THIS player is currently pending.
+    socket.on("undoAvailable", (info) => {
+      const btn = document.getElementById("undo-btn");
+      if (info) {
+        btn.style.display = "inline-block";
+        btn.innerText = `↩ Undo: ${info.label}`;
+      } else {
+        btn.style.display = "none";
+      }
+    });
 
     // ---------------- board / card rendering ----------------
 
