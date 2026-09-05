@@ -358,11 +358,21 @@
       </div>
       <div class="mm-section">
         <div class="mm-label">Play</div>
+        <!-- Decoys the browser's saved-credential autofill can land on instead of the real fields
+             below -- a bare text input immediately followed by a password input reads as a login
+             form to browser autofill heuristics regardless of autocomplete/name on the real
+             fields, since those heuristics key heavily off input TYPE and adjacency. Off-screen via
+             position, not display:none/hidden -- some autofill implementations skip fields that
+             were never actually rendered. -->
+        <div style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;" aria-hidden="true">
+          <input type="text" name="username" tabindex="-1" autocomplete="off">
+          <input type="password" name="password" tabindex="-1" autocomplete="off">
+        </div>
         <div class="flex-row">
-          <input type="text" id="lobby-name-input" name="archon-table-name" autocomplete="off" placeholder="Table name (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
+          <input type="text" id="lobby-name-input" name="archon-table-name" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" placeholder="Table name (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
         </div>
         <div class="flex-row" style="margin-top:6px;">
-          <input type="password" id="lobby-password-input" name="archon-table-password" autocomplete="off" placeholder="Password (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
+          <input type="password" id="lobby-password-input" name="archon-table-password" autocomplete="new-password" readonly onfocus="this.removeAttribute('readonly')" placeholder="Password (optional)" style="flex:1;" onkeydown="if(event.key==='Enter'){createLobby();}">
           <button class="mini-btn" onclick="createLobby()">Create Table</button>
         </div>
         <div class="mm-label" style="margin-top:14px;">Open Tables</div>
