@@ -778,7 +778,8 @@ const SPELL_ABILITIES = {
   "doomskar": { label: "Doomskar — destroy all creatures", effects: [{ type: "destroyAllCreatures" }] },
   "time wipe": { label: "Time Wipe — return a creature you control to hand, then destroy all creatures", effects: [{ type: "bounceTargetToHand" }, { type: "destroyAllCreatures" }], requiresTarget: true, targetKind: "ownCreature" },
   "chain reaction": { label: "Chain Reaction — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] },
-  "blasphemous act": { label: "Blasphemous Act — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] }
+  "blasphemous act": { label: "Blasphemous Act — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] },
+  "swan song": { label: "Swan Song — counter target enchantment, instant, or sorcery spell, its controller gets a 2/2 flying Bird", effects: [{ type: "counterTargetSpellCreateTokenForController", tokenName: "Bird", tokenType: "Token Creature — Bird", power: "2", toughness: "2", colors: ["U"], keywords: ["Flying"] }], requiresTarget: true, targetKind: "spell" }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -929,7 +930,7 @@ const EFFECTS = {
   // practice despite looking correct in the table and resolving "cleanly" off the stack. Found while
   // adding Windcrag Siege's token trigger, which copied the exact same (broken) shape.
   createToken(lobby, ctx, params) {
-    const n = params.amount || 1;
+    const n = (params.amount || 1) * tokenMultiplierFor(lobby, ctx.controllerId);
     for (let i = 0; i < n; i++) {
       spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
@@ -945,7 +946,7 @@ const EFFECTS = {
   // counts toward his own total (he's a Goblin), matching the real card.
   createTokensEqualToTypeCountControlled(lobby, ctx, params) {
     const filter = params.typeFilter || [];
-    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && filter.some((t) => (c.type || "").toLowerCase().includes(t))).length;
+    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && filter.some((t) => (c.type || "").toLowerCase().includes(t))).length * tokenMultiplierFor(lobby, ctx.controllerId);
     for (let i = 0; i < n; i++) {
       spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
@@ -964,7 +965,7 @@ const EFFECTS = {
     if (!card) return;
     const bonus = attachedBonusFor(lobby, card);
     const stat = staticBonusFor(lobby, card);
-    const n = Math.max(0, parsePT(card.power) + (card.counters || 0) + bonus.powerBonus + stat.powerBonus);
+    const n = Math.max(0, parsePT(card.power) + (card.counters || 0) + bonus.powerBonus + stat.powerBonus) * tokenMultiplierFor(lobby, ctx.controllerId);
     for (let i = 0; i < n; i++) {
       spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
@@ -975,9 +976,17 @@ const EFFECTS = {
   },
   // Only meaningful for an ETB trigger -- by the time a death trigger resolves, the source card is
   // already gone. No-ops safely rather than modeling "last known information."
+  // Hardened Scales -- "If one or more +1/+1 counters would be put on a creature you control, that
+  // many PLUS ONE are put on it instead" (an additive +1, not a doubling -- 1 becomes 2, 3 becomes
+  // 4). See bonusCountersFor for the text-pattern detection; only applied when actually adding a
+  // positive amount, matching the real card's "one or more... would be put" trigger condition.
   addCountersToSelf(lobby, ctx, params) {
     const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
-    if (card) { card.counters = (card.counters || 0) + (params.amount || 1); broadcastCard(lobby, card); }
+    if (!card) return;
+    const amount = params.amount || 1;
+    const bonus = amount > 0 ? bonusCountersFor(lobby, card.owner) : 0;
+    card.counters = (card.counters || 0) + amount + bonus;
+    broadcastCard(lobby, card);
   },
   // Records a "choose one" ETB-style pick (e.g. Windcrag Siege's "choose Mardu or Jeskai") directly
   // on the source card, for other abilities' `condition` to key off of and for the client to show.
@@ -1381,6 +1390,23 @@ const EFFECTS = {
     const owner = lobby.players[item.owner];
     const caster = lobby.players[ctx.controllerId];
     if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"}`);
+  },
+  // Swan Song -- "Counter target enchantment, instant, or sorcery spell. Its controller creates a
+  // 2/2 blue Bird creature token with flying." The token goes to the COUNTERED SPELL's controller
+  // (item.owner, captured by removeStackItem before the item is gone), not this spell's own caster --
+  // same "capture the other player's identity before removal" shape as
+  // destroyTargetCreateTokenForController.
+  counterTargetSpellCreateTokenForController(lobby, ctx, params) {
+    const item = removeStackItem(lobby, params.chosenTargetId);
+    if (!item) return;
+    const owner = lobby.players[item.owner];
+    const caster = lobby.players[ctx.controllerId];
+    if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"}`);
+    spawnBattlefieldCard(lobby, {
+      name: params.tokenName || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
+      power: params.power, toughness: params.toughness, colors: params.colors || [],
+      keywords: params.keywords || [], owner: item.owner, zoneType: classifyType(params.tokenType || "Token Creature")
+    });
   },
   // Reuses the exact same pendingDiscard mechanism as the existing "discard down to 7 cards" hand-
   // size check (resolveDiscard) -- it was already fully generic (any player, any count, any time),
@@ -2269,6 +2295,7 @@ function effectiveKeywords(lobby, card) {
       if (!anthem.keywords.length) continue;
       if (id === card.id && !anthem.includesSelf) continue; // an "other creatures" anthem doesn't grant to its own source
       if (anthem.keywordFilter && !(card.keywords || []).some((k) => (k || "").toLowerCase() === anthem.keywordFilter.toLowerCase())) continue;
+      if (anthem.typeFilter && !(card.type || "").toLowerCase().includes(anthem.typeFilter)) continue;
       extra = extra.concat(anthem.keywords);
     }
   }
@@ -2390,7 +2417,39 @@ function anthemKeywordsFromText(text) {
   if (m) return { keywords: parseKeywordList(m[1]), includesSelf: false, keywordFilter: null };
   m = t.match(/creatures you control have ([^.]+)\./i);
   if (m) return { keywords: parseKeywordList(m[1]), includesSelf: true, keywordFilter: null };
+  // Goblin Warchief-style: "TYPE(s) you control have KEYWORD" -- restricted by the TARGET's own
+  // creature type (checked against its type line in effectiveKeywords), not a keyword it already
+  // has. Checked after the plain "creatures"/"permanents" patterns above so those still win for
+  // their own literal wording -- this only ever matches a real type name like "Goblins"/"Elves".
+  m = t.match(/other (\w+)s you control have ([^.]+)\./i);
+  if (m) return { keywords: parseKeywordList(m[2]), includesSelf: false, keywordFilter: null, typeFilter: m[1].toLowerCase() };
+  m = t.match(/(\w+)s you control have ([^.]+)\./i);
+  if (m) return { keywords: parseKeywordList(m[2]), includesSelf: true, keywordFilter: null, typeFilter: m[1].toLowerCase() };
   return { keywords: [], includesSelf: false, keywordFilter: null };
+}
+// Anointed Procession / functional cousins -- "If an effect would create one or more tokens under
+// your control, it creates twice that many of those tokens instead." Detected by oracle text, not
+// by name (same "no fixed name list" precedent as commander-color-identity mana/shockland pay-life),
+// so it stacks correctly if more than one is somehow in play. Applied by every createToken-family
+// EFFECTS function, multiplying the count right before spawning.
+function tokenMultiplierFor(lobby, ownerId) {
+  let mult = 1;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (/create[s]? .*tokens? under your control.*it creates twice that many/i.test(c.text || "")) mult *= 2;
+  }
+  return mult;
+}
+// Hardened Scales -- see addCountersToSelf's own comment for why this is a flat +1, not a doubling.
+function bonusCountersFor(lobby, ownerId) {
+  let bonus = 0;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (/\+1\/\+1 counters? would be put on a creature you control, that many plus one/i.test(c.text || "")) bonus += 1;
+  }
+  return bonus;
 }
 function parseKeywordList(raw) {
   return raw.split(/,| and /i).map((s) => s.trim())
