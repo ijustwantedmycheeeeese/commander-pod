@@ -321,6 +321,7 @@ const CARD_ABILITIES = {
   // queueOptionalPayment.
   "smothering tithe": [{ trigger: "opponentDraws", label: "Smothering Tithe — pay {2} or its controller creates a Treasure", costLabel: "{2}", cost: { mana: "{2}" }, declinedEffects: [{ type: "createTreasureToken" }] }],
   "esper sentinel": [{ trigger: "opponentFirstNoncreatureSpell", label: "Esper Sentinel — pay {X} or its controller draws a card", xFromPower: true, declinedEffects: [{ type: "drawCards", amount: 1 }] }],
+  "rhystic study": [{ trigger: "opponentCastsSpell", label: "Rhystic Study — pay {1} or its controller draws a card", cost: { mana: "{1}" }, costLabel: "{1}", declinedEffects: [{ type: "drawCards", amount: 1 }] }],
   "rakdos, patron of chaos": [{ trigger: "endStep", label: "Rakdos, Patron of Chaos — target opponent may sacrifice two nonland permanents or you draw two cards", requiresTarget: true, targetKind: "player", effects: [{ type: "offerSacrificeOrDraw", sacrificeCount: 2, declinedDraw: 2 }] }],
   "serra's emissary": [{ trigger: "etb", label: "Serra's Emissary — choose a card type for protection", requiresTarget: true, targetKind: "cardType", effects: [{ type: "grantPlayerProtectionFromCardType" }] }],
   // Two independent youCastSpell triggers, each gated by its own colorFilter (fireGlobalTrigger)
@@ -775,6 +776,13 @@ const SPELL_ABILITIES = {
   // list and why.
   "negate": { label: "Negate — counter target spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spell" },
   "rampant growth": { label: "Rampant Growth — search for a basic land, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] },
+  // "Search for up to two basic lands, put ONE onto the battlefield tapped and the OTHER into your
+  // hand" -- two sequential fetch prompts (this one, then a second one via thenEffects once the
+  // first is actually done). Declining the first prompt skips the second entirely, same "search is
+  // always optional" simplification real Magic's own "up to two" wording already implies for zero.
+  "cultivate": { label: "Cultivate — search for a basic land tapped, then another to hand", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "tutorToHand", typeFilter: "basic land" }] }] },
+  "wheel of fortune": { label: "Wheel of Fortune — each player discards their hand, then draws seven", effects: [{ type: "wheelEffect", amount: 7 }] },
+  "windfall": { label: "Windfall — each player discards their hand, then draws cards equal to the most any player discarded", effects: [{ type: "wheelEffect", matchGreatestDiscard: true }] },
   "farseek": { label: "Farseek — search for a Plains, Island, Swamp, or Mountain, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain"], entersTapped: true }] },
   "anguished unmaking": { label: "Anguished Unmaking — exile target nonland permanent, lose 3 life", effects: [{ type: "exileTarget" }, { type: "loseLife", target: "controller", amount: 3 }], requiresTarget: true, targetKind: "permanent" },
   "vandalblast": { label: "Vandalblast — destroy target artifact", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "artifact" },
@@ -883,6 +891,24 @@ const EFFECTS = {
   drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
   eachPlayerDrawsCards(lobby, ctx, params) {
     Object.keys(lobby.players).forEach((id) => drawN(lobby, id, params.amount || 1));
+  },
+  // Wheel of Fortune / Windfall -- "each player discards their hand, then draws [N / cards equal to
+  // the greatest number of cards a player discarded this way]." Snapshotted hand lists BEFORE
+  // discarding anyone's (sendToGraveyardInternal deletes from lobby.cards as it goes, same
+  // "snapshot with Object.values() first" precedent as destroyAllLands above) -- a commander
+  // sitting in hand correctly redirects to the Command Zone instead of the graveyard, same as any
+  // other discard, since this reuses the exact same sendToGraveyardInternal every hand-discard site
+  // already goes through.
+  wheelEffect(lobby, ctx, params) {
+    const discardCounts = {};
+    for (const pid in lobby.players) {
+      const handCards = Object.values(lobby.cards).filter((c) => c.owner === pid && c.zoneType === "hand");
+      discardCounts[pid] = handCards.length;
+      handCards.forEach((c) => sendToGraveyardInternal(lobby, c));
+    }
+    const drawAmount = params.matchGreatestDiscard ? Math.max(0, ...Object.values(discardCounts)) : (params.amount || 7);
+    for (const pid in lobby.players) drawN(lobby, pid, drawAmount);
+    broadcastPlayers(lobby);
   },
   // Armageddon -- every land, everyone's, not just the caster's (real Magic has no "friendly fire"
   // exception here, and neither does this). Snapshotted via Object.values() before iterating since
@@ -1480,10 +1506,13 @@ const EFFECTS = {
   // own library (already viewable/searchable via the existing zone-modal) and pick one via the new
   // fetchLand handler, rather than trying to guess or list every match server-side. Search is always
   // optional in real Magic even with a legal target -- cancelFetch (also new) covers "find nothing."
+  // params.thenEffects (Cultivate's own "...and the other into your hand") -- same "bundle the
+  // follow-up, don't let it run as a plain sibling effect" fix as scryN's own comment explains;
+  // fetchLand (below) is what actually runs it, once THIS fetch is really done.
   searchLandTypes(lobby, ctx, params) {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
-    p.pendingFetch = { types: params.types || [], basicOnly: !!params.basicOnly, forceTapped: !!params.entersTapped };
+    p.pendingFetch = { types: params.types || [], basicOnly: !!params.basicOnly, forceTapped: !!params.entersTapped, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibrary", { types: p.pendingFetch.types, basicOnly: p.pendingFetch.basicOnly });
   },
@@ -3062,6 +3091,7 @@ function pushToStack(lobby, card, casterId) {
   // above), so this can't misfire for a land drop.
   fireGlobalTrigger(lobby, "youCastSpell", casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
+  fireGlobalOpponentCastsSpellTriggers(lobby, casterId);
 }
 // Esper Sentinel: "Whenever an opponent casts their FIRST noncreature spell each turn, draw a card
 // unless that player pays {X}." Once-per-opponent-per-turn, tracked on the CASTING player (not the
@@ -3086,6 +3116,25 @@ function fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, spellC
       queueOptionalPayment(lobby, {
         playerId: casterId, controllerId: c.owner, sourceCard: c, label: ability.label,
         costLabel: `{${xAmount}}`, cost: { mana: `{${xAmount}}` }, declinedEffects: ability.declinedEffects
+      });
+    });
+  }
+}
+
+// Rhystic Study and its functional cousins -- "Whenever an opponent casts a spell, you may draw a
+// card unless that player pays {1}." Same optional-payment engine as
+// fireGlobalOpponentFirstNoncreatureSpellTriggers just above (see Esper Sentinel's own entry for
+// the identical shape), minus BOTH of that one's restrictions: no "noncreature only" filter, and no
+// "just their first spell each turn" limit -- this taxes every single opponent spell cast.
+function fireGlobalOpponentCastsSpellTriggers(lobby, casterId) {
+  if (!lobby.turn.started) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === casterId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "opponentCastsSpell").forEach((ability) => {
+      queueOptionalPayment(lobby, {
+        playerId: casterId, controllerId: c.owner, sourceCard: c, label: ability.label,
+        costLabel: ability.costLabel || "{1}", cost: ability.cost || { mana: "{1}" }, declinedEffects: ability.declinedEffects
       });
     });
   }
@@ -5673,10 +5722,18 @@ io.on("connection", (socket) => {
     shuffle(p.library);
     const card = spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
     if (p.pendingFetch.forceTapped && !card.tapped) { card.tapped = true; broadcastCard(lobby, card); }
+    const thenEffects = p.pendingFetch.thenEffects;
+    const sourceCardId = p.pendingFetch.sourceCardId;
     p.pendingFetch = null;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
     fireEtbTriggers(lobby, card);
+    // Cultivate's own "...and the other into your hand" -- see searchLandTypes' comment for why
+    // this can't just be a sibling effect in the original effects array.
+    if (thenEffects) {
+      const ctx = { controllerId: socket.id, sourceCard: sourceCardId ? { id: sourceCardId } : null };
+      thenEffects.forEach((e) => { const fn = EFFECTS[e.type]; if (fn) fn(lobby, ctx, e); });
+    }
   });
 
   // Search is always optional in real Magic, even with a legal target sitting right there --
