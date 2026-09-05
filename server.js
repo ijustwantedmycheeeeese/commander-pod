@@ -589,7 +589,10 @@ const ACTIVATED_ABILITIES = {
   // token name ("Clue"), so ANY Clue on the battlefield already has this ability regardless of
   // which card's investigate/effect created it (Tireless Tracker's landfall, or any future
   // investigate source) -- no per-source duplication needed.
-  "clue": [{ cost: { mana: "{2}", sacrifice: true }, label: "Clue — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }]
+  "clue": [{ cost: { mana: "{2}", sacrifice: true }, label: "Clue — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  // See EFFECTS.createTokenCopyWithHaste/sacrificeChosenCardById for the actual copy + delayed
+  // sacrifice. targetKind otherOwnCreature already excludes Kiki-Jiki itself, matching "another".
+  "kiki-jiki, mirror breaker": [{ cost: { tap: true }, label: "Kiki-Jiki, Mirror Breaker — create a hasty token copy of another creature you control, sacrifice it at the next end step", requiresTarget: true, targetKind: "otherOwnCreature", effects: [{ type: "createTokenCopyWithHaste" }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1403,6 +1406,46 @@ const EFFECTS = {
   exileChosenCardById(lobby, ctx, params) {
     const card = lobby.cards[params.targetCardId];
     if (card) exileCardInternal(lobby, card);
+  },
+  // Kiki-Jiki, Mirror Breaker's delayed sacrifice -- same "specific pre-chosen card baked in at
+  // queue time" shape as exileChosenCardById just above, sacrifice instead of exile. If the token
+  // already left the battlefield some other way first (destroyed, bounced), this simply can't find
+  // it and fizzles, matching a real delayed trigger with no legal target left.
+  sacrificeChosenCardById(lobby, ctx, params) {
+    const card = lobby.cards[params.targetCardId];
+    if (!card) return;
+    fireDeathTriggers(lobby, card);
+    sendToGraveyardInternal(lobby, card);
+  },
+  // Kiki-Jiki, Mirror Breaker -- "{T}: Create a token that's a copy of another target nonlegendary
+  // creature you control, except it has haste. Sacrifice it at the beginning of the next end
+  // step." Unlike becomeCopyUntilEOT (which turns the SOURCE card itself into a temporary copy),
+  // this spawns a genuinely new token permanent, reusing the same copiable-characteristics field
+  // list. "Nonlegendary" isn't checked -- this app's targetKind vocabulary has no legendary-status
+  // filter -- a disclosed simplification, same as Weathered Wayfarer's unchecked land-count
+  // condition elsewhere in this table.
+  createTokenCopyWithHaste(lobby, ctx, params) {
+    const source = lobby.cards[params.chosenTargetId];
+    if (!source) return;
+    const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
+    const data = {};
+    COPY_FIELDS.forEach((f) => { data[f] = source[f]; });
+    const hasHaste = (data.keywords || []).some((k) => (k || "").toLowerCase() === "haste");
+    if (!hasHaste) data.keywords = [...(data.keywords || []), "Haste"];
+    data.owner = ctx.controllerId;
+    data.zoneType = classifyType(data.type);
+    const token = spawnBattlefieldCard(lobby, data);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"} creates a token copy of ${source.name || "a creature"} (Kiki-Jiki, Mirror Breaker)`);
+    // Look up the real Kiki-Jiki card (ctx.sourceCard here is often just {id} -- see
+    // executeAbilityEffects) so the delayed stack item gets a real name/image, same as Whip of
+    // Erebos's own delayed-exile trigger does.
+    const kiki = (ctx.sourceCard && lobby.cards[ctx.sourceCard.id]) || ctx.sourceCard;
+    queueDelayedTrigger(lobby, {
+      firesAtPhase: "End Step", controllerId: ctx.controllerId, sourceCard: kiki,
+      label: `Sacrifice the token copy of ${source.name || "a creature"} (Kiki-Jiki, Mirror Breaker)`,
+      effects: [{ type: "sacrificeChosenCardById", targetCardId: token.id }]
+    });
   },
   // Hellkite Courser -- chosenTargetId here is the commander's SLOT (0 or 1, see the
   // ownCommanderInZone targetKind), not a card id. Puts it onto the battlefield with temporary
