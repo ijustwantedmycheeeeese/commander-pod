@@ -2980,12 +2980,12 @@
     // ---------------- keyword tagging ----------------
     // Matches server.js's KNOWN_KEYWORDS. Small icon per keyword for the on-card badge row --
     // falls back to the first letter for anything without a curated icon.
-    const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud"];
+    const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Unblockable"];
     const KEYWORD_ICONS = {
       "Flying": "🦅", "Haste": "⚡", "Indestructible": "🛡", "Deathtouch": "☠",
       "Lifelink": "❤", "Trample": "👣", "Vigilance": "👁", "Menace": "😈",
       "Reach": "🏹", "First strike": "⚔", "Double strike": "⚔⚔", "Hexproof": "🚫", "Ward": "🔰",
-      "Defender": "🚧", "Flash": "✨", "Protection": "🔱", "Shroud": "🌫"
+      "Defender": "🚧", "Flash": "✨", "Protection": "🔱", "Shroud": "🌫", "Unblockable": "👻"
     };
     let keywordModalCardId = null;
     function openKeywordModal(cardId) {
