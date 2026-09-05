@@ -4150,6 +4150,27 @@ app.get("/api/iceServers", (req, res) => {
   res.json({ iceServers: servers });
 });
 
+// Personal export, deliberately restricted to exactly one account ("wingus") -- not a general
+// user-data-export feature, just a way to pull every saved deck's real card data (name/type/text/
+// colors/cmc/power/toughness/keywords, the same shape toEntry() already produces) out of this app
+// and into a file that can be handed to a future session, to find real cards actually being played
+// that aren't automated yet in CARD_ABILITIES/SPELL_ABILITIES. The username check is the actual
+// security boundary (client-side button visibility is just so nobody else even sees it) -- every
+// other account gets a plain 403, same as an unauthenticated request would.
+app.get("/api/export", (req, res) => {
+  const token = req.query.token;
+  const requestingUsername = sessionUsername(token);
+  if (!requestingUsername) return res.status(401).json({ error: "Not authenticated" });
+  if (requestingUsername !== "wingus") return res.status(403).json({ error: "This export is only available on the wingus account." });
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    username: requestingUsername,
+    decks: decks[requestingUsername] || {}
+  };
+  res.setHeader("Content-Disposition", `attachment; filename="archon-export-${requestingUsername}-${Date.now()}.json"`);
+  res.json(payload);
+});
+
 // Board mat / avatar image uploads, an alternative to pasting a URL (both feed the exact same
 // boardMat/avatar string fields -- this just fills that field in for you instead of replacing it).
 const UPLOAD_MIME_EXT = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp" };
