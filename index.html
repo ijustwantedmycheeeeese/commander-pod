@@ -117,6 +117,11 @@
     .cursor-swatch.selected { border-color: #f0e6c8; box-shadow: 0 0 0 2px #100c08, 0 0 0 4px #f0e6c8; }
     .cursor-swatch.taken { cursor: not-allowed; opacity: 0.35; }
     .remote-cursor-label { font-size: 10px; padding: 1px 5px; border-radius: 4px; color: #100c08; white-space: nowrap; font-weight: 600; }
+    .board-ping { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .board-ping-ring { position: absolute; top: 50%; left: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border: 3px solid; border-radius: 50%; opacity: 0; animation: board-ping-pulse 1.5s ease-out forwards; }
+    .board-ping-ring-2 { animation-delay: 0.3s; }
+    @keyframes board-ping-pulse { 0% { transform: scale(0.3); opacity: 1; } 100% { transform: scale(4); opacity: 0; } }
+    .board-ping .remote-cursor-label { margin-top: 16px; }
     @keyframes cardEnterAnim { 0% { opacity: 0; transform: scale(0.4) rotate(-6deg); filter: brightness(2.2) drop-shadow(0 0 18px #d4af37); } 65% { opacity: 1; transform: scale(1.08) rotate(1deg); } 100% { opacity: 1; transform: scale(1) rotate(0deg); filter: none; } }
     .card.card-enter { animation: cardEnterAnim 0.45s ease-out; }
     @keyframes cardLeaveAnim { 0% { opacity: 1; transform: scale(1) rotate(0deg); filter: none; } 100% { opacity: 0; transform: scale(0.55) rotate(20deg); filter: brightness(0.3) saturate(0); } }
@@ -710,6 +715,7 @@
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. A defender who needs to declare blockers gets a hard-to-miss centered banner (plus a sound cue) rather than just a small button — click it to open "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. First strike, deathtouch, trample, double strike, and lifelink are all factored into damage automatically when granted via Manage Keywords or an equipment/aura bonus. A shared combat view pops up for everyone at the table once attackers are declared, showing each attacker next to its blocker (or the player it's headed for) side by side. Some cards tax declaring attackers against their controller (Propaganda and similar) — the total cost across every attacker you're declaring is checked and paid before any of them tap.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
+          <li><strong>Right-click empty board space</strong> to ping it — a brief animated ring plus a sound, visible to everyone currently looking at that same board tab (⚙ Menu → Live Cursor also lets you set your own cursor's color and a custom icon, seen the same way).</li>
           <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it. Save one under a name in the <strong>Account</strong> modal to reuse it on any table later instead of pasting the URL every time — pick it from the dropdown next to Set/Clear and hit Apply. The <strong>Zone Opacity</strong> slider (same Settings panel) controls how solid the creature/artifact/mana/hand zone fills look, if a busy mat makes them hard to pick out -- piles aren't affected by it.</li>
           <li>The active player's name shows a small elapsed-time readout once their turn's been going a while, purely informational — nothing is ever auto-passed or forced. Casting, combat damage, and a trigger waiting on your target all play a short sound cue; volume for each is adjustable in Settings, same panel as the music slider.</li>
           <li><strong>Account</strong> (Main Menu, or ⚙ Menu → Profile → Account Settings) is where account-wide preferences live, separate from the per-table nickname field: an avatar (by image URL, shown next to your color dot in the Players panel), a default nickname used every time you join a new table, and a change-password form. These persist across every table, unlike the per-table nickname override.</li>
@@ -1113,7 +1119,7 @@
       <div id="crop-preview-hint" style="font-size:11px;color:#8a7a55;text-align:center;margin-bottom:10px;visibility:hidden;">Drag the photo to reposition &middot; scroll to zoom</div>
       <div id="crop-sliders" style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 8px;align-items:center;font-size:12px;">
         <span>Zoom</span>
-        <input type="range" id="crop-zoom" min="100" max="300" value="100" oninput="cropUpdatePreview()">
+        <input type="range" id="crop-zoom" min="110" max="300" value="110" oninput="cropUpdatePreview()">
         <span id="crop-zoom-label" style="width:36px;text-align:right;color:#a89a70;">100%</span>
         <span>Pan X</span>
         <input type="range" id="crop-x" min="0" max="100" value="50" oninput="cropUpdatePreview()">
@@ -2520,7 +2526,13 @@
       let current = null;
       if (kind === "boardMat") {
         document.getElementById("crop-modal-title").innerText = "Edit Board Mat";
-        document.getElementById("crop-preview-box").style.aspectRatio = "600 / 320";
+        // Must match #playmat's own real dimensions (3000x1260) exactly -- this used to be a
+        // narrower, made-up 600/320 (1.875:1) ratio while the real board is 2.38:1, so a photo
+        // framed to "fit perfectly, nothing cut off" in this preview would actually get a wider
+        // slice of itself cropped in on the real (proportionally wider) board, cutting off exactly
+        // what looked safely inside the frame here. Same object-fit:cover math either way, just the
+        // wrong box shape to preview it in.
+        document.getElementById("crop-preview-box").style.aspectRatio = "3000 / 1260";
         if (me && me.boardMat) current = { url: me.boardMat, ...(me.boardMatFit || { scale: 1, x: 50, y: 50 }) };
       } else {
         document.getElementById("crop-modal-title").innerText = `Edit ${capitalize(zone)} Art`;
@@ -2528,7 +2540,7 @@
         current = me && me.pileArt && me.pileArt[zone] || null;
       }
       document.getElementById("crop-source-url").value = current ? current.url : "";
-      document.getElementById("crop-zoom").value = current ? Math.round(current.scale * 100) : 100;
+      document.getElementById("crop-zoom").value = current ? Math.round(current.scale * 100) : CROP_MIN_ZOOM;
       document.getElementById("crop-x").value = current ? current.x : 50;
       document.getElementById("crop-y").value = current ? current.y : 50;
       cropLastSrc = current ? current.url : "";
@@ -2543,7 +2555,7 @@
       const url = document.getElementById("crop-source-url").value.trim();
       // A newly picked photo starts fresh instead of carrying over the previous image's crop.
       if (url && url !== cropLastSrc) {
-        document.getElementById("crop-zoom").value = 100;
+        document.getElementById("crop-zoom").value = CROP_MIN_ZOOM;
         document.getElementById("crop-x").value = 50;
         document.getElementById("crop-y").value = 50;
         cropLastSrc = url;
@@ -2551,14 +2563,20 @@
       cropUpdatePreview();
     }
     function cropResetFit() {
-      document.getElementById("crop-zoom").value = 100;
+      document.getElementById("crop-zoom").value = CROP_MIN_ZOOM;
       document.getElementById("crop-x").value = 50;
       document.getElementById("crop-y").value = 50;
       cropUpdatePreview();
     }
+    // 110, not 100, is the real floor -- object-fit:cover at EXACTLY 100% zoom guarantees one axis
+    // (whichever the image overflows less) sits at zero pannable slack: dragging or sliding that
+    // axis visibly does nothing, since there's no more of the image left to reveal in that
+    // direction. A little headroom above bare-minimum-cover means both Pan X and Pan Y always have
+    // real room to move, regardless of how the photo's own aspect ratio compares to the box's.
+    const CROP_MIN_ZOOM = 110;
     function cropUpdatePreview() {
       const url = document.getElementById("crop-source-url").value.trim();
-      const zoom = Math.max(100, Math.min(300, parseInt(document.getElementById("crop-zoom").value, 10) || 100));
+      const zoom = Math.max(CROP_MIN_ZOOM, Math.min(300, parseInt(document.getElementById("crop-zoom").value, 10) || CROP_MIN_ZOOM));
       const xRaw = parseInt(document.getElementById("crop-x").value, 10);
       const yRaw = parseInt(document.getElementById("crop-y").value, 10);
       const x = Math.max(0, Math.min(100, isNaN(xRaw) ? 50 : xRaw));
@@ -2642,8 +2660,8 @@
       if (!img.naturalWidth) return;
       e.preventDefault();
       const zoomInput = document.getElementById("crop-zoom");
-      const cur = parseInt(zoomInput.value, 10) || 100;
-      zoomInput.value = Math.max(100, Math.min(300, cur + (e.deltaY < 0 ? 10 : -10)));
+      const cur = parseInt(zoomInput.value, 10) || CROP_MIN_ZOOM;
+      zoomInput.value = Math.max(CROP_MIN_ZOOM, Math.min(300, cur + (e.deltaY < 0 ? 10 : -10)));
       cropUpdatePreview();
     }
     { const box = document.getElementById("crop-preview-box");
@@ -2658,7 +2676,7 @@
       if (!cropTarget) return;
       const url = document.getElementById("crop-source-url").value.trim();
       if (!url) { alert("Add an image URL or upload a photo first."); return; }
-      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || 100) / 100;
+      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || CROP_MIN_ZOOM) / 100;
       const xRaw = parseInt(document.getElementById("crop-x").value, 10);
       const yRaw = parseInt(document.getElementById("crop-y").value, 10);
       const x = isNaN(xRaw) ? 50 : xRaw, y = isNaN(yRaw) ? 50 : yRaw;
@@ -2771,7 +2789,7 @@
       if (!url) { alert("Add an image URL or upload a photo first."); return; }
       const name = prompt("Name this pile art:");
       if (!name || !name.trim()) return;
-      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || 100) / 100;
+      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || CROP_MIN_ZOOM) / 100;
       const xRaw = parseInt(document.getElementById("crop-x").value, 10);
       const yRaw = parseInt(document.getElementById("crop-y").value, 10);
       socket.emit("savePileMat", { name: name.trim(), url, scale, x: isNaN(xRaw) ? 50 : xRaw, y: isNaN(yRaw) ? 50 : yRaw });
@@ -2782,7 +2800,7 @@
       if (!cropTarget) return;
       const url = document.getElementById("crop-source-url").value.trim();
       if (!url) { alert("Add an image URL or upload a photo first."); return; }
-      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || 100) / 100;
+      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || CROP_MIN_ZOOM) / 100;
       const xRaw = parseInt(document.getElementById("crop-x").value, 10);
       const yRaw = parseInt(document.getElementById("crop-y").value, 10);
       const payload = { url, scale, x: isNaN(xRaw) ? 50 : xRaw, y: isNaN(yRaw) ? 50 : yRaw };
@@ -4264,23 +4282,61 @@
       socket.emit("setCursorIcon", "");
     }
 
+    // Shared by cursor tracking and pinging below -- both need "where on #playmat, as a percentage,
+    // did this mouse event happen," and both need to discard events that land on the wrapper but
+    // off the actual playmat (e.g. the scrolled margin around it). Returns null for an out-of-bounds
+    // point instead of a partial result, so callers can just check truthiness.
+    function playmatRelativePosition(e) {
+      const rect = playmat.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      if (x < 0 || x > 100 || y < 0 || y > 100) return null;
+      return { x, y };
+    }
     let lastCursorEmit = 0;
     const otherCursors = {}; // playerId -> { x, y, boardOwner, lastSeen, el }
     document.getElementById("table-wrapper").addEventListener("mousemove", (e) => {
       const now = Date.now();
       if (now - lastCursorEmit < 66) return;
       lastCursorEmit = now;
-      const rect = playmat.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * 100;
-      const y = ((e.clientY - rect.top) / rect.height) * 100;
-      if (x < 0 || x > 100 || y < 0 || y > 100) return; // mouse is over the wrapper but off the actual playmat (e.g. scrolled margin)
-      socket.emit("cursorMove", { x, y, boardOwner: activeBoardOwner });
+      const pos = playmatRelativePosition(e);
+      if (!pos) return;
+      socket.emit("cursorMove", { x: pos.x, y: pos.y, boardOwner: activeBoardOwner });
     });
     socket.on("cursorMoved", ({ playerId, x, y, boardOwner }) => {
       if (!otherCursors[playerId]) otherCursors[playerId] = {};
       Object.assign(otherCursors[playerId], { x, y, boardOwner, lastSeen: Date.now() });
       renderOneCursor(playerId);
     });
+
+    // ---------------- ping (draw the table's attention to a spot) ----------------
+    // Right-click on empty board space -- deliberately NOT bound on top of a .card (its own
+    // oncontextmenu already owns right-click there for the action menu, and stopping this listener
+    // from ALSO firing needs an explicit check since a card's own preventDefault doesn't stop the
+    // event from bubbling up here too).
+    document.getElementById("table-wrapper").addEventListener("contextmenu", (e) => {
+      if (e.target.closest(".card")) return;
+      const pos = playmatRelativePosition(e);
+      if (!pos) return;
+      e.preventDefault();
+      socket.emit("ping", { x: pos.x, y: pos.y, boardOwner: activeBoardOwner });
+    });
+    socket.on("pinged", ({ x, y, boardOwner, color, name }) => {
+      if (boardOwner !== activeBoardOwner) return; // same "only where they're actually looking" rule as cursors
+      renderPing(x, y, color, name);
+      playPingCue();
+    });
+    function renderPing(x, y, color, name) {
+      const layer = document.getElementById("cursor-layer");
+      const el = document.createElement("div");
+      el.className = "board-ping";
+      el.style.left = x + "%";
+      el.style.top = y + "%";
+      el.innerHTML = `<div class="board-ping-ring" style="border-color:${color};"></div><div class="board-ping-ring board-ping-ring-2" style="border-color:${color};"></div><div class="remote-cursor-label" style="background:${color};">${escapeHtml(name || "?")}</div>`;
+      layer.appendChild(el);
+      setTimeout(() => el.remove(), 1500);
+    }
+    function playPingCue() { playTone(740, 0.12, "sine", sfxVolumeTarget); setTimeout(() => playTone(990, 0.15, "sine", sfxVolumeTarget), 90); }
     function renderOneCursor(playerId) {
       const c = otherCursors[playerId];
       const layer = document.getElementById("cursor-layer");
