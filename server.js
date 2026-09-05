@@ -186,7 +186,7 @@ const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End St
 // this app) -- a curated list matching Scryfall's own keyword naming so a granted keyword looks
 // identical to one a card was natively printed with. Haste already plugs straight into the
 // existing summoning-sickness check in declareAttackers with zero extra code.
-const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect"];
+const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect", "Unblockable"];
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
 
 // ---------------- trigger/effect engine ----------------
@@ -562,7 +562,17 @@ const ACTIVATED_ABILITIES = {
   // "{T}: Create X 1/1 red Goblin creature tokens, where X is the number of Goblins you control."
   // See createTokensEqualToTypeCountControlled's own comment for why X is computed inside the
   // effect itself rather than threaded in as a param.
-  "krenko, mob boss": [{ cost: { tap: true }, label: "Krenko, Mob Boss — create Goblin tokens equal to Goblins you control", effects: [{ type: "createTokensEqualToTypeCountControlled", typeFilter: ["goblin"], name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }]
+  "krenko, mob boss": [{ cost: { tap: true }, label: "Krenko, Mob Boss — create Goblin tokens equal to Goblins you control", effects: [{ type: "createTokensEqualToTypeCountControlled", typeFilter: ["goblin"], name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  // "target creature can't be blocked this turn" -- see declareBlockers' own comment for how
+  // Unblockable actually gets enforced.
+  "rogue's passage": [{ cost: { mana: "{4}", tap: true }, label: "Rogue's Passage — target creature can't be blocked this turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Unblockable" }] }],
+  // Two SEPARATE {T}, Sacrifice abilities (either one, not both -- sacrificing the land is part of
+  // the cost either way) -- same "one entry per real activated ability" shape ACTIVATED_ABILITIES
+  // already uses everywhere else a card has more than one.
+  "escape tunnel": [
+    { cost: { tap: true, sacrifice: true }, label: "Escape Tunnel — search for a basic land, tapped", effects: [{ type: "searchLandTypes", basicOnly: true, types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], entersTapped: true }] },
+    { cost: { tap: true, sacrifice: true }, label: "Escape Tunnel — target creature with power 2 or less can't be blocked this turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Unblockable" }] }
+  ]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -779,7 +789,36 @@ const SPELL_ABILITIES = {
   "time wipe": { label: "Time Wipe — return a creature you control to hand, then destroy all creatures", effects: [{ type: "bounceTargetToHand" }, { type: "destroyAllCreatures" }], requiresTarget: true, targetKind: "ownCreature" },
   "chain reaction": { label: "Chain Reaction — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] },
   "blasphemous act": { label: "Blasphemous Act — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] },
-  "swan song": { label: "Swan Song — counter target enchantment, instant, or sorcery spell, its controller gets a 2/2 flying Bird", effects: [{ type: "counterTargetSpellCreateTokenForController", tokenName: "Bird", tokenType: "Token Creature — Bird", power: "2", toughness: "2", colors: ["U"], keywords: ["Flying"] }], requiresTarget: true, targetKind: "spell" }
+  "swan song": { label: "Swan Song — counter target enchantment, instant, or sorcery spell, its controller gets a 2/2 flying Bird", effects: [{ type: "counterTargetSpellCreateTokenForController", tokenName: "Bird", tokenType: "Token Creature — Bird", power: "2", toughness: "2", colors: ["U"], keywords: ["Flying"] }], requiresTarget: true, targetKind: "spell" },
+  // Real modal spells, using the SAME `modes` mechanism Rip Apart/Rakdos Charm already established
+  // above (mode picked via the pendingTargetChoices queue at cast time, then a real target choice
+  // if that mode needs one) -- these aren't a new gap needing new infrastructure, just table entries
+  // that hadn't been written yet. Austere Command's real "choose TWO" is narrowed to choose-one (this
+  // engine's modal system only supports picking a single mode) -- a disclosed simplification, same
+  // spirit as every other "the effect works, one rules nuance doesn't" narrowing in this file.
+  "abrade": { label: "Abrade — choose one", modes: [
+    { label: "Abrade — deal 3 damage to target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "damageTarget", amount: 3 }] },
+    { label: "Abrade — destroy target artifact", requiresTarget: true, targetKind: "artifact", effects: [{ type: "destroyTarget" }] }
+  ] },
+  "cleansing nova": { label: "Cleansing Nova — choose one", modes: [
+    { label: "Cleansing Nova — destroy all creatures", requiresTarget: false, effects: [{ type: "destroyAllCreatures" }] },
+    { label: "Cleansing Nova — destroy all artifacts and enchantments", requiresTarget: false, effects: [{ type: "destroyAllMatching", typeIncludes: ["artifact", "enchantment"] }] }
+  ] },
+  "crux of fate": { label: "Crux of Fate — choose one", modes: [
+    { label: "Crux of Fate — destroy all Dragon creatures", requiresTarget: false, effects: [{ type: "destroyAllMatching", zoneTypeFilter: "creature", typeIncludes: ["dragon"] }] },
+    { label: "Crux of Fate — destroy all non-Dragon creatures", requiresTarget: false, effects: [{ type: "destroyAllMatching", zoneTypeFilter: "creature", typeExcludes: ["dragon"] }] }
+  ] },
+  "pick your poison": { label: "Pick Your Poison — choose one", modes: [
+    { label: "Pick Your Poison — each opponent sacrifices an artifact", requiresTarget: false, effects: [{ type: "eachOpponentSacrifices", typeIncludes: ["artifact"] }] },
+    { label: "Pick Your Poison — each opponent sacrifices an enchantment", requiresTarget: false, effects: [{ type: "eachOpponentSacrifices", typeIncludes: ["enchantment"] }] },
+    { label: "Pick Your Poison — each opponent sacrifices a creature with flying", requiresTarget: false, effects: [{ type: "eachOpponentSacrifices", zoneTypeFilter: "creature", keywordIncludes: ["flying"] }] }
+  ] },
+  "austere command": { label: "Austere Command — choose one", modes: [
+    { label: "Austere Command — destroy all artifacts", requiresTarget: false, effects: [{ type: "destroyAllMatching", typeIncludes: ["artifact"], typeExcludes: ["enchantment"] }] },
+    { label: "Austere Command — destroy all enchantments", requiresTarget: false, effects: [{ type: "destroyAllMatching", typeIncludes: ["enchantment"] }] },
+    { label: "Austere Command — destroy all creatures with mana value 3 or less", requiresTarget: false, effects: [{ type: "destroyAllMatching", zoneTypeFilter: "creature", cmcMax: 3 }] },
+    { label: "Austere Command — destroy all creatures with mana value 4 or greater", requiresTarget: false, effects: [{ type: "destroyAllMatching", zoneTypeFilter: "creature", cmcMin: 4 }] }
+  ] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -1615,6 +1654,52 @@ const EFFECTS = {
       }
       fireDeathTriggers(lobby, c);
       sendToGraveyardInternal(lobby, c);
+    });
+  },
+  // Generic "destroy every permanent matching a filter" -- covers every modal board-wipe MODE found
+  // in the gap analysis (Austere Command's four, Crux of Fate's two, Cleansing Nova's second) with
+  // one parameterized function instead of a near-copy per mode. zoneTypeFilter narrows to a real
+  // zoneType ("creature"), typeIncludes/typeExcludes check substrings of the TYPE LINE TEXT itself
+  // (not zoneType, which folds artifact/enchantment together -- see classifyType's own comment) so
+  // "destroy all enchantments" and "destroy all artifacts" can actually be told apart, cmcMin/cmcMax
+  // filter by mana value. Same indestructible/regeneration handling as destroyAllCreatures.
+  destroyAllMatching(lobby, ctx, params) {
+    Object.values(lobby.cards).filter((c) => {
+      if (params.zoneTypeFilter && c.zoneType !== params.zoneTypeFilter) return false;
+      const type = (c.type || "").toLowerCase();
+      if (params.typeIncludes && !params.typeIncludes.some((t) => type.includes(t))) return false;
+      if (params.typeExcludes && params.typeExcludes.some((t) => type.includes(t))) return false;
+      if (params.cmcMin !== undefined && (c.cmc || 0) < params.cmcMin) return false;
+      if (params.cmcMax !== undefined && (c.cmc || 0) > params.cmcMax) return false;
+      return true;
+    }).forEach((c) => {
+      if (effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "indestructible")) return;
+      if (c.regenerationShield > 0) {
+        c.regenerationShield -= 1;
+        c.tapped = true;
+        broadcastCard(lobby, c);
+        pushLog(lobby, `${c.name || "A permanent"} regenerates instead of being destroyed`);
+        return;
+      }
+      fireDeathTriggers(lobby, c);
+      sendToGraveyardInternal(lobby, c);
+    });
+  },
+  // Pick Your Poison -- "each opponent sacrifices [a permanent matching filter] OF THEIR CHOICE."
+  // WHICH one each opponent gives up is auto-picked (their own first qualifying match) rather than
+  // prompted -- a real, disclosed simplification, same "auto-pick, don't build a whole multi-player
+  // choice UI for one clause" precedent as Demon of Loathing's sacrifice trigger.
+  eachOpponentSacrifices(lobby, ctx, params) {
+    Object.keys(lobby.players).filter((id) => id !== ctx.controllerId).forEach((oppId) => {
+      const match = Object.values(lobby.cards).find((c) => {
+        if (c.owner !== oppId) return false;
+        if (params.zoneTypeFilter && c.zoneType !== params.zoneTypeFilter) return false;
+        const type = (c.type || "").toLowerCase();
+        if (params.typeIncludes && !params.typeIncludes.some((t) => type.includes(t))) return false;
+        if (params.keywordIncludes && !effectiveKeywords(lobby, c).some((k) => params.keywordIncludes.includes((k || "").toLowerCase()))) return false;
+        return true;
+      });
+      if (match) { fireDeathTriggers(lobby, match); sendToGraveyardInternal(lobby, match); }
     });
   },
   // Chain Reaction / Blasphemous Act -- "deals X damage to each creature, where X is the number of
@@ -6222,6 +6307,12 @@ io.on("connection", (socket) => {
       if (lobby.combat.attackers[attackerId] !== socket.id) continue;
       const attackerCard = lobby.cards[attackerId];
       const atkKw = attackerCard ? effectiveKeywords(lobby, attackerCard).map((k) => (k || "").toLowerCase()) : [];
+      // Rogue's Passage / Escape Tunnel-style "target creature can't be blocked this turn" --
+      // Unblockable is granted the same way any other temporary keyword is (grantKeywordToTarget),
+      // just checked here as a hard block-eligibility gate rather than a combat-math modifier. Force
+      // an explicit empty block list (not just skipping this attacker) so downstream damage
+      // resolution sees the same "unblocked" shape a normal empty declaration would produce.
+      if (atkKw.includes("unblockable")) { lobby.combat.blocks[attackerId] = []; continue; }
       const list = Array.isArray(rawBlockerIds) ? rawBlockerIds : (rawBlockerIds ? [rawBlockerIds] : []);
       const validBlockers = [];
       for (const blockerId of list) {
