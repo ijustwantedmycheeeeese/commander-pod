@@ -110,6 +110,12 @@
     #cursor-layer { position: absolute; inset: 0; pointer-events: none; z-index: 56; }
     .remote-cursor { position: absolute; transform: translate(-2px, -2px); transition: left 0.08s linear, top 0.08s linear; display: flex; align-items: center; gap: 4px; }
     .remote-cursor-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #100c08; box-shadow: 0 0 4px rgba(0,0,0,0.6); }
+    /* Hard size cap regardless of the source image's real dimensions -- a custom cursor icon (static
+       or animated GIF) must never be able to cover a meaningful chunk of the board. */
+    .remote-cursor-icon { width: 22px; height: 22px; object-fit: contain; border-radius: 4px; filter: drop-shadow(0 0 3px rgba(0,0,0,0.8)); }
+    .cursor-swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #4a3820; cursor: pointer; position: relative; }
+    .cursor-swatch.selected { border-color: #f0e6c8; box-shadow: 0 0 0 2px #100c08, 0 0 0 4px #f0e6c8; }
+    .cursor-swatch.taken { cursor: not-allowed; opacity: 0.35; }
     .remote-cursor-label { font-size: 10px; padding: 1px 5px; border-radius: 4px; color: #100c08; white-space: nowrap; font-weight: 600; }
     @keyframes cardEnterAnim { 0% { opacity: 0; transform: scale(0.4) rotate(-6deg); filter: brightness(2.2) drop-shadow(0 0 18px #d4af37); } 65% { opacity: 1; transform: scale(1.08) rotate(1deg); } 100% { opacity: 1; transform: scale(1) rotate(0deg); filter: none; } }
     .card.card-enter { animation: cardEnterAnim 0.45s ease-out; }
@@ -456,6 +462,31 @@
     </div>
   </div>
 
+  <!-- Outside #app-root on purpose (like #deck-editor-screen above) -- both are reachable straight
+       from the Main Menu, before a table exists, unlike #zone-modal and the in-game action menus
+       which only ever make sense once #app-root is actually showing. -->
+  <div class="modal-overlay" id="cardpool-modal">
+    <div class="modal-box modal-box-wide">
+      <button class="modal-close-x" onclick="closeCardPoolModal()" title="Close">✕</button>
+      <h2>Add From My Other Decks <span style="font-size:12px;color:#8a7a55;font-weight:normal;">— every unique card across your other saved decks</span></h2>
+      <input type="text" id="cardpool-search" placeholder="Search by name..." oninput="renderCardPoolModal()" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 10px;background:#171310;border:1px solid #5a4423;border-radius:6px;color:#e8dcc4;font-size:13px;">
+      <div id="cardpool-modal-body" style="max-height:60vh;overflow-y:auto;"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="collection-modal">
+    <div class="modal-box modal-box-wide">
+      <button class="modal-close-x" onclick="closeCollectionModal()" title="Close">✕</button>
+      <h2>My Collection <span style="font-size:12px;color:#8a7a55;font-weight:normal;">— cards you've checked off as owned in real life</span></h2>
+      <div class="flex-row" style="margin-bottom:8px;">
+        <input type="text" id="collection-add-search" placeholder="Add a card by name..." list="cardSuggestions" autocomplete="off" oninput="handleAutocompleteInput(event)" style="flex:1;" onkeydown="if(event.key==='Enter'){collectionAddCard();}">
+        <button class="mini-btn" onclick="collectionAddCard()">Add</button>
+      </div>
+      <input type="text" id="collection-search" placeholder="Search by name..." oninput="renderCollectionModal()" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 10px;background:#171310;border:1px solid #5a4423;border-radius:6px;color:#e8dcc4;font-size:13px;">
+      <div id="collection-modal-body" style="max-height:60vh;overflow-y:auto;"></div>
+    </div>
+  </div>
+
   <div id="app-root">
     <div id="top-bar">
       <div class="flex-row">
@@ -606,23 +637,6 @@
       <button data-action="remove" style="color:#f87171;">Remove Permanently</button>
     </div>
 
-    <div class="modal-overlay" id="cardpool-modal">
-      <div class="modal-box modal-box-wide">
-        <button class="modal-close-x" onclick="closeCardPoolModal()" title="Close">✕</button>
-        <h2>Add From My Other Decks <span style="font-size:12px;color:#8a7a55;font-weight:normal;">— every unique card across your other saved decks</span></h2>
-        <input type="text" id="cardpool-search" placeholder="Search by name..." oninput="renderCardPoolModal()" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 10px;background:#171310;border:1px solid #5a4423;border-radius:6px;color:#e8dcc4;font-size:13px;">
-        <div id="cardpool-modal-body" style="max-height:60vh;overflow-y:auto;"></div>
-      </div>
-    </div>
-
-    <div class="modal-overlay" id="collection-modal">
-      <div class="modal-box modal-box-wide">
-        <button class="modal-close-x" onclick="closeCollectionModal()" title="Close">✕</button>
-        <h2>My Collection <span style="font-size:12px;color:#8a7a55;font-weight:normal;">— cards you've checked off as owned in real life</span></h2>
-        <input type="text" id="collection-search" placeholder="Search by name..." oninput="renderCollectionModal()" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 10px;background:#171310;border:1px solid #5a4423;border-radius:6px;color:#e8dcc4;font-size:13px;">
-        <div id="collection-modal-body" style="max-height:60vh;overflow-y:auto;"></div>
-      </div>
-    </div>
 
     <div class="modal-overlay" id="zone-modal">
       <div class="modal-box modal-box-wide">
@@ -853,6 +867,19 @@
             <button class="mini-btn secondary" onclick="openCropEditor('pile', 'exile')">Exile</button>
           </div>
           <div class="mm-hint" style="margin-top:-8px;">Board mat and pile art each have a "★ Set as My Default" button in their Crop editor, so they auto-apply the next time you join a table.</div>
+
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px;">Live Cursor</div>
+          <div class="mm-hint" style="margin-top:0;margin-bottom:6px;">Shown to other players while you're both looking at the same board tab. Only one person at this table can use each color.</div>
+          <div id="cursor-color-swatches" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+          <div class="flex-row" style="margin-bottom:6px;">
+            <input type="text" id="cursor-icon-url" placeholder="Custom cursor image URL (optional, GIF ok)..." style="flex:1;">
+            <input type="file" id="cursor-icon-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="uploadImageFile(this, 'cursor-icon-url', setCursorIconFromInput)">
+          </div>
+          <div class="flex-row" style="margin-bottom:12px;">
+            <button class="mini-btn" onclick="setCursorIconFromInput()">Set Icon</button>
+            <button class="mini-btn secondary" onclick="document.getElementById('cursor-icon-file').click()">Upload...</button>
+            <button class="mini-btn secondary" onclick="clearCursorIcon()">Clear Icon</button>
+          </div>
 
           <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-size:12px;">
             <span title="How solid the creature/artifact/mana/hand zone fills look -- turn this up if a busy board mat makes them hard to see (piles aren't affected)">Zone Opacity</span>
@@ -1561,6 +1588,10 @@
     socket.on("lobbyJoined", (data) => {
       document.getElementById("main-menu").style.display = "none";
       document.getElementById("app-root").style.display = "flex";
+      // The ⚙ Menu modal has no natural close point on its own (Leave Table doesn't touch it) --
+      // left open, it would still be sitting there covering the newly-joined table's board the
+      // instant this fires, whether that's a fresh join, a table switch, or a reconnect.
+      document.getElementById("settings-modal").style.display = "none";
       stopLobbyMusic();
 
       myId = data.myId;
@@ -1652,6 +1683,8 @@
       // cardUpdate/cardRemove event at all, so without this the pile counts under Library/
       // Graveyard/Exile silently went stale until some unrelated card event forced a redraw.
       renderVisibleBoard();
+      renderCursorColorSwatches();
+      renderAllCursors();
     });
 
     socket.on("targets", (data) => { targets = data; applyAllTargetRings(); });
@@ -3943,17 +3976,34 @@
     // ---------------- My Collection viewer (Main Menu) ----------------
     function openCollectionModal() {
       document.getElementById("collection-search").value = "";
+      document.getElementById("collection-add-search").value = "";
       renderCollectionModal();
       document.getElementById("collection-modal").style.display = "flex";
     }
     function closeCollectionModal() { document.getElementById("collection-modal").style.display = "none"; }
+    // Adds straight from the collection screen itself, independent of any deck -- same /api/spawn
+    // lookup deAddCardFromSearch already uses, but toggles collection membership directly instead
+    // of pushing onto a deck draft. Only actually adds (never removes) -- if the card's somehow
+    // already owned, toggling would incorrectly remove it, so that case is a silent no-op instead.
+    function collectionAddCard() {
+      const input = document.getElementById("collection-add-search");
+      const name = input.value.trim();
+      if (!name) return;
+      if (myCollection[ckey(name)]) { input.value = ""; return; }
+      fetch("/api/spawn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) { socket.emit("toggleCollectionCard", { name: data.name, type: data.type, img: data.img }); input.value = ""; }
+          else alert("Card lookup failed! Check spelling.");
+        });
+    }
     function renderCollectionModal() {
       const body = document.getElementById("collection-modal-body");
       if (!body) return; // defensive -- the element is always in the DOM, this just guards the rare case this runs before first page render
       const q = (document.getElementById("collection-search").value || "").trim().toLowerCase();
       const entries = Object.values(myCollection).filter((c) => !q || (c.name || "").toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name));
       if (!entries.length) {
-        body.innerHTML = `<div style='color:#8a7a55;padding:10px;'>${Object.keys(myCollection).length ? "No matches." : "Nothing checked off yet -- check \"Own\" next to a card in the Deck Editor to add it here."}</div>`;
+        body.innerHTML = `<div style='color:#8a7a55;padding:10px;'>${Object.keys(myCollection).length ? "No matches." : "Nothing checked off yet -- add one above, or check \"Own\" next to a card in the Deck Editor."}</div>`;
         return;
       }
       body.innerHTML = entries.map((c) => `
@@ -4005,7 +4055,12 @@
     function openHelpModal() { document.getElementById("help-modal").style.display = "flex"; }
     function closeHelpModal() { document.getElementById("help-modal").style.display = "none"; }
 
-    function openSettingsModal() { document.getElementById("settings-modal").style.display = "flex"; renderBoardMatDefaultStatus(); }
+    function openSettingsModal() {
+      document.getElementById("settings-modal").style.display = "flex";
+      renderBoardMatDefaultStatus();
+      renderCursorColorSwatches();
+      document.getElementById("cursor-icon-url").value = (players[myId] && players[myId].cursorIcon) || "";
+    }
     function closeSettingsModal() { document.getElementById("settings-modal").style.display = "none"; }
 
     function generateBugReport() {
@@ -4179,6 +4234,36 @@
     // ~15fps -- plenty smooth for "where is everyone looking/pointing" without spamming a socket
     // event on every pixel of native mousemove. Purely ephemeral: no server-side persistence, no
     // reconnect handling needed, matches the same relay-and-forget shape voiceSignal already uses.
+    // Must match server.js's own CURSOR_COLORS exactly -- the server is the real source of truth
+    // for validation (a client sending anything else is just rejected), this copy only drives which
+    // swatches render and which show as already-taken.
+    const CURSOR_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#6366f1", "#a855f7", "#ec4899", "#78716c"];
+    function renderCursorColorSwatches() {
+      const el = document.getElementById("cursor-color-swatches");
+      if (!el || document.getElementById("settings-modal").style.display !== "flex") return;
+      const mine = players[myId] && players[myId].cursorColor;
+      el.innerHTML = CURSOR_COLORS.map((color) => {
+        const takenBy = Object.entries(players).find(([id, p]) => id !== myId && p.cursorColor === color);
+        const isMine = color === mine;
+        const cls = "cursor-swatch" + (isMine ? " selected" : "") + (takenBy && !isMine ? " taken" : "");
+        const title = takenBy ? `Already used by ${escapeHtml(takenBy[1].name || "another player")}` : (isMine ? "Your cursor color (click to clear)" : "Use this color");
+        return `<div class="${cls}" style="background:${color};" title="${title}" onclick="pickCursorColor('${color}', ${!!(takenBy && !isMine)})"></div>`;
+      }).join("");
+    }
+    function pickCursorColor(color, disabled) {
+      if (disabled) return;
+      const mine = players[myId] && players[myId].cursorColor;
+      socket.emit("setCursorColor", mine === color ? null : color);
+    }
+    function setCursorIconFromInput() {
+      const url = document.getElementById("cursor-icon-url").value.trim();
+      socket.emit("setCursorIcon", url);
+    }
+    function clearCursorIcon() {
+      document.getElementById("cursor-icon-url").value = "";
+      socket.emit("setCursorIcon", "");
+    }
+
     let lastCursorEmit = 0;
     const otherCursors = {}; // playerId -> { x, y, boardOwner, lastSeen, el }
     document.getElementById("table-wrapper").addEventListener("mousemove", (e) => {
@@ -4207,10 +4292,16 @@
       if (!c.el) {
         c.el = document.createElement("div");
         c.el.className = "remote-cursor";
-        const color = players[playerId].color || "#f0e6c8";
-        c.el.innerHTML = `<div class="remote-cursor-dot" style="background:${color};"></div><div class="remote-cursor-label" style="background:${color};">${escapeHtml(players[playerId].name || "?")}</div>`;
         layer.appendChild(c.el);
       }
+      // Rebuilt every call (not just on first creation) so a color/icon change picked in Settings
+      // shows up on an already-visible cursor immediately, not just on its next reposition.
+      const p = players[playerId];
+      const color = p.cursorColor || p.color || "#f0e6c8";
+      const marker = p.cursorIcon
+        ? `<img class="remote-cursor-icon" src="${escapeHtml(p.cursorIcon)}">`
+        : `<div class="remote-cursor-dot" style="background:${color};"></div>`;
+      c.el.innerHTML = `${marker}<div class="remote-cursor-label" style="background:${color};">${escapeHtml(p.name || "?")}</div>`;
       c.el.style.left = c.x + "%";
       c.el.style.top = c.y + "%";
     }
