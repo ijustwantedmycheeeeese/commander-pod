@@ -358,7 +358,18 @@ const CARD_ABILITIES = {
   // creature tokens equal to Krenko's power." Effects resolve strictly in array order, so
   // createTokensEqualToSelfPower correctly sees the counter addCountersToSelf just added -- see its
   // own comment.
-  "krenko, tin street kingpin": [{ trigger: "attack", label: "Krenko, Tin Street Kingpin — +1/+1 counter, then create Goblin tokens equal to its power", requiresTarget: false, effects: [{ type: "addCountersToSelf", amount: 1 }, { type: "createTokensEqualToSelfPower", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }]
+  "krenko, tin street kingpin": [{ trigger: "attack", label: "Krenko, Tin Street Kingpin — +1/+1 counter, then create Goblin tokens equal to its power", requiresTarget: false, effects: [{ type: "addCountersToSelf", amount: 1 }, { type: "createTokensEqualToSelfPower", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  // Real text: "Whenever a land enters the battlefield under your control, investigate. Whenever
+  // you sacrifice a Clue, put a +1/+1 counter on Tireless Tracker." Investigate = "create a Clue
+  // token" -- a plain artifact token whose own sacrifice-to-draw ability lives in
+  // ACTIVATED_ABILITIES["clue"] (so ANY Clue, from any source, already knows how to be sacrificed
+  // for a card -- this entry doesn't need to duplicate that). The second half uses the new
+  // sourceNameFilter on fireGlobalTrigger's deathYouControl dispatch (see its own comment) to fire
+  // only when the dying permanent was specifically a Clue, not any death.
+  "tireless tracker": [
+    { trigger: "landfall", label: "Tireless Tracker — investigate (create a Clue token)", requiresTarget: false, effects: [{ type: "createToken", name: "Clue", tokenType: "Token Artifact — Clue", img: "https://cards.scryfall.io/normal/front/5/e/5e644586-888f-4e2e-8d66-8aa02bd79ec1.jpg" }] },
+    { trigger: "deathYouControl", sourceNameFilter: "clue", label: "Tireless Tracker — +1/+1 counter (sacrificed a Clue)", requiresTarget: false, effects: [{ type: "addCountersToSelf", amount: 1 }] }
+  ]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -573,7 +584,12 @@ const ACTIVATED_ABILITIES = {
   "escape tunnel": [
     { cost: { tap: true, sacrifice: true }, label: "Escape Tunnel — search for a basic land, tapped", effects: [{ type: "searchLandTypes", basicOnly: true, types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], entersTapped: true }] },
     { cost: { tap: true, sacrifice: true }, label: "Escape Tunnel — target creature with power 2 or less can't be blocked this turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Unblockable" }] }
-  ]
+  ],
+  // Clue tokens' own real text -- "{2}, Sacrifice this artifact: Draw a card." Keyed by the plain
+  // token name ("Clue"), so ANY Clue on the battlefield already has this ability regardless of
+  // which card's investigate/effect created it (Tireless Tracker's landfall, or any future
+  // investigate source) -- no per-source duplication needed.
+  "clue": [{ cost: { mana: "{2}", sacrifice: true }, label: "Clue — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -3447,6 +3463,14 @@ function fireEtbTriggers(lobby, card) {
   checkShockLandChoice(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
+  // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
+  // control." zoneType "mana" is this app's own bucket for every land (see classifyType), already
+  // set on `card` by every one of this function's callers before they call it, so no separate
+  // "is this a land" check is needed. Covers a land played from hand AND one fetched by
+  // searchLandTypes/fetchLand -- both routes call this same function, unlike real landfall's
+  // "self" restriction which every one of those routes already satisfies (fetches only ever put
+  // the land onto the fetching player's own battlefield).
+  if (card.zoneType === "mana") fireGlobalTrigger(lobby, "landfall", card.owner, card);
 }
 // Shocklands ("As this land enters, you may pay 2 life. If you don't, it enters tapped.") -- a
 // real ETB choice, previously just silently always-untapped-for-free (entersTapped() deliberately
@@ -3547,7 +3571,7 @@ function fireDeathTriggers(lobby, card) {
   // the card's board position to play the burst at when this arrives.
   if (card.zoneType === "creature") io.to(lobby.id).emit("creatureDied", { id: card.id, colors: card.colors || [] });
   getAutomatedAbilities(card.name, "death").forEach((ability) => fireTrigger(lobby, card, ability));
-  fireGlobalTrigger(lobby, "deathYouControl", card.owner);
+  fireGlobalTrigger(lobby, "deathYouControl", card.owner, card);
   fireLiesaReturnToHandTrigger(lobby, card);
   fireKardurDoomscourgeDeathTrigger(lobby, card);
 }
@@ -3616,6 +3640,10 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       // Guttersnipe-style "whenever you cast an INSTANT OR SORCERY spell" -- same shape as
       // colorFilter just above, checked against the cast card's own type line instead of its colors.
       if (ability.spellTypeFilter && !(eventCard && ability.spellTypeFilter.some((t) => (eventCard.type || "").toLowerCase().includes(t)))) return;
+      // Tireless Tracker-style "whenever you sacrifice a Clue" -- a deathYouControl entry narrowed
+      // to one specific dying card BY NAME, rather than any death table-wide. Reusable for any
+      // future "whenever you sacrifice/lose a [specific token name]" card, not just this one.
+      if (ability.sourceNameFilter && archiveKey((eventCard && eventCard.name) || "") !== ability.sourceNameFilter) return;
       fireTrigger(lobby, c, ability);
     });
   }
@@ -3660,7 +3688,29 @@ function applyLifeLoss(lobby, playerId, amount, sourceCardId) {
     return false;
   }
   p.life -= amount;
+  fireVilisDrawTrigger(lobby, playerId, amount);
   return true;
+}
+// Vilis, Broker of Blood -- "Whenever you lose life, draw that many cards." Needs the exact
+// amount lost baked into the ability's own effects at fire time, which the generic
+// fireGlobalTrigger/fireTrigger dispatch has no channel for (see queueDelayedTrigger's own comment
+// on "bake the dynamic bit into effects now" -- the same reasoning applies here), so this is its
+// own dedicated function, same shape as fireKardurDoomscourgeDeathTrigger/
+// fireLiesaReturnToHandTrigger. Called from applyLifeLoss AFTER the loss actually lands -- a
+// locked (Teferi's Protection) or fully-redirected (Deflecting Palm) life change never reaches
+// here, matching "whenever you lose life" only firing for life YOU actually lost.
+function fireVilisDrawTrigger(lobby, playerId, amount) {
+  if (!lobby.turn.started || amount <= 0) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== playerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (archiveKey(c.name) !== "vilis, broker of blood") continue;
+    pushAbilityToStack(lobby, {
+      sourceCard: c, controllerId: playerId,
+      label: `${c.name} — draw ${amount} card${amount === 1 ? "" : "s"} (lost ${amount} life)`,
+      effects: [{ type: "drawCards", amount }]
+    });
+  }
 }
 
 // Fires every authored "attacks" ability for `card` (self-referential only). Called from
