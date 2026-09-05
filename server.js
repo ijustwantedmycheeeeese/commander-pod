@@ -3024,6 +3024,7 @@ function playersView(lobby, viewerId) {
       pileArt: p.pileArt || { library: null, graveyard: null, exile: null },
       cursorColor: p.cursorColor || null,
       cursorIcon: p.cursorIcon || null,
+      cursorIconFit: p.cursorIconFit || null,
       mulligans: p.mulligans,
       handKept: p.handKept,
       openingHandDrawn: !!p.openingHandDrawn,
@@ -4942,7 +4943,7 @@ io.on("connection", (socket) => {
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
       mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0,
-      cursorColor: null, cursorIcon: null // live cursor tracking's own style -- see setCursorColor/setCursorIcon; null color falls back to the player's own `color` above
+      cursorColor: null, cursorIcon: null, cursorIconFit: null // live cursor tracking's own style -- see setCursorColor/setCursorIcon; null color falls back to the player's own `color` above
     };
 
     if (lobby.turn.started) {
@@ -6900,10 +6901,14 @@ io.on("connection", (socket) => {
   // A custom cursor image (static or animated GIF) instead of the plain dot -- the actual on-screen
   // size cap is enforced client-side via CSS (a huge source image must never be able to cover the
   // board), this only validates the URL itself the same way every other image field in this app does.
-  socket.on("setCursorIcon", (url) => {
+  socket.on("setCursorIcon", (data) => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
-    p.cursorIcon = url ? sanitizeImgUrl(url) : null;
+    // Accepts either a bare URL string (legacy shape) or {url, scale, x, y} for cropped icons.
+    const { url, scale, x, y } = typeof data === "string" ? { url: data } : (data || {});
+    const clean = url ? sanitizeImgUrl(url) : null;
+    p.cursorIcon = clean;
+    p.cursorIconFit = clean ? sanitizeImgFit({ scale, x, y }) : null;
     broadcastPlayers(lobby);
   });
 
