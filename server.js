@@ -2465,7 +2465,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     stack: lobby.stack.map((c) => maskCard(c, socketId, lobby)),
     priority: lobby.priority,
-    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null, commanderChoices: myPendingChoice.commanderChoices || null }; })() : null,
+    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", sourceCardId: myPendingChoice.sourceCard && myPendingChoice.sourceCard.id, targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null, commanderChoices: myPendingChoice.commanderChoices || null }; })() : null,
     pendingOptionalPayment: myPendingPayment ? { id: myPendingPayment.id, label: myPendingPayment.label, costLabel: myPendingPayment.costLabel } : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
@@ -2536,17 +2536,23 @@ function basicLandColor(type) {
 // resolved generically here (checked against the card's own owner's other permanents) rather than
 // falling into the "stays untapped, needs a table entry" bucket the way shocklands' genuine choice
 // does. No table entry needed for any card matching this exact wording.
-function conditionalEntersTappedType(text) {
-  const m = (text || "").toLowerCase().match(/enters(?: the battlefield)? tapped unless you control an? ([a-z]+)/);
-  return m ? m[1] : null;
+// Checklands (Clifftop Retreat: "unless you control a Mountain OR a Plains") name TWO land types,
+// not one -- the original regex only ever captured the first, so a checkland with a Plains but no
+// Mountain (or vice versa) was wrongly forced tapped even though either one alone is real Magic's
+// actual condition. Same two-optional-capture-group shape revealFromHandChoiceFromText already uses
+// for exactly this "Type (or Type)" pattern.
+function conditionalEntersTappedTypes(text) {
+  const m = (text || "").toLowerCase().match(/enters(?: the battlefield)? tapped unless you control an? ([a-z]+)(?:\s+or\s+(?:an? )?([a-z]+))?/);
+  if (!m) return null;
+  return [m[1], m[2]].filter(Boolean);
 }
 function entersTapped(card, lobby) {
   const text = (card.text || "").toLowerCase();
   if (!text.includes("enters the battlefield tapped") && !text.includes("enters tapped")) return false;
-  const conditionalType = conditionalEntersTappedType(card.text);
-  if (conditionalType) {
+  const conditionalTypes = conditionalEntersTappedTypes(card.text);
+  if (conditionalTypes) {
     if (!lobby || !card.owner) return true; // conservative fallback if lobby context isn't available
-    const hasType = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes(conditionalType));
+    const hasType = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && conditionalTypes.some((t) => (c.type || "").toLowerCase().includes(t)));
     return !hasType;
   }
   if (text.includes("you may pay") || text.includes("unless you") || text.includes("if you don't") || text.includes("you may reveal")) return false;
@@ -3161,7 +3167,12 @@ function maskCard(card, viewerId, lobby) {
     .map((a, index) => ({ a, index }))
     .filter(({ a }) => !a.condition || a.condition(card, lobby));
   if (!visible.length) return card;
-  return { ...card, activatedAbilities: visible.map(({ a, index }) => ({ index, label: a.label })) };
+  // manaAbility passed through so the client can offer double-click (the same gesture that already
+  // taps a land/dork for its free mana) as a shortcut for a card whose ENTIRE activated-ability list
+  // is just one mana ability (Sol Ring, signets, Temple of the False God) -- these are deliberately
+  // excluded from the free single-tap-for-mana shortcut (see the tap handler's own comment), so
+  // double-click previously did nothing at all for them, which reads exactly like "doesn't add mana".
+  return { ...card, activatedAbilities: visible.map(({ a, index }) => ({ index, label: a.label, manaAbility: !!a.manaAbility })) };
 }
 
 function broadcastCard(lobby, card) {
@@ -3595,7 +3606,7 @@ function promptTargetChoice(lobby, entry) {
   // what they were told to click got a confusing rejection with no way to tell what went wrong.
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
   const src = entry.spellCard || entry.sourceCard;
-  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null, commanderChoices: entry.commanderChoices || null });
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", sourceCardId: entry.sourceCard && entry.sourceCard.id, targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null, commanderChoices: entry.commanderChoices || null });
 }
 // Discards any pending target choices belonging to a departing controller (a real disconnect/leave
 // or an elimination) -- otherwise the table would be stuck forever waiting on a target that will

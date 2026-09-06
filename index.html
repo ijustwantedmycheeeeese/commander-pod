@@ -1541,6 +1541,7 @@
     let pendingTargetChoiceSource = null; // {colors, type} of the spell/ability doing the targeting -- for client-side Protection pre-filtering
     let pendingTargetChoiceMinCmc = null; // minimum mana value required (Despark-style) when kind is "permanent"
     let pendingCommanderChoices = null; // [{slot,name}, ...] when kind is "ownCommanderInZone" (Hellkite Courser)
+    let pendingTargetChoiceSourceId = null; // the ability/spell's own source card id -- needed to exclude it for "otherOwnCreature" (Giver of Runes/Kiki-Jiki's "ANOTHER creature you control")
 
     // Non-null while an OPPONENT'S ability is offering ME an optional payment (Smothering Tithe,
     // Esper Sentinel, Rakdos, Patron of Chaos) -- distinct from pendingTargetChoiceId, since here
@@ -1660,6 +1661,7 @@
         pendingTargetChoiceModes = data.pendingTargetChoice.modes || null;
         pendingTargetChoiceHandFilter = data.pendingTargetChoice.handTypeFilter || null;
         pendingTargetChoiceSource = { colors: data.pendingTargetChoice.sourceColors || [], type: data.pendingTargetChoice.sourceType || "" };
+        pendingTargetChoiceSourceId = data.pendingTargetChoice.sourceCardId || null;
         pendingTargetChoiceMinCmc = data.pendingTargetChoice.minCmc || null;
         pendingCommanderChoices = data.pendingTargetChoice.commanderChoices || null;
         showTargetChoiceBanner();
@@ -1815,6 +1817,7 @@
       pendingTargetChoiceModes = data.modes || null;
       pendingTargetChoiceHandFilter = data.handTypeFilter || null;
       pendingTargetChoiceSource = { colors: data.sourceColors || [], type: data.sourceType || "" };
+      pendingTargetChoiceSourceId = data.sourceCardId || null;
       pendingTargetChoiceMinCmc = data.minCmc || null;
       pendingCommanderChoices = data.commanderChoices || null;
       showTargetChoiceBanner();
@@ -1901,6 +1904,15 @@
         return true;
       }
       if (kind === "ownPermanent") return card.owner === myId && (card.zoneType === "creature" || card.zoneType === "artifact");
+      // Mother of Runes/Mithril Coat/Time Wipe/Breath of Fury's "target creature you control" and
+      // Giver of Runes/Kiki-Jiki's "ANOTHER target creature you control" -- previously fell all the
+      // way through to the generic `card.zoneType === kind` fallback below, which can never be true
+      // (zoneType is never literally the string "ownCreature"/"otherOwnCreature") -- every creature
+      // silently failed this check, so the prompt appeared but nothing ever looked clickable and a
+      // real click did nothing, exactly matching resolveChosenTarget's own "otherOwnCreature" branch
+      // server-side (see its own comment for the same source-card exclusion).
+      if (kind === "ownCreature") return card.owner === myId && card.zoneType === "creature";
+      if (kind === "otherOwnCreature") return card.owner === myId && card.zoneType === "creature" && card.id !== pendingTargetChoiceSourceId;
       return card.zoneType === kind;
     }
     function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }
@@ -4619,7 +4631,20 @@
 
       if (card.owner === myId) {
         div.style.cursor = "grab";
-        div.ondblclick = (e) => { e.stopPropagation(); socket.emit("tap", card.id); };
+        div.ondblclick = (e) => {
+          e.stopPropagation();
+          // A card whose ENTIRE activated-ability list is just one mana ability (Sol Ring, signets,
+          // Temple of the False God) is deliberately excluded from the plain "tap" shortcut's free
+          // mana (see the server's own tap handler comment) -- double-click would otherwise do
+          // nothing at all, which reads exactly like "doesn't add mana". Route it to the real
+          // ability instead, same as picking it from the right-click menu would.
+          const abilities = Array.isArray(card.activatedAbilities) ? card.activatedAbilities : [];
+          if (abilities.length === 1 && abilities[0].manaAbility) {
+            socket.emit("activateAbility", { cardId: card.id, abilityIndex: abilities[0].index });
+          } else {
+            socket.emit("tap", card.id);
+          }
+        };
         div.onmousedown = (e) => {
           if (e.button !== 0) return;
           const scale = getZoomScale();
