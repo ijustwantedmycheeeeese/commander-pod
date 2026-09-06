@@ -1542,6 +1542,7 @@
     let pendingTargetChoiceMinCmc = null; // minimum mana value required (Despark-style) when kind is "permanent"
     let pendingCommanderChoices = null; // [{slot,name}, ...] when kind is "ownCommanderInZone" (Hellkite Courser)
     let pendingTargetChoiceSourceId = null; // the ability/spell's own source card id -- needed to exclude it for "otherOwnCreature" (Giver of Runes/Kiki-Jiki's "ANOTHER creature you control")
+    let pendingTargetChoiceTypeFilter = null; // [type, type, ...] when kind is "typeList" (Acidic Slime's "artifact, enchantment, or land")
 
     // Non-null while an OPPONENT'S ability is offering ME an optional payment (Smothering Tithe,
     // Esper Sentinel, Rakdos, Patron of Chaos) -- distinct from pendingTargetChoiceId, since here
@@ -1662,6 +1663,7 @@
         pendingTargetChoiceHandFilter = data.pendingTargetChoice.handTypeFilter || null;
         pendingTargetChoiceSource = { colors: data.pendingTargetChoice.sourceColors || [], type: data.pendingTargetChoice.sourceType || "" };
         pendingTargetChoiceSourceId = data.pendingTargetChoice.sourceCardId || null;
+        pendingTargetChoiceTypeFilter = data.pendingTargetChoice.typeFilter || null;
         pendingTargetChoiceMinCmc = data.pendingTargetChoice.minCmc || null;
         pendingCommanderChoices = data.pendingTargetChoice.commanderChoices || null;
         showTargetChoiceBanner();
@@ -1818,6 +1820,7 @@
       pendingTargetChoiceHandFilter = data.handTypeFilter || null;
       pendingTargetChoiceSource = { colors: data.sourceColors || [], type: data.sourceType || "" };
       pendingTargetChoiceSourceId = data.sourceCardId || null;
+      pendingTargetChoiceTypeFilter = data.typeFilter || null;
       pendingTargetChoiceMinCmc = data.minCmc || null;
       pendingCommanderChoices = data.commanderChoices || null;
       showTargetChoiceBanner();
@@ -1882,11 +1885,15 @@
       if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
       if (kind === "ownGraveyardCreature") return "Open your Graveyard and click \"Target This\" on a creature card.";
       if (kind === "anyGraveyardCreature") return "Open any player's Graveyard and click \"Target This\" on a creature card.";
+      if (kind === "ownGraveyardTypeList") return `Open your Graveyard and click "Target This" on a ${(pendingTargetChoiceTypeFilter || []).join("/") || "matching"} card.`;
       if (kind === "ownCommanderInZone") return "Choose a commander from the Command Zone:";
+      if (kind === "ownCreature") return "Click a creature you control to target it.";
+      if (kind === "otherOwnCreature") return "Click ANOTHER creature you control to target it.";
+      if (kind === "typeList") return `Click a ${(pendingTargetChoiceTypeFilter || []).join("/") || "matching"} permanent to target it.`;
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownCommanderInZone") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal or as mode-style buttons instead
+      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal or as mode-style buttons instead
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
@@ -1913,6 +1920,13 @@
       // server-side (see its own comment for the same source-card exclusion).
       if (kind === "ownCreature") return card.owner === myId && card.zoneType === "creature";
       if (kind === "otherOwnCreature") return card.owner === myId && card.zoneType === "creature" && card.id !== pendingTargetChoiceSourceId;
+      // Acidic Slime ("target artifact, enchantment, or land") -- see resolveChosenTarget's own
+      // "typeList" branch server-side, which this mirrors exactly.
+      if (kind === "typeList") {
+        if (!(card.zoneType === "creature" || card.zoneType === "artifact" || card.zoneType === "mana")) return false;
+        const filter = pendingTargetChoiceTypeFilter || [];
+        return filter.some((t) => (card.type || "").toLowerCase().includes(t));
+      }
       return card.zoneType === kind;
     }
     function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }
@@ -3741,10 +3755,15 @@
           // the right graveyard(s) clickable, same "only light up what's actually legal" principle
           // as every other target-choice surface. Addressed by the entry's real, stable id (see
           // toEntry's own comment), not the array index other zone-modal actions use.
-          if (zoneName === "graveyard" && pendingTargetChoiceId && (entry.type || "").toLowerCase().includes("creature")) {
-            const wantsOwnGY = pendingTargetChoiceKind === "ownGraveyardCreature" && isMine;
-            const wantsAnyGY = pendingTargetChoiceKind === "anyGraveyardCreature";
-            if (wantsOwnGY || wantsAnyGY) {
+          if (zoneName === "graveyard" && pendingTargetChoiceId) {
+            const entryType = (entry.type || "").toLowerCase();
+            const wantsOwnGY = pendingTargetChoiceKind === "ownGraveyardCreature" && isMine && entryType.includes("creature");
+            const wantsAnyGY = pendingTargetChoiceKind === "anyGraveyardCreature" && entryType.includes("creature");
+            // Argivian Find ("artifact or enchantment card from your graveyard") -- same "own
+            // graveyard, filtered by type" shape as ownGraveyardCreature, generalized with
+            // pendingTargetChoiceTypeFilter instead of a hardcoded "creature" check.
+            const wantsOwnTypeList = pendingTargetChoiceKind === "ownGraveyardTypeList" && isMine && (pendingTargetChoiceTypeFilter || []).some((t) => entryType.includes(t));
+            if (wantsOwnGY || wantsAnyGY || wantsOwnTypeList) {
               actions += ` <button class="mini-btn" style="background:#7f9fd4;" onclick="chooseTargetFor('${entry.id}')">Target This</button>`;
             }
           }
