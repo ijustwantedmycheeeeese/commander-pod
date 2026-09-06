@@ -757,7 +757,16 @@ const ACTIVATED_ABILITIES = {
   // control as though those creatures had haste" half needs no table entry -- see
   // canActivateAbilitiesAsThoughHaste, checked directly in the activateAbility handler's own
   // summoning-sickness gate.
-  "thousand-year elixir": [{ cost: { mana: "{1}", tap: true }, label: "Thousand-Year Elixir — untap target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "untapTarget" }] }]
+  "thousand-year elixir": [{ cost: { mana: "{1}", tap: true }, label: "Thousand-Year Elixir — untap target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "untapTarget" }] }],
+  // Wave 14 gap-analysis batch.
+  // "{T}: Add {C}." needs no table entry (free single-color tap shortcut).
+  "bloom tender": [{ cost: { tap: true }, manaAbility: true, label: "Bloom Tender — Add one mana of each color among permanents you control", effects: [{ type: "addManaForEachColorControlled" }] }],
+  "aggravated assault": [{ cost: { mana: "{3}{R}{R}" }, label: "Aggravated Assault — untap all creatures you control, take an extra combat phase", effects: [{ type: "untapAllCreaturesAndExtraCombat" }] }],
+  // "Activate only if you control a creature with power 4 or greater" -- a real activation-condition
+  // gate (same (card, lobby) convention as Temple of the False God's own condition), checked against
+  // each candidate's REAL effective power (base + counters + equipment/aura + anthem bonuses), not
+  // just its printed power.
+  "bonders' enclave": [{ cost: { mana: "{3}", tap: true }, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 4), conditionError: "You need a creature with power 4 or greater to activate this.", label: "Bonders' Enclave — draw a card", effects: [{ type: "drawCards", amount: 1 }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1078,6 +1087,12 @@ const SPELL_ABILITIES = {
     { label: "Boros Charm — deal 4 damage to target player or planeswalker", requiresTarget: true, targetKind: "playerOrPlaneswalker", effects: [{ type: "damageTarget", amount: 4 }] },
     { label: "Boros Charm — permanents you control gain indestructible until end of turn", requiresTarget: false, effects: [{ type: "grantIndestructibleToAllYours" }] },
     { label: "Boros Charm — target creature gains double strike until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Double strike" }] }
+  ] },
+  // Wave 14 gap-analysis batch. "You may choose both if you control a commander" isn't modeled --
+  // see grantTemporaryKeywordsToAllYours's own comment.
+  "akroma's will": { label: "Akroma's Will — choose one", modes: [
+    { label: "Akroma's Will — creatures you control gain flying, vigilance, and double strike until end of turn", requiresTarget: false, effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Flying", "Vigilance", "Double strike"] }] },
+    { label: "Akroma's Will — creatures you control gain lifelink, indestructible, and protection until end of turn", requiresTarget: false, effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Lifelink", "Indestructible", "Protection"] }] }
   ] }
 };
 function getSpellAbility(cardName) {
@@ -2468,6 +2483,50 @@ const EFFECTS = {
     const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature").length;
     if (n > 0) p.mana[params.color || "R"] = (p.mana[params.color || "R"] || 0) + n;
     broadcastPlayers(lobby);
+  },
+  // Wave 14 gap-analysis batch.
+  // Bloom Tender -- "For each color among permanents you control, add one mana of that color." A
+  // genuinely new mana shape (multiple DIFFERENT colors at once, keyed off the controller's own
+  // board rather than a fixed color or a fixed count of one color) -- distinct from
+  // addManaEqualToCreatureCount's "N mana of ONE color" and addFixedMana's fixed color list.
+  addManaForEachColorControlled(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const colors = new Set();
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack") {
+        (c.colors || []).forEach((col) => colors.add(col));
+      }
+    });
+    colors.forEach((col) => { p.mana[col] = (p.mana[col] || 0) + 1; });
+    broadcastPlayers(lobby);
+  },
+  // Aggravated Assault -- "Untap all creatures you control. After this main phase, there is an
+  // additional combat phase followed by an additional main phase." Reuses turn.extraCombatsPending
+  // exactly as-is (already generic, built for Aurelia/Combat Celebrant-style triggers -- see
+  // advanceOnePhase's own comment) rather than a new mechanism; only scoped to CREATURES (not the
+  // manual table-wide "Untap All" utility button's every-permanent scope), matching the real card's
+  // own wording. "Activate only as a sorcery" isn't enforced -- no activated ability in this engine
+  // currently checks cast-timing, a disclosed simplification shared with every other one.
+  untapAllCreaturesAndExtraCombat(lobby, ctx, params) {
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner === ctx.controllerId && c.zoneType === "creature" && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
+    });
+    lobby.turn.extraCombatsPending = (lobby.turn.extraCombatsPending || 0) + 1;
+  },
+  // Akroma's Will -- both modes grant several keywords at once "until end of turn" to every
+  // creature the controller has, reusing grantTemporaryKeyword (a real duration-based grant, swept
+  // at the next real-turn boundary) for each one. "You may choose both if you control a commander"
+  // isn't modeled -- this engine's modal-spell system only ever supports picking a single mode
+  // (same disclosed narrowing as Austere Command's real "choose two" -> "choose one" above), and a
+  // CONDITIONAL "choose one vs. choose both" mode count has no shape here yet. Protection here is
+  // the same bare, colorless-in-this-engine keyword every other "protection from [color/type]" card
+  // in this file already grants as a cosmetic badge -- not a real color-scoped restriction.
+  grantTemporaryKeywordsToAllYours(lobby, ctx, params) {
+    const keywords = params.keywords || [];
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner === ctx.controllerId && c.zoneType === "creature") keywords.forEach((k) => grantTemporaryKeyword(lobby, c, k));
+    });
   }
 };
 // Shared by the manual Counter button (counterStackItem) and EFFECTS.counterTargetSpell -- pulls
