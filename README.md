@@ -51,12 +51,6 @@ Optional, off by default. Set `NTFY_TOPIC` on the `mtg-table` service and it'll 
 
 If you're self-hosting your own ntfy server instead of using the public `ntfy.sh`, also set `NTFY_SERVER` to its URL.
 
-## Locking the server down to an invite key
-
-Optional, off by default — registration and login stay open to anyone who reaches the server (subject to admin approval, above) unless you opt in. Set `ARCHON_ACCESS_KEY` on the `mtg-table` service to any value you want, and share it with only the people you're inviting: without it, nobody can register, log in, or join a game — the login page itself still loads (it does nothing without a valid session), but every account/session action is rejected.
-
-Players enter the key in the "Access Key" field on the login or register screen, or you can hand out a link like `https://your-server:8087/?key=<your-key>` — visiting it saves the key locally and cleans it out of the address bar, so from then on it's remembered the same way a saved login is.
-
 ## Lobby music
 
 The Main Menu plays a looping background track (`audio/lobby-music.mp3`), with its own volume slider on the Main Menu and mirrored in the in-game Settings modal. It's royalty-free — swap `audio/lobby-music.mp3` for a different file (same filename) if you'd rather use something else; nothing else needs to change.
