@@ -384,7 +384,30 @@ const CARD_ABILITIES = {
   ],
   // See EFFECTS.attachSelfToTarget for the attach itself; the indestructible grant is already
   // generic (equipEffectsFromText) once attached.
-  "mithril coat": [{ trigger: "etb", label: "Mithril Coat — attach to target legendary creature you control", requiresTarget: true, targetKind: "ownCreature", effects: [{ type: "attachSelfToTarget" }] }]
+  "mithril coat": [{ trigger: "etb", label: "Mithril Coat — attach to target legendary creature you control", requiresTarget: true, targetKind: "ownCreature", effects: [{ type: "attachSelfToTarget" }] }],
+  // Wave 10 gap-analysis batch. Indestructible (both cards) and Bojuka Bog/Temple of the False
+  // God's mana halves need no table entry at all -- already generic (KNOWN_KEYWORDS, the free-tap
+  // shortcut's own producedMana handling, and Temple's activation condition, see ACTIVATED_ABILITIES).
+  // The One Ring -- "if you cast it" isn't checked (see grantProtectionFromEverything's own comment).
+  "the one ring": [
+    { trigger: "etb", label: "The One Ring — gain protection from everything until your next turn", requiresTarget: false, effects: [{ type: "grantProtectionFromEverything" }] },
+    { trigger: "upkeep", label: "The One Ring — lose life equal to its burden counters", requiresTarget: false, effects: [{ type: "loseLifeEqualToSelfCounters" }] }
+  ],
+  // "search your library for any number of Goblin cards... put those cards on top" -- see
+  // EFFECTS.searchAllMatchingToTop's own comment for what's simplified (order among the found cards).
+  "goblin recruiter": [{ trigger: "etb", label: "Goblin Recruiter — search for all Goblin cards, put them on top", requiresTarget: false, effects: [{ type: "searchAllMatchingToTop", typeFilter: ["goblin"] }] }],
+  // Haste needs no table entry (KNOWN_KEYWORDS). Reuses the exact mechanism built for Kaalia, Zenith
+  // Seeker (lookTopNRevealTypesToHand) -- "reveal the top four, matching go to hand, rest shuffled
+  // back in" is the identical shape, just a different N and type filter.
+  "goblin ringleader": [{ trigger: "etb", label: "Goblin Ringleader — reveal top 4, Goblins to hand", requiresTarget: false, effects: [{ type: "lookTopNRevealTypesToHand", amount: 4, types: ["goblin"] }] }],
+  // "As this land enters, exile target player's graveyard." Reuses EFFECTS.exilePlayerGraveyard,
+  // already built for an earlier card -- needed only this table entry, no new effect at all.
+  "bojuka bog": [{ trigger: "etb", label: "Bojuka Bog — exile target player's graveyard", requiresTarget: true, targetKind: "player", effects: [{ type: "exilePlayerGraveyard" }] }],
+  // "Whenever Pashalik Mons or another Goblin you control dies, deals 1 damage to any target." A
+  // deathYouControl entry narrowed by typeFilter (see fireGlobalTrigger's own comment) rather than
+  // sourceNameFilter -- ANY Goblin qualifies, not one specific name. Reuses the existing generic
+  // damageTarget effect (Lightning Bolt et al.) targetKind "any".
+  "pashalik mons": [{ trigger: "deathYouControl", typeFilter: "goblin", label: "Pashalik Mons — a Goblin died, deal 1 damage to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget", amount: 1 }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -625,7 +648,34 @@ const ACTIVATED_ABILITIES = {
   // pick against a type list, with no memory of a prior pick in the same search) -- same "close
   // approximation, trust the player" precedent as every other unchecked condition in this file;
   // reuses the same thenEffects-chained-second-fetch shape Cultivate already established.
-  "myriad landscape": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Myriad Landscape — search for up to two basic lands, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }] }]
+  "myriad landscape": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Myriad Landscape — search for up to two basic lands, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }] }],
+  // Wave 10 gap-analysis batch.
+  // Mind Stone's "{T}: Add {C}" half needs no table entry (free single-color tap shortcut).
+  "mind stone": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Mind Stone — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  // "{T}: Put a burden counter on The One Ring, then draw a card for each burden counter." Not
+  // flagged manaAbility -- this isn't a mana source, it goes through the stack normally like any
+  // other activated ability (real Magic restricts it to sorcery speed, unchecked here, a disclosed
+  // simplification shared with every other unchecked timing restriction in this file).
+  "the one ring": [{ cost: { tap: true }, label: "The One Ring — put a burden counter on it, draw a card for each", effects: [{ type: "addCountersToSelf", amount: 1 }, { type: "drawCardsEqualToSelfCounters" }] }],
+  // "{T}: Add {C}{C}. Activate only if you control five or more lands." Real activation-condition
+  // gating (see the activateAbility handler's own `ability.condition` check) rather than a plain
+  // mana ability -- manaAbility:true is still needed since it's TWO units of mana from one tap,
+  // exactly like Sol Ring's own reasoning.
+  // condition follows the SAME (card, lobby) signature every other ability condition in this file
+  // uses (CARD_ABILITIES' fireTrigger, fireGlobalOtherCreatureEtbTriggers, and maskCard's own
+  // activatedAbilities visibility filter, which is what actually calls this on every card broadcast
+  // -- NOT (lobby, playerId), which maskCard has no way to supply and crashed on before this was
+  // caught by testing a real activation against a live table).
+  "temple of the false god": [{ cost: { tap: true }, manaAbility: true, condition: (card, lobby) => Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "mana").length >= 5, conditionError: "You need five or more lands to activate this.", label: "Temple of the False God — Add {C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C"] }] }],
+  // Geier Reach Sanitarium's "{T}: Add {C}" half needs no table entry (free single-color tap
+  // shortcut). See EFFECTS.eachPlayerDrawsThenAutoDiscards for what's simplified (the discard isn't
+  // a real per-player choice).
+  "geier reach sanitarium": [{ cost: { mana: "{2}", tap: true }, label: "Geier Reach Sanitarium — each player draws a card, then discards a card", effects: [{ type: "eachPlayerDrawsThenAutoDiscards" }] }],
+  // "{3}{R}, Sacrifice a Goblin: Create two 1/1 red Goblin creature tokens." Real "a Goblin" (not
+  // "another"), so sacrificing Pashalik Mons itself IS legal -- but autoSacrificeFilter prefers any
+  // OTHER qualifying Goblin first (see the activateAbility handler's own comment) so this doesn't
+  // surprise-destroy the payoff engine whenever a different Goblin is available to sacrifice instead.
+  "pashalik mons": [{ cost: { mana: "{3}{R}", autoSacrificeFilter: "goblin" }, label: "Pashalik Mons — Sacrifice a Goblin: create two Goblin tokens", effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -845,6 +895,12 @@ const SPELL_ABILITIES = {
   "reanimate": { label: "Reanimate — put target creature card from a graveyard onto the battlefield, lose life equal to its mana value", effects: [{ type: "reanimateLoseLifeEqualToCmc" }], requiresTarget: true, targetKind: "anyGraveyardCreature" },
   "vampiric tutor": { label: "Vampiric Tutor — search your library for a card, put it on top, lose 2 life", effects: [{ type: "tutorToHand", toTopOfLibrary: true, lifeLoss: 2 }] },
   "faithless looting": { label: "Faithless Looting — draw two cards, then discard two cards", effects: [{ type: "drawCards", amount: 2 }, { type: "targetPlayerDiscards", self: true, amount: 2 }] },
+  // "Draw two cards, then discard two cards. Untap up to three lands." Same self-discard shape as
+  // Faithless Looting above, plus EFFECTS.untapUpToNOwnLands (auto-picks the first N tapped lands --
+  // see its own comment). The discard is a genuinely pending/async step (pendingDiscard), but
+  // untapping lands has no real dependency on which cards end up discarded, so it's safe as a plain
+  // sibling effect here rather than needing the thenEffects-bundling scryN/searchLandTypes require.
+  "frantic search": { label: "Frantic Search — draw two, discard two, untap up to three lands", effects: [{ type: "drawCards", amount: 2 }, { type: "targetPlayerDiscards", self: true, amount: 2 }, { type: "untapUpToNOwnLands", amount: 3 }] },
   "doomskar": { label: "Doomskar — destroy all creatures", effects: [{ type: "destroyAllCreatures" }] },
   "time wipe": { label: "Time Wipe — return a creature you control to hand, then destroy all creatures", effects: [{ type: "bounceTargetToHand" }, { type: "destroyAllCreatures" }], requiresTarget: true, targetKind: "ownCreature" },
   "chain reaction": { label: "Chain Reaction — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] },
@@ -907,7 +963,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood"];
+const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -943,6 +999,20 @@ const EFFECTS = {
   drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
   eachPlayerDrawsCards(lobby, ctx, params) {
     Object.keys(lobby.players).forEach((id) => drawN(lobby, id, params.amount || 1));
+  },
+  // Geier Reach Sanitarium -- "each player draws a card, then discards a card." The existing
+  // pendingDiscard mechanism is a single slot (one player's discard pending at a time -- see its own
+  // comment), so queuing a real per-player choice for EVERY player here isn't a fit without turning
+  // it into a genuine queue. Auto-discards the first card in each player's hand instead (which may
+  // be the card they just drew) -- a disclosed simplification, same "auto-pick over new UI" precedent
+  // as untapUpToNOwnLands/searchAllMatchingToTop above.
+  eachPlayerDrawsThenAutoDiscards(lobby, ctx) {
+    for (const id in lobby.players) {
+      drawN(lobby, id, 1);
+      const hand = Object.values(lobby.cards).filter((c) => c.owner === id && c.zoneType === "hand");
+      if (hand.length) sendToGraveyardInternal(lobby, hand[0]);
+    }
+    broadcastPlayers(lobby);
   },
   // Wheel of Fortune / Windfall -- "each player discards their hand, then draws [N / cards equal to
   // the greatest number of cards a player discarded this way]." Snapshotted hand lists BEFORE
@@ -1112,6 +1182,39 @@ const EFFECTS = {
     const bonus = amount > 0 ? bonusCountersFor(lobby, card.owner) : 0;
     card.counters = (card.counters || 0) + amount + bonus;
     broadcastCard(lobby, card);
+  },
+  // The One Ring -- "{T}: Put a burden counter on The One Ring, then draw a card for each burden
+  // counter on The One Ring." Placed as a SEPARATE effect right after addCountersToSelf in the same
+  // ability's effects array (not folded into one function) so the counter is already incremented by
+  // the time this runs -- effects in one array resolve strictly in order, same precedent as Krenko,
+  // Tin Street Kingpin's own counter-then-tokens ability.
+  drawCardsEqualToSelfCounters(lobby, ctx) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    drawN(lobby, ctx.controllerId, card.counters || 0);
+  },
+  // The One Ring's upkeep trigger -- "you lose 1 life for each burden counter on The One Ring."
+  // Reads the card's OWN current counters, computed fresh at fire time (same "the activated-ability/
+  // trigger dispatch path has no generic dynamic-amount pipeline" reasoning as destroyAllCreatures
+  // and friends) rather than threaded in as a fixed amount.
+  loseLifeEqualToSelfCounters(lobby, ctx) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card || !(card.counters > 0)) return;
+    applyLifeLoss(lobby, ctx.controllerId, card.counters);
+    checkEliminations(lobby);
+  },
+  // The One Ring's ETB -- "you gain protection from everything until your next turn." Reuses
+  // Teferi's Protection's own protectionFromEverything flag/clearing (already cleared at this
+  // player's own next Untap step, matching "until your next turn" exactly) but WITHOUT
+  // teferisProtection's lifeLocked/phase-out side effects, which The One Ring's wording doesn't
+  // grant. "If you cast it" isn't checked -- this app has no "was this permanent cast, vs. put onto
+  // the battlefield some other way" tracking anywhere, a disclosed simplification shared with every
+  // other ETB trigger in this file that doesn't distinguish how a permanent arrived.
+  grantProtectionFromEverything(lobby, ctx) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.protectionFromEverything = true;
+    broadcastPlayers(lobby);
   },
   // Records a "choose one" ETB-style pick (e.g. Windcrag Siege's "choose Mardu or Jeskai") directly
   // on the source card, for other abilities' `condition` to key off of and for the client to show.
@@ -1642,6 +1745,35 @@ const EFFECTS = {
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter });
     broadcastPlayers(lobby);
+  },
+  // Goblin Recruiter -- "search your library for any number of Goblin cards, reveal them, then
+  // shuffle and put those cards on top in any order." Unlike tutorToHand/searchLandTypes (an
+  // interactive search among however many matches, since WHICH one to take is a real choice), "any
+  // number" here means EVERY match is taken at once -- deterministic, same "no real choice, just
+  // grab them all" reasoning as lookTopNRevealTypesToHand (Kaalia) already established, just
+  // searching the WHOLE library instead of a fixed top slice, and landing back on top instead of in
+  // hand. The relative order the matches go back on top in isn't a real choice either way in this
+  // app (no reorder UI for this), so they're stacked back on in whatever order they were found --
+  // a disclosed simplification, same precedent as "any order"/"random order" everywhere else.
+  searchAllMatchingToTop(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const filter = params.typeFilter || [];
+    const matched = p.library.filter((e) => filter.some((t) => (e.type || "").toLowerCase().includes(t)));
+    if (!matched.length) { pushLog(lobby, `${p.name} finds no matching cards`); return; }
+    p.library = p.library.filter((e) => !matched.includes(e));
+    shuffle(p.library);
+    matched.forEach((e) => p.library.unshift(e));
+    pushLog(lobby, `${p.name} searches their library for ${matched.length} matching card${matched.length === 1 ? "" : "s"} and puts them on top`);
+    broadcastPlayers(lobby);
+  },
+  // Frantic Search's "Untap up to three lands" -- auto-picks the first N currently-tapped lands the
+  // caster controls rather than offering a real choice among them (which specific lands rarely
+  // matters here, and no multi-select UI exists for this), same "auto-pick" precedent as
+  // eachOpponentSacrifices. A no-op past however many are actually tapped, same as "up to" always is.
+  untapUpToNOwnLands(lobby, ctx, params) {
+    const lands = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "mana" && c.tapped).slice(0, params.amount || 1);
+    lands.forEach((c) => { c.tapped = false; broadcastCard(lobby, c); });
   },
   // Scry N (Ponder/Preordain and a very common real keyword ability) -- looks at the top N cards
   // PRIVATELY (emitted only to this player's own socket, never broadcast) and lets them choose,
@@ -2316,7 +2448,7 @@ function reattachPlayer(lobby, oldId, newId) {
 
 function buildLobbyJoinedPayload(lobby, socketId) {
   const maskedCards = {};
-  for (const id in lobby.cards) maskedCards[id] = maskCard(lobby.cards[id], socketId);
+  for (const id in lobby.cards) maskedCards[id] = maskCard(lobby.cards[id], socketId, lobby);
   // If this reconnecting player is the one a pending trigger is actually waiting on, they need to
   // know -- the chooseTarget prompt only fires once, at the moment the trigger first queued, so a
   // fresh connection (a real reload, not just this socket) would otherwise never see it.
@@ -2331,7 +2463,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     targets: lobby.targets,
     turn: lobby.turn,
     combat: lobby.combat,
-    stack: lobby.stack.map((c) => maskCard(c, socketId)),
+    stack: lobby.stack.map((c) => maskCard(c, socketId, lobby)),
     priority: lobby.priority,
     pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null, commanderChoices: myPendingChoice.commanderChoices || null }; })() : null,
     pendingOptionalPayment: myPendingPayment ? { id: myPendingPayment.id, label: myPendingPayment.label, costLabel: myPendingPayment.costLabel } : null,
@@ -2396,12 +2528,27 @@ function basicLandColor(type) {
 
 // Cards that unconditionally enter tapped ("~ enters the battlefield tapped.") should actually
 // enter tapped instead of always untapped. Cards with a real choice attached (shocklands' "you
-// may pay life", checklands' "unless you control", etc.) are deliberately excluded — the player
-// has a decision to make there that this app can't resolve automatically, so those stay untapped
-// by default and can be tapped manually like today.
-function entersTapped(card) {
+// may pay life", etc.) are deliberately excluded — the player has a decision to make there that
+// this app can't resolve automatically, so those stay untapped by default and can be tapped
+// manually like today.
+// Checklands/Arena of Glory-style "enters tapped unless you control a/an [Type]" is DIFFERENT --
+// there's no real choice to make, just a battlefield fact this app can check for itself, so it's
+// resolved generically here (checked against the card's own owner's other permanents) rather than
+// falling into the "stays untapped, needs a table entry" bucket the way shocklands' genuine choice
+// does. No table entry needed for any card matching this exact wording.
+function conditionalEntersTappedType(text) {
+  const m = (text || "").toLowerCase().match(/enters(?: the battlefield)? tapped unless you control an? ([a-z]+)/);
+  return m ? m[1] : null;
+}
+function entersTapped(card, lobby) {
   const text = (card.text || "").toLowerCase();
   if (!text.includes("enters the battlefield tapped") && !text.includes("enters tapped")) return false;
+  const conditionalType = conditionalEntersTappedType(card.text);
+  if (conditionalType) {
+    if (!lobby || !card.owner) return true; // conservative fallback if lobby context isn't available
+    const hasType = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes(conditionalType));
+    return !hasType;
+  }
   if (text.includes("you may pay") || text.includes("unless you") || text.includes("if you don't") || text.includes("you may reveal")) return false;
   return true;
 }
@@ -2488,6 +2635,34 @@ function equipEffectsFromText(text) {
     });
   }
   return { powerBonus, toughnessBonus, keywords };
+}
+
+// Skullclamp and its functional cousins -- "Whenever equipped creature dies, draw N cards." A
+// generic, name-independent, oracle-text-detected mechanism (same precedent as
+// anthemKeywordsFromText/cyclingCostFromText/etc.) rather than a per-card table entry, since the
+// shape ("equipped creature" + "dies" + "draw") is specific enough not to false-positive on
+// anything else. Skullclamp's own static "+1/-1" half is already covered by equipEffectsFromText's
+// existing "gets X/Y" pattern -- confirmed it already handles a negative toughness value.
+const NUMBER_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
+function equipDeathDrawFromText(text) {
+  const m = (text || "").match(/whenever equipped creature dies, draw (a|an|\d+|one|two|three|four|five|six) cards?/i);
+  if (!m) return null;
+  const raw = m[1].toLowerCase();
+  return NUMBER_WORDS[raw] || parseInt(raw, 10) || 0;
+}
+// Called from fireDeathTriggers, BEFORE the dying creature is actually removed from lobby.cards --
+// same "must run before removal" contract the rest of that function's helpers already follow, since
+// this needs to find equipment still attachedTo the dying card's own id.
+function checkEquipmentDeathDraw(lobby, dyingCard) {
+  if (dyingCard.zoneType !== "creature") return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.attachedTo !== dyingCard.id) continue;
+    const n = equipDeathDrawFromText(c.text);
+    if (!n) continue;
+    drawN(lobby, c.owner, n);
+    pushLog(lobby, `${(lobby.players[c.owner] || {}).name || "Someone"} draws ${n} card${n === 1 ? "" : "s"} (${c.name || "Equipment"} — equipped creature died)`);
+  }
 }
 
 // Live-computed, never stored on the card -- scans for anything currently attachedTo this card
@@ -2952,7 +3127,7 @@ function applyCommandersToPlayer(p, commanders) {
   }
 }
 
-function maskCard(card, viewerId) {
+function maskCard(card, viewerId, lobby) {
   if (card.faceDown && card.owner !== viewerId) {
     return {
       id: card.id, tapped: card.tapped, faceDown: true, zoneType: card.zoneType, owner: card.owner, ownerColor: card.ownerColor,
@@ -2984,7 +3159,7 @@ function maskCard(card, viewerId) {
   // ones still visible.
   const visible = abilities
     .map((a, index) => ({ a, index }))
-    .filter(({ a }) => !a.condition || a.condition(card));
+    .filter(({ a }) => !a.condition || a.condition(card, lobby));
   if (!visible.length) return card;
   return { ...card, activatedAbilities: visible.map(({ a, index }) => ({ index, label: a.label })) };
 }
@@ -2992,7 +3167,7 @@ function maskCard(card, viewerId) {
 function broadcastCard(lobby, card) {
   for (const sid of lobbySocketIds(lobby)) {
     const sock = io.sockets.sockets.get(sid);
-    if (sock) sock.emit("cardUpdate", maskCard(card, sid));
+    if (sock) sock.emit("cardUpdate", maskCard(card, sid, lobby));
   }
 }
 
@@ -3112,7 +3287,7 @@ function spawnBattlefieldCard(lobby, data) {
     zoneType: resolvedZoneType,
     // Only applies when actually entering the battlefield — drawing into hand (zoneType "hand")
     // goes through this same function but obviously shouldn't come in "tapped".
-    tapped: resolvedZoneType !== "hand" && entersTapped(data),
+    tapped: resolvedZoneType !== "hand" && entersTapped(data, lobby),
     faceDown: !!faceDown, counters: 0,
     owner, ownerColor: p ? p.color : "#999",
     isCommander: !!isCommander,
@@ -3616,6 +3791,8 @@ function fireEtbTriggers(lobby, card) {
   applyEntersTappedByOpponentEffect(lobby, card);
   checkShockLandChoice(lobby, card);
   checkRevealFromHandChoice(lobby, card);
+  checkChromeMoxImprint(lobby, card);
+  checkMoxDiamondLandDiscard(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
   // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
@@ -3676,6 +3853,50 @@ function checkRevealFromHandChoice(lobby, card) {
     label: `${card.name} — reveal ${article} ${typeLabel} card from hand to have it enter untapped`, costLabel: `Reveal ${article} ${typeLabel} card`,
     cost: {}, declinedEffects: [{ type: "tapSelf" }]
   });
+}
+// Chrome Mox -- "Imprint -- When this artifact enters, you may exile a nonartifact, nonland card
+// from your hand. {T}: Add one mana of any of the exiled card's colors." WHICH hand card to imprint
+// is a real choice this app has no multi-card hand-picker UI for, so this auto-picks the first
+// eligible one (same "auto-pick over building new UI" precedent as several other effects in this
+// wave) and treats it as mandatory rather than optional -- a disclosed simplification; doing nothing
+// when no eligible card exists in hand is preserved. The chosen colors are stashed directly on the
+// permanent (card.imprintedColors) for the tap handler below to read instead of falling back to its
+// raw (wrong -- a real 5-color) producedMana list.
+function checkChromeMoxImprint(lobby, card) {
+  if (!/imprint/i.test(card.text || "") || card.imprintedColors) return;
+  const target = Object.values(lobby.cards).find((c) => c.owner === card.owner && c.zoneType === "hand" && !/artifact|land/i.test(c.type || ""));
+  if (!target) return;
+  card.imprintedColors = target.colors && target.colors.length ? target.colors : ["C"];
+  lobby.players[card.owner].exile.push(toEntry(target));
+  delete lobby.cards[target.id];
+  delete lobby.targets[target.id];
+  io.to(lobby.id).emit("cardRemove", target.id);
+  broadcastCard(lobby, card);
+  broadcastPlayers(lobby);
+  pushLog(lobby, `${card.name} imprints ${target.name || "a card"} (exiled), producing {${card.imprintedColors.join("}{")}}`);
+}
+// Mox Diamond -- "If this artifact would enter, you may discard a land card instead. If you do, put
+// this artifact onto the battlefield. If you don't, put it into its owner's graveyard." A true
+// replacement effect (CR 614) would mean it never really "enters" at all if declined -- this app has
+// no replacement-effect layer (flagged as a known, larger gap elsewhere), so this approximates it as
+// a forced ETB choice instead: it genuinely enters first, then this check immediately discards a
+// land (auto-picked, same imprint precedent above) to let it stay, or removes it right back off if
+// none exists. The end state matches real Magic exactly either way; only the fine-grained "did it
+// truly ever enter" timing differs, which nothing else in this app currently cares about.
+function checkMoxDiamondLandDiscard(lobby, card) {
+  if (archiveKey(card.name) !== "mox diamond") return;
+  const land = Object.values(lobby.cards).find((c) => c.owner === card.owner && c.zoneType === "hand" && (c.type || "").toLowerCase().includes("land"));
+  if (land) {
+    sendToGraveyardInternal(lobby, land);
+    pushLog(lobby, `${(lobby.players[card.owner] || {}).name || "Someone"} discards ${land.name || "a land"} to keep Mox Diamond`);
+    return;
+  }
+  pushLog(lobby, `Mox Diamond has no land to discard and goes to its owner's graveyard`);
+  delete lobby.cards[card.id];
+  delete lobby.targets[card.id];
+  io.to(lobby.id).emit("cardRemove", card.id);
+  const p = lobby.players[card.owner];
+  if (p) { p.graveyard.push(toEntry(card)); broadcastPlayers(lobby); }
 }
 // "Artifacts and creatures your opponents control enter tapped" (Blind Obedience) -- a static
 // replacement effect (CR 614), checked at the same single fireEtbTriggers choke point every real
@@ -3757,6 +3978,7 @@ function fireDeathTriggers(lobby, card) {
   fireGlobalTrigger(lobby, "deathYouControl", card.owner, card);
   fireLiesaReturnToHandTrigger(lobby, card);
   fireKardurDoomscourgeDeathTrigger(lobby, card);
+  checkEquipmentDeathDraw(lobby, card);
 }
 // Kardur, Doomscourge -- "whenever an attacking creature dies, each opponent loses 1 life and you
 // gain 1 life." Unlike deathYouControl (Zulaport Cutthroat, Venerated Stormsinger), this cares
@@ -3827,6 +4049,12 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       // to one specific dying card BY NAME, rather than any death table-wide. Reusable for any
       // future "whenever you sacrifice/lose a [specific token name]" card, not just this one.
       if (ability.sourceNameFilter && archiveKey((eventCard && eventCard.name) || "") !== ability.sourceNameFilter) return;
+      // Pashalik Mons-style "whenever ~ or another Goblin you control dies" -- narrowed by the dying
+      // permanent's own TYPE line instead of a specific name, same shape as colorFilter/
+      // spellTypeFilter just above. deathYouControl already scans the dying card's own controller's
+      // whole battlefield (itself included, since it's removed from lobby.cards AFTER this fires),
+      // so no separate "selfInclusive" flag is needed the way otherCreatureEtb's is.
+      if (ability.typeFilter && !(eventCard && (eventCard.type || "").toLowerCase().includes(ability.typeFilter))) return;
       fireTrigger(lobby, c, ability);
     });
   }
@@ -4009,7 +4237,7 @@ function resolveStackTop(lobby) {
     } else {
       card.zoneType = classifyType(card.type);
       card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
-      if (entersTapped(card)) card.tapped = true;
+      if (entersTapped(card, lobby)) card.tapped = true;
       broadcastCard(lobby, card);
       if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved onto the battlefield`);
       fireEtbTriggers(lobby, card);
@@ -5271,7 +5499,7 @@ io.on("connection", (socket) => {
         // applies it for cards created straight onto the battlefield, but a card played from hand
         // never goes through that function again, so it was silently skipped.
         card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
-        if (entersTapped(card)) card.tapped = true;
+        if (entersTapped(card, lobby)) card.tapped = true;
         broadcastCard(lobby, card);
         broadcastPlayers(lobby);
         pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
@@ -5309,7 +5537,7 @@ io.on("connection", (socket) => {
       card.zoneType = targetZoneType;
       card.faceDown = false;
       card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
-      if (entersTapped(card)) card.tapped = true;
+      if (entersTapped(card, lobby)) card.tapped = true;
       broadcastCard(lobby, card);
       broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} played ${card.name || "a card"}`);
@@ -5344,7 +5572,7 @@ io.on("connection", (socket) => {
       card.zoneType = targetZoneType;
       card.faceDown = false;
       card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
-      if (entersTapped(card)) card.tapped = true;
+      if (entersTapped(card, lobby)) card.tapped = true;
       broadcastCard(lobby, card);
       pushLog(lobby, `${p.name} played ${card.name || "a card"} without paying its cost`);
       fireEtbTriggers(lobby, card);
@@ -5542,7 +5770,27 @@ io.on("connection", (socket) => {
       const hasMatch = (p.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("creature"));
       if (!hasMatch) { socket.emit("actionError", "There's no creature card in your graveyard to target."); return; }
     }
+    // Temple of the False God -- "Activate only if you control five or more lands." A real
+    // activation-condition gate, checked before anything is paid, same "reject before paying" reason
+    // as the ownGraveyardCreature check just above. Reusable for any future card with its own
+    // arbitrary activation condition, same shape as CARD_ABILITIES entries' own `condition(card, lobby)`.
+    if (ability.condition && !ability.condition(card, lobby)) {
+      socket.emit("actionError", ability.conditionError || `You can't activate ${card.name}'s ability right now.`);
+      return;
+    }
     const cost = ability.cost || {};
+    // Pashalik Mons-style "Sacrifice a Goblin" -- a cost naming a FILTER rather than "this permanent"
+    // (cost.sacrifice) or a real player choice (no target-choice-shaped cost exists in this engine).
+    // Auto-picks the first qualifying creature OTHER than the activating card itself, falling back to
+    // the card itself only when it's the sole match -- a disclosed simplification (real Magic lets
+    // you choose), chosen to avoid destroying the activating permanent whenever a better option exists.
+    let autoSacrificeCard = null;
+    if (cost.autoSacrificeFilter) {
+      const filter = cost.autoSacrificeFilter;
+      const candidates = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "creature" && (filter === "creature" || (c.type || "").toLowerCase().includes(filter)));
+      autoSacrificeCard = candidates.find((c) => c.id !== card.id) || candidates.find((c) => c.id === card.id) || null;
+      if (!autoSacrificeCard) { socket.emit("actionError", `You have no ${filter === "creature" ? "creature" : filter} to sacrifice.`); return; }
+    }
 
     if (cost.tap) {
       if (card.tapped) { socket.emit("actionError", `${card.name} is already tapped.`); return; }
@@ -5579,6 +5827,11 @@ io.on("connection", (socket) => {
       // this: sendToGraveyardInternal only removes it from lobby.cards, it doesn't mutate the object.
       fireDeathTriggers(lobby, card);
       sendToGraveyardInternal(lobby, card);
+    }
+    if (autoSacrificeCard) {
+      pushLog(lobby, `${p.name} sacrifices ${autoSacrificeCard.name || "a creature"} to pay the cost`);
+      fireDeathTriggers(lobby, autoSacrificeCard);
+      sendToGraveyardInternal(lobby, autoSacrificeCard);
     }
     if (ability.manaAbility) {
       // Real Magic (CR 605): a mana ability never uses the stack -- it resolves the instant it's
