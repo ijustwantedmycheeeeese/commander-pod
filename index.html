@@ -342,6 +342,7 @@
       <form id="login-form" autocomplete="on" onsubmit="submitAuth(); return false;">
         <input type="text" id="auth-username" name="username" autocomplete="username" placeholder="Username">
         <input type="password" id="auth-password" name="password" autocomplete="current-password" placeholder="Password">
+        <input type="text" id="auth-serverkey" name="serverkey" autocomplete="off" placeholder="Access Key (if required)">
         <div id="auth-error"></div>
         <div class="flex-row">
           <button type="submit" style="flex:1;">Log In</button>
@@ -358,6 +359,7 @@
       <form id="register-form" autocomplete="on" onsubmit="submitRegister(); return false;">
         <input type="text" id="register-username" name="username" autocomplete="username" placeholder="Username">
         <input type="password" id="register-password" name="new-password" autocomplete="new-password" placeholder="Password">
+        <input type="text" id="register-serverkey" name="serverkey" autocomplete="off" placeholder="Access Key (if required)">
         <div id="register-error"></div>
         <div class="flex-row">
           <button type="submit" style="flex:1;">Create Account</button>
@@ -1165,6 +1167,23 @@
     window.addEventListener("unhandledrejection", (e) => recordClientError(`Unhandled promise rejection: ${e.reason}`));
 
     const socket = io({ autoConnect: false });
+
+    // Server access key -- only meaningful when the server has ARCHON_ACCESS_KEY set (see
+    // server.js); otherwise it's ignored server-side and this is all a no-op. A ?key=... in the
+    // URL (the kind of link an admin would actually hand out) is saved locally and scrubbed from
+    // the address bar/history so it isn't left lying around in either.
+    function getServerKey() { return localStorage.getItem("archonServerKey") || ""; }
+    function setServerKey(k) {
+      if (k) localStorage.setItem("archonServerKey", k);
+      else localStorage.removeItem("archonServerKey");
+    }
+    (function initServerKeyFromUrl() {
+      const fromUrl = new URLSearchParams(location.search).get("key");
+      if (fromUrl) {
+        setServerKey(fromUrl);
+        history.replaceState(null, "", location.pathname);
+      }
+    })();
     const MANA_COLORS = { W: "#f8f6d8", U: "#0e68ab", B: "#2a2a2e", R: "#d3202a", G: "#00733e", C: "#c9c9c9" };
     const MANA_TEXT = { W: "#000", U: "#fff", B: "#fff", R: "#fff", G: "#fff", C: "#000" };
     function coloredPip(bg, fg, label) {
@@ -1184,19 +1203,21 @@
     // ---------------- auth ----------------
 
     function connectWithToken(t) {
-      socket.auth = { token: t };
+      socket.auth = { token: t, key: getServerKey() };
       socket.connect();
     }
 
     async function submitAuth() {
       const username = document.getElementById("auth-username").value.trim();
       const password = document.getElementById("auth-password").value;
+      const key = document.getElementById("auth-serverkey").value.trim();
       const errEl = document.getElementById("auth-error");
       errEl.style.color = "";
       errEl.innerText = "";
       if (!username || !password) { errEl.innerText = "Enter a username and password."; return; }
+      if (key) setServerKey(key);
       try {
-        const res = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+        const res = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password, key: getServerKey() }) });
         const data = await res.json();
         if (data.success) {
           localStorage.setItem("mtgToken", data.token);
@@ -1214,6 +1235,7 @@
       document.getElementById("register-screen").style.display = "flex";
       document.getElementById("register-username").value = "";
       document.getElementById("register-password").value = "";
+      document.getElementById("register-serverkey").value = getServerKey();
       const errEl = document.getElementById("register-error");
       errEl.style.color = "";
       errEl.innerText = "";
@@ -1228,12 +1250,14 @@
     async function submitRegister() {
       const username = document.getElementById("register-username").value.trim();
       const password = document.getElementById("register-password").value;
+      const key = document.getElementById("register-serverkey").value.trim();
       const errEl = document.getElementById("register-error");
       errEl.style.color = "";
       errEl.innerText = "";
       if (!username || !password) { errEl.innerText = "Enter a username and password."; return; }
+      if (key) setServerKey(key);
       try {
-        const res = await fetch("/api/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+        const res = await fetch("/api/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password, key: getServerKey() }) });
         const data = await res.json();
         if (data.success && data.pending) {
           // No session token -- new accounts wait for admin approval before they can log in
@@ -1356,6 +1380,8 @@
     socket.on("connect_error", () => {
       document.getElementById("auth-error").innerText = "Connection error — retrying...";
     });
+
+    document.getElementById("auth-serverkey").value = getServerKey();
 
     const savedToken = localStorage.getItem("mtgToken");
     if (savedToken) connectWithToken(savedToken);
