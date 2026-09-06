@@ -428,7 +428,32 @@ const CARD_ABILITIES = {
   "archon of cruelty": [
     { trigger: "etb", label: "Archon of Cruelty — target opponent sacrifices, discards, and loses 3 life; you draw and gain 3", requiresTarget: true, targetKind: "player", effects: [{ type: "targetPlayerSacrifices" }, { type: "targetPlayerDiscards", amount: 1 }, { type: "loseLife", amount: 3 }, { type: "drawCards", amount: 1 }, { type: "gainLife", target: "controller", amount: 3 }] },
     { trigger: "attack", label: "Archon of Cruelty — target opponent sacrifices, discards, and loses 3 life; you draw and gain 3", requiresTarget: true, targetKind: "player", effects: [{ type: "targetPlayerSacrifices" }, { type: "targetPlayerDiscards", amount: 1 }, { type: "loseLife", amount: 3 }, { type: "drawCards", amount: 1 }, { type: "gainLife", target: "controller", amount: 3 }] }
-  ]
+  ],
+  // Wave 12 gap-analysis batch.
+  // "When this Aura enters... Return enchanted creature card to the battlefield under your control
+  // and attach this Aura to it." See EFFECTS.reanimateAndAttachAsAura's own comment for what's
+  // disclosed (no sac-when-Aura-leaves linkage). Modeled as a plain etb trigger since this app routes
+  // ANY non-instant/sorcery spell (Auras included) onto the battlefield as a real permanent first,
+  // then fires its ETB triggers from there -- same as Mithril Coat's own ETB-attaches-itself shape.
+  "animate dead": [{ trigger: "etb", label: "Animate Dead — return target creature card from a graveyard to the battlefield under your control, attach as an Aura", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateAndAttachAsAura" }] }],
+  // "When this creature enters, create two 1/1 red Goblin creature tokens."
+  "beetleback chief": [{ trigger: "etb", label: "Beetleback Chief — create two Goblin tokens", requiresTarget: false, effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  // Magecraft's own creature-spell cousin -- same youCastSpell/spellTypeFilter mechanism, just
+  // filtered to "creature" instead of "instant"/"sorcery".
+  "beast whisperer": [{ trigger: "youCastSpell", spellTypeFilter: ["creature"], label: "Beast Whisperer — draw a card", requiresTarget: false, effects: [{ type: "drawCards", amount: 1 }] }],
+  // "Creatures your opponents control enter tapped" needs no table entry here -- see
+  // ENTERS_TAPPED_FOR_OPPONENTS. Only the life-gain half (the NEW fireOpponentCreatureEtbTriggers
+  // dispatch, the mirror image of the existing "you control" version) needs one.
+  "authority of the consuls": [{ trigger: "opponentCreatureEtb", label: "Authority of the Consuls — gain 1 life", requiresTarget: false, effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  // "When this creature enters, destroy all artifacts and enchantments. Put a +1/+1 counter on this
+  // creature for each permanent destroyed this way." See destroyAllMatching's own counterSelfAmount
+  // comment for how the dynamic count reaches addCountersToSelf.
+  "bane of progress": [{ trigger: "etb", label: "Bane of Progress — destroy all artifacts and enchantments, +1/+1 counter for each", requiresTarget: false, effects: [{ type: "destroyAllMatching", typeIncludes: ["artifact", "enchantment"], counterSelfAmount: true }] }],
+  // "When this creature enters or becomes monstrous, destroy target permanent." Only the ETB half is
+  // automated -- monstrosity itself (a whole activated-ability-driven counter/mode mechanic) doesn't
+  // exist anywhere in this engine, a disclosed simplification narrower than just this one card.
+  // Menace/trample need no table entry (KNOWN_KEYWORDS).
+  "alpha deathclaw": [{ trigger: "etb", label: "Alpha Deathclaw — destroy target permanent", requiresTarget: true, targetKind: "permanent", effects: [{ type: "destroyTarget" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -954,6 +979,24 @@ const SPELL_ABILITIES = {
   // Cyclonic Rift's own entries) plus the new proliferateAll effect (see its own comment for what's
   // simplified -- affects every counter/poison on the table, not a real per-target choice).
   "atomize": { label: "Atomize — destroy target permanent, proliferate", effects: [{ type: "destroyTarget" }, { type: "proliferateAll" }], requiresTarget: true, targetKind: "permanent" },
+  // "Add {R} for each creature you control."
+  "battle hymn": { label: "Battle Hymn — Add {R} for each creature you control", effects: [{ type: "addManaEqualToCreatureCount", color: "R" }] },
+  // "Search your library for up to three creature cards, put them into your graveyard, then
+  // shuffle." Three REAL, interactive searches (not an auto-pick -- which three creatures matters a
+  // lot for a reanimator deck) chained via thenEffects, same nested shape Myriad Landscape already
+  // established for its own "up to two" fetch. Cancelling any of the three stops the chain early,
+  // matching "up to three" rather than forcing all of them.
+  "buried alive": { label: "Buried Alive — search for up to three creature cards, put them into your graveyard", effects: [{ type: "tutorToHand", toGraveyard: true, typeFilter: "creature", thenEffects: [{ type: "tutorToHand", toGraveyard: true, typeFilter: "creature", thenEffects: [{ type: "tutorToHand", toGraveyard: true, typeFilter: "creature" }] }] }] },
+  // "Each player exiles all creature cards from their graveyard, then sacrifices all creatures they
+  // control, then puts all cards they exiled this way onto the battlefield." No targeting -- see
+  // EFFECTS.livingDeathAll's own comment for the exact ordering this follows.
+  "living death": { label: "Living Death — each player reanimates their graveyard creatures after sacrificing their board", effects: [{ type: "livingDeathAll" }] },
+  // "Choose two target creature cards in your graveyard. Sacrifice a creature. If you do, return the
+  // chosen cards to the battlefield tapped." Two sequential graveyard target choices (chained via
+  // victimizeChooseSecond, carrying the first pick's id forward as a plain extra field) followed by
+  // the actual sacrifice+reanimate -- see victimizeSacrificeAndReanimateBoth's own comment for the
+  // auto-picked sacrifice.
+  "victimize": { label: "Victimize — choose two creature cards in your graveyard, sacrifice a creature, return both tapped", effects: [{ type: "victimizeChooseSecond" }], requiresTarget: true, targetKind: "ownGraveyardCreature" },
   // Real modal spells, using the SAME `modes` mechanism Rip Apart/Rakdos Charm already established
   // above (mode picked via the pendingTargetChoices queue at cast time, then a real target choice
   // if that mode needs one) -- these aren't a new gap needing new infrastructure, just table entries
@@ -1573,6 +1616,87 @@ const EFFECTS = {
     broadcastPlayers(lobby); // the graveyard array just shrank
     fireEtbTriggers(lobby, card);
   },
+  // Animate Dead -- same core reanimation as reanimateFromGraveyard, plus actually attaching the
+  // Aura itself to the reanimated creature (so its own "Enchanted creature gets -1/-0" line applies
+  // automatically via the existing attachedBonusFor/equipEffectsFromText machinery, zero extra code
+  // needed for that part). Deliberately NOT modeled: "when this Aura leaves the battlefield, that
+  // creature's controller sacrifices it" -- no general "when THIS permanent leaves play, do X to
+  // something else" hook exists in this app (detachDependents only covers the opposite direction:
+  // a creature dying takes its own attached aura with it, not an aura leaving taking the creature).
+  // A disclosed simplification: the reanimated creature stays in play even if Animate Dead is later
+  // removed, rather than being sacrificed as the real card would require.
+  reanimateAndAttachAsAura(lobby, ctx, params) {
+    const found = findAndRemoveGraveyardEntry(lobby, params.chosenTargetId);
+    if (!found) return;
+    const card = spawnBattlefieldCard(lobby, { ...found.entry, owner: ctx.controllerId, zoneType: classifyType(found.entry.type) });
+    broadcastPlayers(lobby);
+    fireEtbTriggers(lobby, card);
+    const aura = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (aura) { aura.attachedTo = card.id; broadcastCard(lobby, aura); }
+  },
+  // Living Death -- "Each player exiles all creature cards from their graveyard, then sacrifices
+  // all creatures they control, then puts all cards they exiled this way onto the battlefield."
+  // No targeting at all (every player is affected identically), so this is one self-contained
+  // effect rather than a target-choice flow. Order matters and is followed exactly: graveyard
+  // creatures are snapshotted and REMOVED first, so newly-sacrificed creatures from step 2 don't
+  // get swept into the very reanimation this same spell just caused -- matches the real card's own
+  // sequencing (its own three clauses happen in that fixed order for every player at once).
+  livingDeathAll(lobby) {
+    const snapshots = {}; // playerId -> [entry, entry, ...] pulled from their graveyard before anything else happens
+    for (const pid in lobby.players) {
+      const p = lobby.players[pid];
+      const creatureEntries = (p.graveyard || []).filter((e) => (e.type || "").toLowerCase().includes("creature"));
+      p.graveyard = (p.graveyard || []).filter((e) => !creatureEntries.includes(e));
+      snapshots[pid] = creatureEntries;
+    }
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => {
+      fireDeathTriggers(lobby, c);
+      sendToGraveyardInternal(lobby, c);
+    });
+    for (const pid in snapshots) {
+      snapshots[pid].forEach((entry) => {
+        const card = spawnBattlefieldCard(lobby, { ...entry, owner: pid, zoneType: classifyType(entry.type) });
+        fireEtbTriggers(lobby, card);
+      });
+    }
+    broadcastPlayers(lobby);
+  },
+  // Victimize's second stage (after both graveyard targets are chosen -- see the ACTIVATED_ABILITIES-
+  // style two-step queueTargetChoice chain in its own CARD_ABILITIES entry) -- "Sacrifice a creature.
+  // If you do, return the chosen cards to the battlefield tapped." WHICH creature gets sacrificed to
+  // pay for this isn't a real choice the way it matters for something like Ashnod's Altar (you'd
+  // always rather keep your two freshly-reanimated threats than whatever you're feeding it), so this
+  // auto-picks the controller's own first creature -- same disclosed auto-pick precedent as
+  // Pashalik Mons/Ashnod's Altar's own cost-paying. If there's no creature at all to sacrifice, the
+  // whole effect fizzles (matching "if you do" -- the reanimation is conditional on the sacrifice
+  // actually happening), same CR-603.3c-style "no legal way to pay, nothing happens" precedent used
+  // throughout this app for optional/conditional costs.
+  victimizeSacrificeAndReanimateBoth(lobby, ctx, params) {
+    const sacrifice = Object.values(lobby.cards).find((c) => c.owner === ctx.controllerId && c.zoneType === "creature");
+    if (!sacrifice) return;
+    fireDeathTriggers(lobby, sacrifice);
+    sendToGraveyardInternal(lobby, sacrifice);
+    [params.firstEntryId, params.chosenTargetId].forEach((entryId) => {
+      const found = findAndRemoveGraveyardEntry(lobby, entryId);
+      if (!found) return;
+      const card = spawnBattlefieldCard(lobby, { ...found.entry, owner: ctx.controllerId, zoneType: classifyType(found.entry.type) });
+      card.tapped = true;
+      broadcastCard(lobby, card);
+      fireEtbTriggers(lobby, card);
+    });
+    broadcastPlayers(lobby);
+  },
+  // Victimize's first stage -- the first of the two graveyard cards has now been chosen
+  // (params.chosenTargetId), so queue the SECOND target choice, carrying the first pick's id along
+  // as a plain extra field (chooseTargetFor's baking step only ever ADDS chosenTargetId, so a
+  // pre-set field like this survives untouched into the next effect).
+  victimizeChooseSecond(lobby, ctx, params) {
+    queueTargetChoice(lobby, {
+      controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: "Victimize — choose the second creature card in your graveyard", targetKind: "ownGraveyardCreature",
+      effects: [{ type: "victimizeSacrificeAndReanimateBoth", firstEntryId: params.chosenTargetId }]
+    });
+  },
   // Reanimate -- same core reanimation as reanimateFromGraveyard, plus "you lose life equal to that
   // card's mana value," a genuinely dynamic cost this engine has nowhere else to source except the
   // reanimated card's own entry. Life loss is applied AFTER the creature is already on the
@@ -1838,11 +1962,18 @@ const EFFECTS = {
   // params.toTopOfLibrary (Vampiric Tutor: "...then shuffle and put that card on top") -- same
   // pending-choice flow as the plain hand-tutoring case, just a different final destination, see
   // the tutorCard handler.
+  // params.toGraveyard (Buried Alive: "search for up to three creature cards, put them into your
+  // graveyard") -- a third destination alongside hand/toTopOfLibrary, see the tutorCard handler.
+  // params.thenEffects chains a repeat search (Myriad Landscape's own chained-second-fetch shape,
+  // nested three deep here for "up to three" total picks) -- run by tutorCard once THIS pick
+  // resolves, same "bundle the follow-up, don't let it fire as a premature sibling effect" reasoning
+  // as scryN/searchLandTypes's own thenEffects. A player cancelling early (searchLibraryForHand's
+  // own Cancel) correctly stops the chain rather than forcing all three, matching "up to N".
   tutorToHand(lobby, ctx, params) {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
     if (params.lifeLoss) { applyLifeLoss(lobby, ctx.controllerId, params.lifeLoss); checkEliminations(lobby); }
-    p.pendingTutor = { typeFilter: params.typeFilter || null, toTopOfLibrary: !!params.toTopOfLibrary };
+    p.pendingTutor = { typeFilter: params.typeFilter || null, toTopOfLibrary: !!params.toTopOfLibrary, toGraveyard: !!params.toGraveyard, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter });
     broadcastPlayers(lobby);
@@ -2067,7 +2198,13 @@ const EFFECTS = {
   // (not zoneType, which folds artifact/enchantment together -- see classifyType's own comment) so
   // "destroy all enchantments" and "destroy all artifacts" can actually be told apart, cmcMin/cmcMax
   // filter by mana value. Same indestructible/regeneration handling as destroyAllCreatures.
+  // params.counterSelfAmount (Bane of Progress -- "put a +1/+1 counter on this creature for each
+  // permanent destroyed this way") -- counts only permanents ACTUALLY destroyed (skips indestructible
+  // ones and ones that regenerated instead, same as the real card's own "destroyed this way" wording
+  // would), then applies that many counters to ctx.sourceCard, reusing addCountersToSelf's own
+  // Hardened-Scales-aware math rather than duplicating it.
   destroyAllMatching(lobby, ctx, params) {
+    let destroyedCount = 0;
     Object.values(lobby.cards).filter((c) => {
       if (params.zoneTypeFilter && c.zoneType !== params.zoneTypeFilter) return false;
       const type = (c.type || "").toLowerCase();
@@ -2087,7 +2224,9 @@ const EFFECTS = {
       }
       fireDeathTriggers(lobby, c);
       sendToGraveyardInternal(lobby, c);
+      destroyedCount++;
     });
+    if (params.counterSelfAmount && destroyedCount > 0) EFFECTS.addCountersToSelf(lobby, ctx, { amount: destroyedCount });
   },
   // Pick Your Poison -- "each opponent sacrifices [a permanent matching filter] OF THEIR CHOICE."
   // WHICH one each opponent gives up is auto-picked (their own first qualifying match) rather than
@@ -2232,6 +2371,16 @@ const EFFECTS = {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
     (params.colors || []).forEach((c) => { if (["W", "U", "B", "R", "G", "C"].includes(c)) p.mana[c] = (p.mana[c] || 0) + 1; });
+    broadcastPlayers(lobby);
+  },
+  // Battle Hymn -- "Add {R} for each creature you control." A genuinely dynamic amount computed
+  // fresh at resolution (same "the effect just computes what it needs" precedent as
+  // createTokensEqualToTypeCountControlled and friends), not threaded in as a param.
+  addManaEqualToCreatureCount(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature").length;
+    if (n > 0) p.mana[params.color || "R"] = (p.mana[params.color || "R"] || 0) + n;
     broadcastPlayers(lobby);
   }
 };
@@ -3950,6 +4099,7 @@ function fireEtbTriggers(lobby, card) {
   checkMoxDiamondLandDiscard(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
+  fireOpponentCreatureEtbTriggers(lobby, card);
   // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
   // control." zoneType "mana" is this app's own bucket for every land (see classifyType), already
   // set on `card` by every one of this function's callers before they call it, so no separate
@@ -4059,7 +4209,7 @@ function checkMoxDiamondLandDiscard(lobby, card) {
 // spell, you may pay {W/B}...") is a genuinely different shape (an optional cost offered to
 // YOURSELF, not an opponent, unlike the pendingOptionalPayments engine built for Smothering
 // Tithe/Esper Sentinel/Rakdos) and isn't modeled here.
-const ENTERS_TAPPED_FOR_OPPONENTS = ["blind obedience"];
+const ENTERS_TAPPED_FOR_OPPONENTS = ["blind obedience", "authority of the consuls"];
 function applyEntersTappedByOpponentEffect(lobby, enteringCard) {
   if (enteringCard.tapped || !(enteringCard.zoneType === "creature" || enteringCard.zoneType === "artifact")) return;
   for (const id in lobby.cards) {
@@ -4114,6 +4264,21 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
         pushAbilityToStack(lobby, { sourceCard: c, controllerId: c.owner, label: ability.label, effects });
       }
     });
+  }
+}
+
+// Authority of the Consuls -- "Whenever a creature an opponent controls enters, you gain 1 life."
+// The mirror image of fireGlobalOtherCreatureEtbTriggers (which only ever matches the SAME
+// controller as the entering creature) -- this matches the OPPOSITE relationship instead. Kept as
+// its own small function rather than folding an "opponent" mode into that one, since Authority's
+// shape has none of the power/amountSource/keywordFilter machinery that function exists to support
+// and adding an unused option set there for one card isn't worth the complexity.
+function fireOpponentCreatureEtbTriggers(lobby, enteringCard) {
+  if (!lobby.turn.started || enteringCard.zoneType !== "creature") return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === enteringCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "opponentCreatureEtb").forEach((ability) => fireTrigger(lobby, c, ability));
   }
 }
 
@@ -6474,17 +6639,24 @@ io.on("connection", (socket) => {
       return;
     }
     p.library.splice(index, 1);
-    const toTop = p.pendingTutor.toTopOfLibrary;
+    const { toTopOfLibrary: toTop, toGraveyard, thenEffects, sourceCardId } = p.pendingTutor;
     shuffle(p.library);
     if (toTop) {
       p.library.unshift(entry);
       pushLog(lobby, `${p.name} searched their library and put a card on top`);
+    } else if (toGraveyard) {
+      p.graveyard.push(entry);
+      pushLog(lobby, `${p.name} searched their library for ${entry.name} and put it into their graveyard`);
     } else {
       spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
       pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
     }
     p.pendingTutor = null;
     broadcastPlayers(lobby);
+    if (thenEffects) {
+      const ctx = { controllerId: socket.id, sourceCard: sourceCardId ? { id: sourceCardId } : null };
+      thenEffects.forEach((e) => { const fn = EFFECTS[e.type]; if (fn) fn(lobby, ctx, e); });
+    }
   });
   // Answers a pending EFFECTS.scryN prompt. keepIndices is the FINAL top-to-bottom order (each a
   // real index into the original top-N slice) of cards being kept on top -- anything from that
