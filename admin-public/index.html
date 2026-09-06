@@ -29,7 +29,15 @@
     .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
     .badge.pending { background: #7a5a1f; color: #fff3d0; }
     .badge.approved { background: #2e5a2e; color: #d0ffd0; }
+    .badge.open { background: #7a5a1f; color: #fff3d0; }
+    .badge.closed { background: #2e5a2e; color: #d0ffd0; }
     #empty-note { color: #8a7a55; font-size: 13px; }
+    .ticket-row { padding: 10px 0; border-bottom: 1px solid #241c12; }
+    .ticket-row:last-child { border-bottom: none; }
+    .ticket-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    .ticket-card-name { flex: 1; font-weight: 600; }
+    .ticket-desc { font-size: 12px; color: #d8cba8; white-space: pre-wrap; margin: 4px 0; }
+    .ticket-meta { font-size: 11px; color: #a89a70; }
   </style>
 </head>
 <body>
@@ -51,6 +59,13 @@
       <h2>All Accounts</h2>
       <div id="all-list"></div>
     </div>
+    <div class="section">
+      <h2 style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Bug Reports</span>
+        <button onclick="exportOpenTickets()" style="text-transform:none;letter-spacing:normal;font-family:inherit;font-size:13px;">Export Open Tickets</button>
+      </h2>
+      <div id="tickets-list"></div>
+    </div>
   </div>
 
   <script>
@@ -71,6 +86,7 @@
       document.getElementById("login-box").style.display = "none";
       document.getElementById("admin-root").style.display = "block";
       loadUsers();
+      loadTickets();
     }
 
     async function adminFetch(url, options) {
@@ -128,6 +144,45 @@
       if (!confirm(`Delete account "${username}"? This can't be undone.`)) return;
       await adminFetch("/api/admin/delete", { method: "POST", body: JSON.stringify({ username }) });
       loadUsers();
+    }
+
+    async function loadTickets() {
+      let data;
+      try { data = await adminFetch("/api/admin/tickets"); } catch (e) { return; }
+      if (!data.success) return;
+      const listEl = document.getElementById("tickets-list");
+      if (!data.tickets.length) { listEl.innerHTML = `<div id="empty-note">No bug reports yet.</div>`; return; }
+      listEl.innerHTML = data.tickets.map((t) => `
+        <div class="ticket-row">
+          <div class="ticket-top">
+            <span class="ticket-card-name">${escapeHtml((t.card && t.card.name) || "Unknown card")}</span>
+            <span class="badge ${t.status}">${escapeHtml(t.status)}</span>
+            ${t.status === "open" ? `<button class="approve" onclick="closeTicket('${escapeHtml(t.id)}')">Close</button>` : ""}
+          </div>
+          <div class="ticket-desc">${escapeHtml(t.description)}</div>
+          <div class="ticket-meta">reported by ${escapeHtml(t.username)} — ${t.createdAt ? new Date(t.createdAt).toLocaleString() : ""}${t.closedAt ? ` — closed ${new Date(t.closedAt).toLocaleString()}` : ""}</div>
+        </div>`).join("");
+    }
+
+    async function closeTicket(id) {
+      await adminFetch("/api/admin/tickets/close", { method: "POST", body: JSON.stringify({ id }) });
+      loadTickets();
+    }
+
+    // Can't use a plain <a href> since auth here is a custom header, not a cookie -- fetch the file
+    // as a blob and drive the download through a synthetic link instead.
+    async function exportOpenTickets() {
+      const res = await fetch("/api/admin/tickets/export", { headers: { "X-Admin-Token": adminToken } });
+      if (res.status === 401) { adminToken = null; localStorage.removeItem("cpAdminToken"); document.getElementById("admin-root").style.display = "none"; document.getElementById("login-box").style.display = "block"; return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `open-tickets-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     }
 
     if (adminToken) showAdminRoot();
