@@ -53,9 +53,9 @@ If you're self-hosting your own ntfy server instead of using the public `ntfy.sh
 
 ## Locking the server down to an invite key
 
-Optional, off by default — registration and login stay open to anyone who reaches the server (subject to admin approval, above) unless you opt in. Set `ARCHON_ACCESS_KEY` on the `mtg-table` service to any value you want, and share it with only the people you're inviting: without it, nobody can register, log in, or join a game — the login page itself still loads (it does nothing without a valid session), but every account/session action is rejected.
+Optional, off by default — registration and login stay open to anyone who reaches the server (subject to admin approval, above) unless you opt in. Set `ARCHON_ACCESS_KEY` on the `mtg-table` service to any value you want: once set, register, login, and the socket connection all require an `X-Archon-Key` request header matching it, or they're rejected.
 
-Players enter the key in the "Access Key" field on the login or register screen, or you can hand out a link like `https://your-server:8087/?key=<your-key>` — visiting it saves the key locally and cleans it out of the address bar, so from then on it's remembered the same way a saved login is.
+This is deliberately invisible to the web login page — there's no key field in the browser UI, and the ordinary website can no longer authenticate at all once a key is set, since it has no way to send that header. It's meant to pair with the separate desktop (Electron) client, which is the thing that actually prompts for and sends the key; see that project's own docs.
 
 ## Lobby music
 

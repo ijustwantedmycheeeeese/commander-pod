@@ -11,11 +11,15 @@ const io = require("socket.io")(http);
 app.use(express.static("public"));
 app.use(express.json({ limit: "1mb" }));
 
-// Optional invite-key gate. Unset by default -- self-hosters (and this deployment, until an admin
-// opts in) get the exact same open-registration behavior as before. Set ARCHON_ACCESS_KEY to lock
-// the server down to people who have that key: it's checked on register, login, and the socket
-// handshake, so without it nobody can create an account, log in, or join a game -- only the static
-// login page itself (which does nothing without a valid session) is reachable.
+// Optional invite-key gate, read from a request header rather than anything the web login form
+// sends -- this is deliberately invisible to index.html/the browser login UI, which stays
+// completely unmodified. It exists for the separate desktop client (see the Electron project),
+// which collects a server URL + key from the player before ever connecting and attaches
+// X-Archon-Key to every request it makes. Unset by default: self-hosters (and this deployment,
+// until an admin opts in) get the exact same open-registration behavior as before. Once set,
+// register/login/the socket handshake all require the header -- in practice that means the
+// ordinary web login page can no longer authenticate at all, since it has no way to send it;
+// this is meant to be paired with the desktop client, not with public web access.
 const ACCESS_KEY = process.env.ARCHON_ACCESS_KEY || null;
 function keyOk(provided) { return !ACCESS_KEY || provided === ACCESS_KEY; }
 
@@ -4636,8 +4640,8 @@ async function resolveAndSetLibrary(lobby, socket, p, text) {
 // ---------------- HTTP API ----------------
 
 app.post("/api/register", (req, res) => {
-  const { username, password, key } = req.body || {};
-  if (!keyOk(key)) return res.status(403).json({ success: false, error: "Invalid or missing access key." });
+  if (!keyOk(req.headers["x-archon-key"])) return res.status(403).json({ success: false, error: "Invalid or missing access key." });
+  const { username, password } = req.body || {};
   if (!username || !password) return res.json({ success: false, error: "Username and password required." });
   if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) return res.json({ success: false, error: "Username must be 3-20 letters, numbers, or underscores." });
   if (UNSAFE_OBJECT_KEYS.has(username)) return res.json({ success: false, error: "That username isn't allowed." });
@@ -4657,8 +4661,8 @@ app.post("/api/register", (req, res) => {
 });
 
 app.post("/api/login", (req, res) => {
-  const { username, password, key } = req.body || {};
-  if (!keyOk(key)) return res.status(403).json({ success: false, error: "Invalid or missing access key." });
+  if (!keyOk(req.headers["x-archon-key"])) return res.status(403).json({ success: false, error: "Invalid or missing access key." });
+  const { username, password } = req.body || {};
   if (!username) return res.json({ success: false, error: "Incorrect username or password." });
   if (isLockedOut(username)) return res.json({ success: false, error: "Too many failed attempts. Try again in a few minutes." });
   // Fresh from disk -- same cross-process-freshness reasoning as /api/register above, but here it's
@@ -4841,7 +4845,7 @@ app.post("/api/upload", (req, res) => {
 // ---------------- Socket.IO ----------------
 
 io.on("connection", (socket) => {
-  const providedKey = socket.handshake.auth && socket.handshake.auth.key;
+  const providedKey = socket.handshake.headers && socket.handshake.headers["x-archon-key"];
   if (!keyOk(providedKey)) {
     socket.emit("authError", "Invalid or missing access key.");
     socket.disconnect(true);
