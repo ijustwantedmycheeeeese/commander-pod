@@ -3666,14 +3666,20 @@ function broadcastVoiceRoster(lobby) { io.to(lobby.id).emit("voiceRoster", Array
 
 function playersView(lobby, viewerId) {
   const out = {};
+  const started = lobby.turn.started;
   for (const id in lobby.players) {
     const p = lobby.players[id];
+    // Before the game actually starts, another player's loaded deck (their commander(s), and how
+    // many cards they've got) is hidden from everyone but themselves -- matches real-table etiquette
+    // of not browsing someone's decklist before the game begins. Once turn.started flips true this
+    // opens back up for everyone (a player's own view of THEIR OWN data is never masked either way).
+    const revealDeck = started || id === viewerId;
     out[id] = {
       name: p.name,
       color: p.color,
       avatar: (users[p.username] && users[p.username].avatar) || null,
       life: p.life,
-      cmdr: p.cmdr,
+      cmdr: revealDeck ? p.cmdr : null,
       cmdrDamage: p.cmdrDamage || {},
       eliminated: !!p.eliminated,
       poison: p.poison,
@@ -3694,10 +3700,13 @@ function playersView(lobby, viewerId) {
       mana: p.mana,
       landsPlayedThisTurn: p.landsPlayedThisTurn,
       landDropBonus: p.landDropBonus,
-      commanders: p.commanders,
+      commanders: revealDeck ? p.commanders : (p.commanders || []).map(() => null),
       graveyard: p.graveyard,
       exile: p.exile,
-      libraryCount: p.library.length,
+      // Still lets the pre-game "NO DECK" ready-check badge work (real table etiquette: you CAN see
+      // someone hasn't sleeved up yet) without revealing the real deck SIZE -- collapses any nonzero
+      // count down to a sentinel 1 instead of sending the exact number.
+      libraryCount: revealDeck ? p.library.length : (p.library.length > 0 ? 1 : 0),
       library: id === viewerId ? p.library : undefined,
       disconnected: !!p.disconnectedAt,
       disconnectedAt: p.disconnectedAt || null,
