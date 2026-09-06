@@ -6864,18 +6864,30 @@ io.on("connection", (socket) => {
     socket.to(lobby.id).emit("cursorMoved", { playerId: socket.id, x: cx, y: cy, boardOwner: String(boardOwner || "") });
   });
 
-  // Draws attention to a spot on the board -- right-click on empty board space, client-side (see
-  // the matching `contextmenu` listener). A light per-player cooldown (1s) keeps this from being
-  // spammed into an actual flashing nuisance; unlike cursorMove this DOES include the sender in the
-  // broadcast (so pinging gives you your own visual confirmation it went out) and DOES log it, since
-  // a ping is a deliberate, occasional attention-getter rather than continuous passive telemetry.
+  // Draws attention to a spot on the board -- middle-click anywhere on the table, including on top
+  // of a card (see the matching `mousedown` listener; right-click stays free for each card's own
+  // context menu). Rate-limited via a token bucket (PING_BUCKET_MAX tokens, refilling one per
+  // PING_REFILL_MS) rather than a flat per-second cooldown, so a player can burst up to
+  // PING_BUCKET_MAX pings back-to-back and only then has to wait for tokens to regenerate -- keeps
+  // this from being spammed into an actual flashing nuisance while still allowing quick bursts.
+  // Unlike cursorMove this DOES include the sender in the broadcast (so pinging gives you your own
+  // visual confirmation it went out) and DOES log it, since a ping is a deliberate, occasional
+  // attention-getter rather than continuous passive telemetry.
+  const PING_BUCKET_MAX = 10, PING_REFILL_MS = 1000;
   socket.on("ping", ({ x, y, boardOwner }) => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
-    if (!lobby.lastPingAt) lobby.lastPingAt = {};
+    if (!lobby.pingBucket) lobby.pingBucket = {};
     const now = Date.now();
-    if (now - (lobby.lastPingAt[socket.id] || 0) < 1000) return;
-    lobby.lastPingAt[socket.id] = now;
+    let bucket = lobby.pingBucket[socket.id];
+    if (!bucket) bucket = lobby.pingBucket[socket.id] = { tokens: PING_BUCKET_MAX, lastRefill: now };
+    const refillCount = Math.floor((now - bucket.lastRefill) / PING_REFILL_MS);
+    if (refillCount > 0) {
+      bucket.tokens = Math.min(PING_BUCKET_MAX, bucket.tokens + refillCount);
+      bucket.lastRefill += refillCount * PING_REFILL_MS;
+    }
+    if (bucket.tokens < 1) return;
+    bucket.tokens -= 1;
     const cx = Math.max(0, Math.min(100, Number(x) || 0));
     const cy = Math.max(0, Math.min(100, Number(y) || 0));
     const color = p.cursorColor || p.color || "#f0e6c8";

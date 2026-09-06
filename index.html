@@ -721,7 +721,7 @@
           <li><strong>Combat</strong>: on your turn's Combat phase, click "Declare Attackers" to pick creatures and who each attacks. A defender who needs to declare blockers gets a hard-to-miss centered banner (plus a sound cue) rather than just a small button — click it to open "Declare Blockers". Damage resolves automatically from real power/toughness (plus counters) — lethal damage sends a creature to the graveyard, unblocked damage hits the player. Commander damage is tracked per *commander*, not just a flat total — a breakdown appears under My Status listing each opposing commander that's hit you and how much, exactly like the real 21-damage-from-a-single-commander rule needs, and it stays even if that commander later leaves the battlefield. First strike, deathtouch, trample, double strike, and lifelink are all factored into damage automatically when granted via Manage Keywords or an equipment/aura bonus. A shared combat view pops up for everyone at the table once attackers are declared, showing each attacker next to its blocker (or the player it's headed for) side by side. Some cards tax declaring attackers against their controller (Propaganda and similar) — the total cost across every attacker you're declaring is checked and paid before any of them tap.</li>
           <li><strong>Board tabs</strong> switch whose board you're viewing. <strong>Library/Graveyard/Exile</strong> piles sit at the left of each board. <strong>Fit</strong> (next to the Zoom slider) auto-scales to frame the whole current board at once instead of eyeballing the slider.</li>
           <li><strong>Chat</strong> is in the sidebar; <strong>Voice Chat</strong> (experimental, peer-to-peer) is in the ⚙ Menu. <strong>Poison</strong> only shows up under My Status once it's actually relevant — an infect/toxic card in your own deck or anywhere visible on the battlefield.</li>
-          <li><strong>Right-click empty board space</strong> to ping it — a brief animated ring plus a sound, visible to everyone currently looking at that same board tab (⚙ Menu → Live Cursor also lets you set your own cursor's color and a custom icon, seen the same way).</li>
+          <li><strong>Middle-click anywhere on the table</strong> (cards included) to ping it — a brief animated ring plus a sound, visible to everyone currently looking at that same board tab. Up to 10 can be on screen at once, and you can burst up to 10 in a row before needing to slow down (⚙ Menu → Live Cursor also lets you set your own cursor's color and a custom icon, seen the same way).</li>
           <li><strong>Board Mat</strong> (⚙ Menu → Profile) sets a custom background image for your own board via image URL — Clear reverts to the default. Everyone viewing your board tab sees it. Save one under a name in the <strong>Account</strong> modal to reuse it on any table later instead of pasting the URL every time — pick it from the dropdown next to Set/Clear and hit Apply. The <strong>Zone Opacity</strong> slider (same Settings panel) controls how solid the creature/artifact/mana/hand zone fills look, if a busy mat makes them hard to pick out -- piles aren't affected by it.</li>
           <li>The active player's name shows a small elapsed-time readout once their turn's been going a while, purely informational — nothing is ever auto-passed or forced. Casting, combat damage, and a trigger waiting on your target all play a short sound cue; volume for each is adjustable in Settings, same panel as the music slider.</li>
           <li><strong>Account</strong> (Main Menu, or ⚙ Menu → Profile → Account Settings) is where account-wide preferences live, separate from the per-table nickname field: an avatar (by image URL, shown next to your color dot in the Players panel), a default nickname used every time you join a new table, and a change-password form. These persist across every table, unlike the per-table nickname override.</li>
@@ -4336,15 +4336,15 @@
     });
 
     // ---------------- ping (draw the table's attention to a spot) ----------------
-    // Right-click on empty board space -- deliberately NOT bound on top of a .card (its own
-    // oncontextmenu already owns right-click there for the action menu, and stopping this listener
-    // from ALSO firing needs an explicit check since a card's own preventDefault doesn't stop the
-    // event from bubbling up here too).
-    document.getElementById("table-wrapper").addEventListener("contextmenu", (e) => {
-      if (e.target.closest(".card")) return;
+    // Middle-click anywhere on the table, including directly on top of a card -- right-click is
+    // deliberately left alone since each card's own oncontextmenu already owns it for the action
+    // menu. preventDefault fires unconditionally on any middle-click inside the wrapper (not just
+    // when a ping actually lands) so the browser's native middle-click autoscroll never kicks in.
+    document.getElementById("table-wrapper").addEventListener("mousedown", (e) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
       const pos = playmatRelativePosition(e);
       if (!pos) return;
-      e.preventDefault();
       socket.emit("ping", { x: pos.x, y: pos.y, boardOwner: activeBoardOwner });
     });
     socket.on("pinged", ({ x, y, boardOwner, color, name }) => {
@@ -4352,15 +4352,32 @@
       renderPing(x, y, color, name);
       playPingCue();
     });
+    // Caps how many ping markers can be on screen at once (across everyone, not per-player) --
+    // the server's own token bucket already limits how fast one player can fire pings, but this
+    // caps the OTHER runaway case: several different players pinging in the same stretch of time.
+    // The oldest marker is cleared out early (its timer cancelled) to make room for an 11th.
+    const MAX_VISIBLE_PINGS = 10;
+    const activePings = [];
     function renderPing(x, y, color, name) {
       const layer = document.getElementById("cursor-layer");
+      if (activePings.length >= MAX_VISIBLE_PINGS) {
+        const oldest = activePings.shift();
+        clearTimeout(oldest.timer);
+        oldest.el.remove();
+      }
       const el = document.createElement("div");
       el.className = "board-ping";
       el.style.left = x + "%";
       el.style.top = y + "%";
       el.innerHTML = `<div class="board-ping-ring" style="border-color:${color};"></div><div class="board-ping-ring board-ping-ring-2" style="border-color:${color};"></div><div class="remote-cursor-label" style="background:${color};">${escapeHtml(name || "?")}</div>`;
       layer.appendChild(el);
-      setTimeout(() => el.remove(), 1500);
+      const entry = { el, timer: null };
+      entry.timer = setTimeout(() => {
+        el.remove();
+        const idx = activePings.indexOf(entry);
+        if (idx !== -1) activePings.splice(idx, 1);
+      }, 1500);
+      activePings.push(entry);
     }
     function playPingCue() { playTone(740, 0.12, "sine", sfxVolumeTarget); setTimeout(() => playTone(990, 0.15, "sine", sfxVolumeTarget), 90); }
     function renderOneCursor(playerId) {
