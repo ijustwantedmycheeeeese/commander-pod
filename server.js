@@ -71,6 +71,14 @@ const MATS_FILE = DATA_DIR + "/mats.json";
 const PILE_MATS_FILE = DATA_DIR + "/pile_mats.json";
 const CARD_ARCHIVE_FILE = DATA_DIR + "/card_archive.json";
 const COLLECTION_FILE = DATA_DIR + "/collection.json";
+// Bug-report tickets -- read/written directly by admin-server.js too (same shared DATA_DIR volume,
+// same "separate process, same file" pattern users.json already uses for account approval). Since
+// the admin can close a ticket from that completely separate process while this one keeps running,
+// `tickets` is re-read fresh from disk right before every use (see submitTicket/getMyTickets) rather
+// than trusted as a long-lived in-memory copy -- the exact same "an admin's edit must be honored on
+// the very next relevant action, not whenever this process happens to restart" reasoning already
+// applied to users.json in the login/register handlers.
+const TICKETS_FILE = DATA_DIR + "/tickets.json";
 let users = loadJSON(USERS_FILE, {});
 let decks = loadJSON(DECKS_FILE, {});
 let mats = loadJSON(MATS_FILE, {}); // username -> { matName: url } -- account-wide, unlike the per-table active boardMat
@@ -6986,6 +6994,41 @@ io.on("connection", (socket) => {
   // Deck Editor can offer "add from what I already have elsewhere" instead of retyping/pasting a
   // full list every time. Independent of the "I own this" collection above -- this reads real
   // saved decklists, not the ownership checklist (see the two-separate-things scoping decision).
+  // ---- bug-report tickets (read/closed from the separate admin panel, see admin-server.js) ----
+
+  // Only the display-relevant fields, capped and sanitized the same way every other user-controlled
+  // card-shaped payload in this file is (toEntry/spawnBattlefieldCard/toggleCollectionCard all follow
+  // this same "just enough to render it back, nothing trusted verbatim" pattern) -- the client sends
+  // whatever card/entry object it already has on hand (a battlefield card, a hand card, a graveyard/
+  // library/exile row, or a stack item all have slightly different shapes), so this can't assume a
+  // single fixed shape and just pulls out the fields that exist.
+  function sanitizeTicketCardSnapshot(raw) {
+    const c = raw || {};
+    return {
+      name: sanitizeCardStr(c.name, 200), type: sanitizeCardStr(c.type || "", 100), manaCost: sanitizeCardStr(c.manaCost || "", 50),
+      text: sanitizeCardStr(c.text || "", 3000), power: c.power !== undefined ? sanitizeCardStr(String(c.power), 20) : null,
+      toughness: c.toughness !== undefined ? sanitizeCardStr(String(c.toughness), 20) : null,
+      keywords: Array.isArray(c.keywords) ? c.keywords.slice(0, 30).map((k) => sanitizeCardStr(k, 40)) : [],
+      img: sanitizeImgUrl(c.img), zoneType: sanitizeCardStr(c.zoneType || "", 30),
+      tapped: !!c.tapped, faceDown: !!c.faceDown, counters: typeof c.counters === "number" ? c.counters : 0
+    };
+  }
+  socket.on("submitTicket", ({ cardSnapshot, description } = {}) => {
+    const desc = sanitizeCardStr(description, 2000).trim();
+    if (!desc) { socket.emit("actionError", "Describe the bug before submitting."); return; }
+    const tickets = loadJSON(TICKETS_FILE, []);
+    tickets.unshift({
+      id: "t_" + Date.now() + "_" + randInt(100000), username, card: sanitizeTicketCardSnapshot(cardSnapshot),
+      description: desc, status: "open", createdAt: Date.now(), closedAt: null
+    });
+    saveJSON(TICKETS_FILE, tickets);
+    socket.emit("ticketSubmitted");
+  });
+  socket.on("getMyTickets", () => {
+    const tickets = loadJSON(TICKETS_FILE, []);
+    socket.emit("myTickets", tickets.filter((t) => t.username === username));
+  });
+
   socket.on("getCardPool", () => {
     const seen = {};
     const pool = [];

@@ -28,6 +28,17 @@ function saveUsers(users) {
   try { fs.writeFileSync(USERS_FILE, JSON.stringify(users)); } catch (e) { console.error("Failed to save " + USERS_FILE, e); }
 }
 
+// Same shared-file, always-read-fresh pattern as users.json above -- server.js writes a new ticket
+// on submitTicket and re-reads this file on every getMyTickets, so a ticket this admin closes here
+// must be visible there on that very next read, not whenever server.js happens to restart.
+const TICKETS_FILE = DATA_DIR + "/tickets.json";
+function loadTickets() {
+  try { return JSON.parse(fs.readFileSync(TICKETS_FILE, "utf8")); } catch (e) { return []; }
+}
+function saveTickets(tickets) {
+  try { fs.writeFileSync(TICKETS_FILE, JSON.stringify(tickets)); } catch (e) { console.error("Failed to save " + TICKETS_FILE, e); }
+}
+
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString("hex");
 }
@@ -123,6 +134,32 @@ app.post("/api/admin/delete", requireAdmin, (req, res) => {
   delete users[username];
   saveUsers(users);
   res.json({ success: true });
+});
+
+// Newest first, same ordering choice as /api/admin/users -- the operator wants to see what just
+// came in without scrolling.
+app.get("/api/admin/tickets", requireAdmin, (req, res) => {
+  const tickets = loadTickets().slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  res.json({ success: true, tickets });
+});
+
+app.post("/api/admin/tickets/close", requireAdmin, (req, res) => {
+  const { id } = req.body || {};
+  const tickets = loadTickets();
+  const ticket = tickets.find((t) => t.id === id);
+  if (!ticket) return res.json({ success: false, error: "No such ticket." });
+  ticket.status = "closed";
+  ticket.closedAt = Date.now();
+  saveTickets(tickets);
+  res.json({ success: true });
+});
+
+// Only OPEN tickets -- this is meant to be handed off as "here's what's still unfixed," not a full
+// history dump, per how the operator described the workflow (pull open/unfixed tickets into a file).
+app.get("/api/admin/tickets/export", requireAdmin, (req, res) => {
+  const open = loadTickets().filter((t) => t.status === "open").sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  res.setHeader("Content-Disposition", `attachment; filename="open-tickets-${Date.now()}.json"`);
+  res.json(open);
 });
 
 const PORT = process.env.ADMIN_PORT || 9091;

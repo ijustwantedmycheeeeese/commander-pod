@@ -404,6 +404,7 @@
         <div class="mm-label">Decks</div>
         <button onclick="openDeckEditor()">Deck Editor</button>
         <button class="secondary" onclick="openCollectionModal()">My Collection</button>
+        <button class="secondary" onclick="openMyTicketsModal()">My Tickets</button>
         <div class="mm-hint">Build or edit a deck — up to 99 cards, up to 2 commanders</div>
         <div id="deck-list" style="margin-top:10px;"></div>
         <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
@@ -646,6 +647,8 @@
       <button data-action="toLibrary">Return to Library (Top)</button>
       <hr>
       <button data-action="remove" style="color:#f87171;">Remove Permanently</button>
+      <hr data-action="reportBug">
+      <button data-action="reportBug">🐛 This Card Has a Bug</button>
     </div>
 
 
@@ -928,6 +931,7 @@
             <button class="secondary" onclick="openDeckEditor()">Deck Editor</button>
             <button class="secondary" onclick="openHelpModal()">? Help</button>
             <button class="secondary" onclick="openBugReportModal()" title="Copy diagnostic info to report a bug">🐛 Bug Report</button>
+            <button class="secondary" onclick="openMyTicketsModal()" title="See the status of bugs you've reported on specific cards">My Tickets</button>
             <button class="danger" onclick="concede()" title="Marks you eliminated -- your board stays on the table, you can keep watching, and the game continues for everyone else">Concede</button>
             <button class="secondary" onclick="showMainMenu()">Leave Table</button>
             <button class="secondary" onclick="logout()">Log Out</button>
@@ -1103,6 +1107,36 @@
         </form>
         <div id="account-password-status" style="font-size:12px;color:#a89a70;"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- Bug-report ticket submission -- same sibling-of-#app-root/#main-menu reasoning as account-modal:
+       triggered from a card's right-click menu, a zone-modal row, or a stack item, all of which only
+       exist in-game, but the modal itself needs no game state beyond the card snapshot it's given. -->
+  <div class="modal-overlay" id="report-ticket-modal">
+    <div class="modal-box" style="max-width:420px;">
+      <button class="modal-close-x" onclick="closeReportTicketModal()" title="Close">✕</button>
+      <h2>Report a Bug</h2>
+      <div id="report-ticket-card-preview" style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <img id="report-ticket-card-img" src="" style="width:44px;height:auto;border-radius:4px;display:none;">
+        <div id="report-ticket-card-name" style="font-weight:600;"></div>
+      </div>
+      <div class="mm-hint" style="margin-top:0;margin-bottom:6px;">Describe what went wrong -- this is sent to the admin along with a snapshot of this card as it currently appears.</div>
+      <textarea id="report-ticket-description" rows="5" placeholder="What happened, and what did you expect instead?" style="width:100%;margin-bottom:10px;"></textarea>
+      <div class="flex-row" style="margin-bottom:6px;">
+        <button onclick="submitReportTicket()">Submit</button>
+      </div>
+      <div id="report-ticket-status" style="font-size:12px;color:#a89a70;"></div>
+    </div>
+  </div>
+
+  <!-- "My Tickets" -- reachable both from the Main Menu (before joining any table) and the in-game
+       ⚙ Menu, same reasoning as account-modal/report-ticket-modal above. -->
+  <div class="modal-overlay" id="my-tickets-modal">
+    <div class="modal-box" style="max-width:480px;">
+      <button class="modal-close-x" onclick="closeMyTicketsModal()" title="Close">✕</button>
+      <h2>My Tickets</h2>
+      <div id="my-tickets-list"></div>
     </div>
   </div>
 
@@ -2432,6 +2466,11 @@
 
     // ---------------- stack / priority ----------------
 
+    function reportBugForStackItem(id) {
+      const c = currentStack.find((s) => s.id === id);
+      openReportTicketModal(c || { id });
+    }
+
     function renderStackState() {
       const panel = document.getElementById("stack-panel");
       const list = document.getElementById("stack-list");
@@ -2459,6 +2498,7 @@
             <img src="${escapeHtml(cardArtSrc(c))}" class="zone-card-thumb" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')" title="Click to see the full card">
             <div class="zone-card-name" style="cursor:pointer;" onclick="event.stopPropagation();openStackItemDetail('${c.id}')">${escapeHtml(c.name || "Unknown")}<div style="font-size:10px;color:#a89a70;">${subtitle}${i === 0 ? " — resolves next" : ""}</div></div>
             <button class="mini-btn" style="background:#7a1f1f;" onclick="event.stopPropagation();startCounterFlow('${c.id}')" title="${counterTitle}">Counter</button>
+            <button class="mini-btn" onclick="event.stopPropagation();reportBugForStackItem('${c.id}')" title="Report a bug with this card">🐛</button>
           </div>`;
         }).join("");
       }
@@ -2911,6 +2951,46 @@
       document.getElementById("account-modal").style.display = "flex";
     }
     function closeAccountModal() { document.getElementById("account-modal").style.display = "none"; }
+
+    // ---------------- bug-report tickets ----------------
+    let reportTicketCard = null;
+    function openReportTicketModal(card) {
+      reportTicketCard = card || {};
+      document.getElementById("report-ticket-description").value = "";
+      document.getElementById("report-ticket-status").innerText = "";
+      document.getElementById("report-ticket-card-name").innerText = reportTicketCard.name || "Unknown card";
+      const imgEl = document.getElementById("report-ticket-card-img");
+      if (reportTicketCard.img) { imgEl.src = reportTicketCard.img; imgEl.style.display = "block"; } else { imgEl.style.display = "none"; }
+      document.getElementById("report-ticket-modal").style.display = "flex";
+    }
+    function closeReportTicketModal() { document.getElementById("report-ticket-modal").style.display = "none"; }
+    function submitReportTicket() {
+      const description = document.getElementById("report-ticket-description").value;
+      if (!description.trim()) { document.getElementById("report-ticket-status").innerText = "Describe the bug before submitting."; return; }
+      socket.emit("submitTicket", { cardSnapshot: reportTicketCard, description });
+    }
+    socket.on("ticketSubmitted", () => { closeReportTicketModal(); });
+
+    function openMyTicketsModal() {
+      document.getElementById("my-tickets-modal").style.display = "flex";
+      document.getElementById("my-tickets-list").innerHTML = "<div style='color:#8a7a55;padding:10px;'>Loading...</div>";
+      socket.emit("getMyTickets");
+    }
+    function closeMyTicketsModal() { document.getElementById("my-tickets-modal").style.display = "none"; }
+    socket.on("myTickets", (tickets) => {
+      const list = document.getElementById("my-tickets-list");
+      if (!tickets || !tickets.length) { list.innerHTML = "<div style='color:#8a7a55;padding:10px;'>No tickets submitted yet.</div>"; return; }
+      list.innerHTML = tickets.map((t) => {
+        const statusColor = t.status === "open" ? "#d4af37" : "#5fae6a";
+        return `<div class="zone-card-row" style="align-items:flex-start;">
+          <div style="flex:1;">
+            <div style="font-weight:600;">${escapeHtml((t.card && t.card.name) || "Unknown card")} <span style="font-size:10px;color:${statusColor};text-transform:uppercase;">${escapeHtml(t.status)}</span></div>
+            <div style="font-size:12px;color:#a89a70;margin:4px 0;white-space:pre-wrap;">${escapeHtml(t.description)}</div>
+            <div style="font-size:10px;color:#6a5c3c;">${new Date(t.createdAt).toLocaleString()}</div>
+          </div>
+        </div>`;
+      }).join("");
+    });
     function saveAccountProfile() {
       const avatar = document.getElementById("account-avatar-url").value.trim();
       const defaultName = document.getElementById("account-default-name").value.trim();
@@ -3682,6 +3762,10 @@
     function zoneToBattlefield(zone, idx) { socket.emit("zoneToBattlefield", { zone, index: idx }); closeZoneModal(); }
     function zoneToHand(zone, idx) { socket.emit("zoneToHand", { zone, index: idx }); closeZoneModal(); }
     function commanderToCommandZone(zone, idx) { socket.emit("commanderToCommandZone", { zone, index: idx }); closeZoneModal(); }
+    // Backing array for the currently-open zone modal's rows, so per-row action buttons that need
+    // the full entry (not just a server-side index like zoneToBattlefield/zoneToHand) can look it up.
+    let zoneModalEntries = [];
+    function reportBugForZoneEntry(idx) { openReportTicketModal(zoneModalEntries[idx] || {}); }
 
     function openZoneModal(ownerId, zoneName) {
       const p = players[ownerId];
@@ -3714,6 +3798,7 @@
       const body = document.getElementById("zone-modal-body");
       body.innerHTML = "";
       zoneModalPreviewClear();
+      zoneModalEntries = list;
       if (fetching) {
         const cancelRow = document.createElement("div");
         cancelRow.style.cssText = "margin-bottom:10px;";
@@ -3767,6 +3852,7 @@
               actions += ` <button class="mini-btn" style="background:#7f9fd4;" onclick="chooseTargetFor('${entry.id}')">Target This</button>`;
             }
           }
+          actions += ` <button class="mini-btn" onclick="reportBugForZoneEntry(${idx})" title="Report a bug with this card">🐛</button>`;
           row.dataset.name = (entry.name || "").toLowerCase();
           row.innerHTML = `<img src="${escapeHtml(cardArtSrc(entry))}" class="zone-card-thumb"><div class="zone-card-name">${escapeHtml(entry.name)}</div><div class="zone-card-actions">${actions}</div>`;
           row.onmouseenter = () => zoneModalPreview(entry);
@@ -5196,6 +5282,7 @@
       contextMenu.querySelectorAll("button, hr").forEach((el) => {
         const action = el.dataset ? el.dataset.action : null;
         if (action === "target") { el.style.display = "block"; return; }
+        if (action === "reportBug") { el.style.display = "block"; return; }
         if (action === "play" || action === "freeCast") { el.style.display = (isMine && card.zoneType === "hand") ? "block" : "none"; return; }
         if (action === "toHand") { el.style.display = (isMine && card.zoneType !== "hand") ? "block" : "none"; return; }
         // Tap/flip/counters only make sense for a card that's actually on the battlefield --
@@ -5266,6 +5353,7 @@
           if (action === "toExile") socket.emit("toExile", activeCardId);
           if (action === "toLibrary") socket.emit("toLibraryTop", activeCardId);
           if (action === "remove") socket.emit("removeCard", activeCardId);
+          if (action === "reportBug") { const c = allCards[activeCardId]; openReportTicketModal(c || { id: activeCardId }); }
         }
         contextMenu.style.display = "none";
         activeCardId = null;
