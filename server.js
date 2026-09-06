@@ -2615,6 +2615,10 @@ function spliceFromTurnOrder(lobby, socketId) {
   const idx = turn.order.indexOf(socketId);
   const wasPriorityHolder = lobby.priority.holderId === socketId;
   const wasLastActor = lobby.priority.lastActorId === socketId;
+  // Captured BEFORE the splice below (which shifts indices around) -- see
+  // forceEndOfTurnForElimination's own comment for why a departing ACTIVE player needs their turn
+  // ended right here, not left silently mid-phase for whoever slides into the same activeIndex.
+  const wasActivePlayer = turn.started && idx !== -1 && idx === turn.activeIndex;
   if (idx !== -1) {
     turn.order.splice(idx, 1);
     if (turn.order.length === 0) turn.started = false;
@@ -2628,6 +2632,9 @@ function spliceFromTurnOrder(lobby, socketId) {
     if (wasPriorityHolder) lobby.priority.holderId = turn.order[idx % turn.order.length];
     if (wasLastActor) lobby.priority.lastActorId = lobby.priority.holderId;
   }
+  // Only forced when the stack is empty -- see forceEndOfTurnForElimination's own comment for why
+  // a pending stack item makes this too risky to force through automatically.
+  if (wasActivePlayer && turn.order.length > 0 && lobby.stack.length === 0) forceEndOfTurnForElimination(lobby);
 }
 
 // Not touched by a normal disconnect/leave (removePlayerFromLobby never cleaned this up either --
@@ -4954,6 +4961,28 @@ function shouldAutoAdvance(lobby) {
 function advancePhase(lobby) {
   advanceOnePhase(lobby);
   while (shouldAutoAdvance(lobby)) advanceOnePhase(lobby);
+}
+
+// CR 800.4a: when a player leaves the game (concedes, is eliminated by life/damage, or disconnects)
+// DURING THEIR OWN TURN, that turn simply ends right there and the next player begins a full fresh
+// turn at Untap -- not "the same phase, just now attributed to someone else." Before this existed,
+// spliceFromTurnOrder correctly slid the next player into the departing player's activeIndex slot,
+// but left turn.phase exactly where it was -- so the new active player got dropped straight into
+// whatever phase the game happened to be in (Main 2, say) with their lands never untapped, no card
+// drawn, and landsPlayedThisTurn/attackedThisTurn never reset. Reported as "on concede, next
+// player's untap doesn't trigger."
+// Reuses advanceOnePhase's own turn-wraparound branch instead of duplicating its logic:
+// pre-decrementing activeIndex here means that branch's own "+1 % length" lands back on the
+// player spliceFromTurnOrder already correctly positioned, so setting phase to "End Step" and
+// calling advancePhase (the exact same helper every normal turn transition already uses) produces
+// a real, fully normal new-turn transition, auto-skipping Untap/Upkeep/Draw exactly like any other
+// turn start.
+function forceEndOfTurnForElimination(lobby) {
+  const turn = lobby.turn;
+  if (!turn.started || turn.order.length === 0) return;
+  turn.activeIndex = (turn.activeIndex - 1 + turn.order.length) % turn.order.length;
+  turn.phase = "End Step";
+  advancePhase(lobby);
 }
 
 // Turn 1's Untap/Upkeep/Draw auto-advance (see advanceOnePhase's Draw-phase comment for why the
