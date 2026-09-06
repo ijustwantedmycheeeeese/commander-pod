@@ -461,7 +461,22 @@ const CARD_ABILITIES = {
   // automated -- monstrosity itself (a whole activated-ability-driven counter/mode mechanic) doesn't
   // exist anywhere in this engine, a disclosed simplification narrower than just this one card.
   // Menace/trample need no table entry (KNOWN_KEYWORDS).
-  "alpha deathclaw": [{ trigger: "etb", label: "Alpha Deathclaw — destroy target permanent", requiresTarget: true, targetKind: "permanent", effects: [{ type: "destroyTarget" }] }]
+  "alpha deathclaw": [{ trigger: "etb", label: "Alpha Deathclaw — destroy target permanent", requiresTarget: true, targetKind: "permanent", effects: [{ type: "destroyTarget" }] }],
+  // Wave 13 gap-analysis batch.
+  // Raid -- "At the beginning of your end step, if you attacked this turn, create a 1/1 red Goblin
+  // creature token." Reuses the existing "endStep" global trigger (built for Windcrag Siege's own
+  // upkeep trigger, equally generic for any phase); condition reads the new attackedThisTurn flag
+  // (see declareAttackers) rather than lobby.combat.attackers, which is already reset by End Step.
+  "searslicer goblin": [{ trigger: "endStep", label: "Searslicer Goblin — Raid: create a Goblin token", condition: (c, lobby) => { const p = lobby.players[c.owner]; return !!(p && p.attackedThisTurn); }, requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  // "At the beginning of combat on your turn, create a 1/1 red Goblin creature token. That token
+  // attacks this combat if able." New "beginningOfCombat" global trigger (see advanceOnePhase),
+  // generic for any future card with this timing. "Other Goblins you control have haste" needs no
+  // table entry -- already generic (anthemKeywordsFromText's type-filtered branch). NOT automated:
+  // the created token being forced to attack (no "must attack" enforcement for a single specific
+  // creature exists in this engine, only Kardur, Doomscourge's table-wide forced-attack shape) and
+  // the entire Max Speed subsystem ("Start your engines!", the {T} ability) -- this app tracks no
+  // concept of speed at all, a disclosed gap wider than just this one card.
+  "howlsquad heavy": [{ trigger: "beginningOfCombat", label: "Howlsquad Heavy — create a Goblin token", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -736,7 +751,13 @@ const ACTIVATED_ABILITIES = {
   // two units of mana from one activation, same reasoning as Sol Ring/signets/Temple of the False
   // God. Cost-paying (including autoSacrificeFilter) always runs before the manaAbility/stack branch
   // check, so the two features already compose correctly with no extra wiring.
-  "ashnod's altar": [{ cost: { autoSacrificeFilter: "creature" }, manaAbility: true, label: "Ashnod's Altar — Sacrifice a creature: Add {C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C"] }] }]
+  "ashnod's altar": [{ cost: { autoSacrificeFilter: "creature" }, manaAbility: true, label: "Ashnod's Altar — Sacrifice a creature: Add {C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C"] }] }],
+  // Wave 13 gap-analysis batch.
+  // "{1}, {T}: Untap target creature." The static "you may activate abilities of creatures you
+  // control as though those creatures had haste" half needs no table entry -- see
+  // canActivateAbilitiesAsThoughHaste, checked directly in the activateAbility handler's own
+  // summoning-sickness gate.
+  "thousand-year elixir": [{ cost: { mana: "{1}", tap: true }, label: "Thousand-Year Elixir — untap target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "untapTarget" }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1041,7 +1062,23 @@ const SPELL_ABILITIES = {
   // to the bottom approximates "shuffle" well enough) -- a disclosed simplification, not an exact
   // match to Ponder's own wording.
   "preordain": { label: "Preordain — scry 2, then draw a card", effects: [{ type: "scryN", amount: 2, thenEffects: [{ type: "drawCards", amount: 1 }] }] },
-  "ponder": { label: "Ponder — look at the top 3, reorder or send some to the bottom, then draw a card", effects: [{ type: "scryN", amount: 3, thenEffects: [{ type: "drawCards", amount: 1 }] }] }
+  "ponder": { label: "Ponder — look at the top 3, reorder or send some to the bottom, then draw a card", effects: [{ type: "scryN", amount: 3, thenEffects: [{ type: "drawCards", amount: 1 }] }] },
+  // Wave 13 gap-analysis batch.
+  // "Destroy target tapped creature. You gain 1 life for each creature you control with flying."
+  // New "tappedCreature" targetKind (see index.html's targetKindMatchesCard) -- the first card in
+  // this app needing a target restricted by its CURRENT tapped state rather than its type/ownership.
+  "aerial assault": { label: "Aerial Assault — destroy target tapped creature, gain 1 life per creature you control with flying", effects: [{ type: "destroyTargetGainLifePerFlying" }], requiresTarget: true, targetKind: "tappedCreature" },
+  // Real modal spell, same "choose one" mechanism as Abrade/Rakdos Charm above. Its indestructible
+  // and double-strike modes both reuse grantTemporaryKeyword (see its own comment) -- a real "until
+  // end of turn" grant, not the permanent-grant simplification older cards in this file used before
+  // that mechanism existed. New "playerOrPlaneswalker" targetKind (see index.html's
+  // targetKindMatchesCard) for the burn mode -- EFFECTS.damageTarget already handles a player id or
+  // a card id generically, so no new effect logic was needed there, only client-side legality.
+  "boros charm": { label: "Boros Charm — choose one", modes: [
+    { label: "Boros Charm — deal 4 damage to target player or planeswalker", requiresTarget: true, targetKind: "playerOrPlaneswalker", effects: [{ type: "damageTarget", amount: 4 }] },
+    { label: "Boros Charm — permanents you control gain indestructible until end of turn", requiresTarget: false, effects: [{ type: "grantIndestructibleToAllYours" }] },
+    { label: "Boros Charm — target creature gains double strike until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Double strike" }] }
+  ] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -1366,6 +1403,37 @@ const EFFECTS = {
     }
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
+  },
+  // Aerial Assault -- "Destroy target tapped creature. You gain 1 life for each creature you
+  // control with flying." The life gain is unconditional (not "if it was destroyed"), so this just
+  // reuses destroyTarget as-is for the destroy half rather than duplicating its
+  // indestructible/regeneration handling.
+  destroyTargetGainLifePerFlying(lobby, ctx, params) {
+    EFFECTS.destroyTarget(lobby, ctx, params);
+    const flyingCount = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying")).length;
+    if (flyingCount > 0) applyLifeGain(lobby, ctx.controllerId, flyingCount);
+  },
+  // Thousand-Year Elixir's activated ability -- a plain targeted untap, no card in this app's
+  // vocabulary needed one before now.
+  untapTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card || !card.tapped) return;
+    card.tapped = false;
+    broadcastCard(lobby, card);
+  },
+  // Boros Charm's "permanents you control gain indestructible until end of turn" mode -- applies
+  // grantTemporaryKeyword (see its own comment) to every permanent the controller has, not just one.
+  grantIndestructibleToAllYours(lobby, ctx, params) {
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack") grantTemporaryKeyword(lobby, c, "Indestructible");
+    });
+  },
+  // The single-target counterpart to grantIndestructibleToAllYours -- "target creature gains X until
+  // end of turn" (Boros Charm's double strike mode), reusable for any future single-target
+  // temporary-keyword grant.
+  grantTemporaryKeywordToTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (card) grantTemporaryKeyword(lobby, card, params.keyword);
   },
   // Beast Within / Generous Gift -- "Destroy target permanent. Its controller creates a 3/3 green
   // [X] creature token." The token goes to the DESTROYED permanent's own controller, not the
@@ -1880,6 +1948,12 @@ const EFFECTS = {
   // on the stack), not a card in play -- validated as such by resolveChosenTarget's "spell" targetKind
   // before this ever runs. Shares its removal logic with the manual Counter button (counterStackItem).
   counterTargetSpell(lobby, ctx, params) {
+    // Rhythm of the Wild and its functional cousins -- see isProtectedFromCountering's own comment.
+    // The spell survives untouched on the stack (a real "can't be countered" spell just keeps
+    // resolving normally later), not sent to the graveyard the way a fizzled/no-legal-target effect
+    // would be.
+    const pending = lobby.stack.find((s) => s.id === params.chosenTargetId);
+    if (isProtectedFromCountering(lobby, pending)) { pushLog(lobby, `${pending.name || "That spell"} can't be countered.`); return; }
     const item = removeStackItem(lobby, params.chosenTargetId);
     if (!item) return;
     const owner = lobby.players[item.owner];
@@ -1894,6 +1968,8 @@ const EFFECTS = {
   // downside to always taking it" simplification this app applies to other purely-beneficial
   // optional effects elsewhere, rather than building a real opt-out prompt for one clause.
   counterTargetSpellDelayedDraws(lobby, ctx, params) {
+    const pendingDenial = lobby.stack.find((s) => s.id === params.chosenTargetId);
+    if (isProtectedFromCountering(lobby, pendingDenial)) { pushLog(lobby, `${pendingDenial.name || "That spell"} can't be countered.`); return; }
     const item = removeStackItem(lobby, params.chosenTargetId);
     if (!item) return;
     const owner = lobby.players[item.owner];
@@ -1909,6 +1985,8 @@ const EFFECTS = {
   // same "capture the other player's identity before removal" shape as
   // destroyTargetCreateTokenForController.
   counterTargetSpellCreateTokenForController(lobby, ctx, params) {
+    const pendingSwan = lobby.stack.find((s) => s.id === params.chosenTargetId);
+    if (isProtectedFromCountering(lobby, pendingSwan)) { pushLog(lobby, `${pendingSwan.name || "That spell"} can't be countered.`); return; }
     const item = removeStackItem(lobby, params.chosenTargetId);
     if (!item) return;
     const owner = lobby.players[item.owner];
@@ -3159,6 +3237,62 @@ function anthemKeywordsFromText(text) {
   if (m) return { keywords: parseKeywordList(m[2]), includesSelf: true, keywordFilter: null, typeFilter: m[1].toLowerCase() };
   return { keywords: [], includesSelf: false, keywordFilter: null };
 }
+// Goblin Warchief-style "[Type] spells you cast cost {N} less to cast" -- pure text-scan (no fixed
+// name list, same precedent as dependsOnCommanderColorIdentity), matched against the spell's own
+// type line at cast time. Only ever reduces GENERIC mana -- real cost reduction never touches
+// colored pips unless the text says so explicitly, which none of this app's seeded cards do.
+function spellCostReductionFor(lobby, ownerId, card) {
+  let reduction = 0;
+  const typeLower = (card.type || "").toLowerCase();
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    const m = (c.text || "").match(/(\w+) spells you cast cost \{(\d+)\} less to cast/i);
+    if (m && typeLower.includes(m[1].toLowerCase())) reduction += parseInt(m[2], 10) || 0;
+  }
+  return reduction;
+}
+// Rhythm of the Wild-style "Creature spells you control can't be countered" -- pure text scan, same
+// no-fixed-name-list precedent as spellCostReductionFor above. Scoped to the real automated counter
+// effects (EFFECTS.counterTargetSpell*) -- the manual ad-hoc Counter button stays a trusted freeform
+// tool like every other manual action in this app, so it's deliberately not checked here.
+function isProtectedFromCountering(lobby, stackItem) {
+  if (!stackItem || stackItem.kind === "ability") return false;
+  if (!(stackItem.type || "").toLowerCase().includes("creature")) return false;
+  return Object.values(lobby.cards).some((c) => c.owner === stackItem.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /creature spells you control can'?t be countered/i.test(c.text || ""));
+}
+// Riot (Rhythm of the Wild grants it to all your nontoken creatures; some cards also print it as
+// their own native keyword) -- real Magic lets the controller choose a +1/+1 counter or haste as it
+// enters. No per-ETB modal-choice UI exists for something that could fire on every single creature
+// ETB for the rest of the game (unlike Windcrag Siege's own mode, chosen ONCE via a repurposed
+// activated-ability button) -- auto-picks the +1/+1 counter, a permanent value with no timing
+// sensitivity, over haste, a disclosed simplification.
+function checkRiot(lobby, card) {
+  if (card.zoneType !== "creature") return;
+  const isToken = (card.type || "").toLowerCase().includes("token");
+  const hasNativeRiot = /\briot\b/i.test(card.text || "");
+  let granted = false;
+  if (!isToken) {
+    for (const id in lobby.cards) {
+      const c = lobby.cards[id];
+      if (c.owner !== card.owner || c.id === card.id || c.zoneType === "hand" || c.zoneType === "stack") continue;
+      if (/nontoken creatures you control have riot/i.test(c.text || "")) { granted = true; break; }
+    }
+  }
+  if (!hasNativeRiot && !granted) return;
+  const bonus = bonusCountersFor(lobby, card.owner);
+  card.counters = (card.counters || 0) + 1 + bonus;
+  broadcastCard(lobby, card);
+  pushLog(lobby, `${card.name || "A creature"} enters with a +1/+1 counter (riot)`);
+}
+// Thousand-Year Elixir-style "you may activate abilities of creatures you control as though those
+// creatures had haste" -- deliberately narrower than a real haste grant (effectiveKeywords), which
+// would also incorrectly let the creature ATTACK the turn it enters. Checked only at the one gate
+// this needs (summoning sickness for a {T}-costed activated ability), pure text-scan like every
+// other no-fixed-name-list static check.
+function canActivateAbilitiesAsThoughHaste(lobby, ownerId) {
+  return Object.values(lobby.cards).some((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /activate abilities of creatures you control as though (those creatures |they )?had haste/i.test(c.text || ""));
+}
 // Anointed Procession / functional cousins -- "If an effect would create one or more tokens under
 // your control, it creates twice that many of those tokens instead." Detected by oracle text, not
 // by name (same "no fixed name list" precedent as commander-color-identity mana/shockland pay-life),
@@ -3641,7 +3775,7 @@ function returnAllHandToLibrary(lobby, ownerId) {
   if (toRemove.length) broadcastTargets(lobby);
 }
 
-function attemptPlay(p, card, targetZoneType, xValue) {
+function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   if (targetZoneType === "mana") {
     const allowed = 1 + (p.landDropBonus || 0);
     if ((p.landsPlayedThisTurn || 0) >= allowed) {
@@ -3651,6 +3785,9 @@ function attemptPlay(p, card, targetZoneType, xValue) {
     return { ok: true };
   }
   const cost = parseManaCost(card.manaCost);
+  // Goblin Warchief and its functional cousins -- see spellCostReductionFor's own comment.
+  const reduction = spellCostReductionFor(lobby, card.owner, card);
+  if (reduction > 0) cost.generic = Math.max(0, cost.generic - reduction);
   const remaining = canAffordAndPay(p.mana, cost, xValue);
   if (!remaining) {
     return { ok: false, error: `Not enough mana to cast ${card.name || "this card"}.` };
@@ -3927,6 +4064,26 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
+  // Boros Charm -- "target player or planeswalker" (excludes creatures/artifacts/enchantments,
+  // unlike "any" above).
+  if (targetKind === "playerOrPlaneswalker") {
+    if (lobby.players[targetId]) {
+      if (cardTypeProtectionBlocks(lobby, targetId, entry.spellCard || entry.sourceCard)) return { ok: false, error: "That player has protection from this." };
+      return { ok: true };
+    }
+    const c = lobby.cards[targetId];
+    if (!c || !(c.type || "").toLowerCase().includes("planeswalker")) return { ok: false, error: "Choose a player or planeswalker." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That planeswalker"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Aerial Assault -- "target tapped creature." The first card in this app needing a target
+  // restricted by its CURRENT tapped state rather than its type/ownership.
+  if (targetKind === "tappedCreature") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "creature" || !c.tapped) return { ok: false, error: "Choose a tapped creature." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
   if (targetKind === "permanent") {
     const c = lobby.cards[targetId];
     if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent." };
@@ -4105,6 +4262,7 @@ function fireEtbTriggers(lobby, card) {
   checkRevealFromHandChoice(lobby, card);
   checkChromeMoxImprint(lobby, card);
   checkMoxDiamondLandDiscard(lobby, card);
+  checkRiot(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
   fireOpponentCreatureEtbTriggers(lobby, card);
@@ -4874,9 +5032,13 @@ function advanceOnePhase(lobby) {
   if (turn.phase === "Combat") {
     lobby.combat = { step: "declareAttackers", attackers: {}, blocks: {}, defendersPending: [] };
   }
+  // "At the beginning of combat on your turn" triggers (Howlsquad Heavy) -- same reuse of
+  // fireGlobalTrigger as Upkeep/End Step below, just keyed to the Combat phase itself.
+  if (activePlayer && turn.phase === "Combat") fireGlobalTrigger(lobby, "beginningOfCombat", activeId);
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
+    activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
     // Teferi's Protection -- "until your next turn" and phased-out permanents both resolve right
     // here: permanents phase back in "before you untap during your untap step" (CR 702.26e), so
     // this runs BEFORE the untap loop below, letting that same loop untap anything that phases back
@@ -5813,7 +5975,7 @@ io.on("connection", (socket) => {
       // (and, the other direction, a spell dropped in the Lands row got played for free as a land)
       // -- a real, reported bug ("lands randomly get added to the stack"), not a hypothetical.
       const realZoneType = classifyType(card.type);
-      const result = attemptPlay(p, card, realZoneType, x);
+      const result = attemptPlay(lobby, p, card, realZoneType, x);
       if (!result.ok) { socket.emit("actionError", result.error); return; }
       if (realZoneType === "mana" || !lobby.turn.started) {
         // Lands aren't spells -- no stack, no priority window, resolves immediately like today.
@@ -5859,7 +6021,7 @@ io.on("connection", (socket) => {
     if (!timing.ok) { socket.emit("actionError", timing.error); return; }
     const castCheck = canCastSpells(lobby, socket.id, card);
     if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
-    const result = attemptPlay(p, card, targetZoneType, xValue);
+    const result = attemptPlay(lobby, p, card, targetZoneType, xValue);
     if (!result.ok) { socket.emit("actionError", result.error); return; }
     if (targetZoneType === "mana" || !lobby.turn.started) {
       card.zoneType = targetZoneType;
@@ -6129,7 +6291,10 @@ io.on("connection", (socket) => {
       // activation test.
       if (card.zoneType === "creature") {
         const hasHaste = effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "haste");
-        if (card.controllerSince === lobby.turn.turnNumber && !hasHaste) { socket.emit("actionError", `${card.name} has summoning sickness.`); return; }
+        // Thousand-Year Elixir-style ability-only haste exception -- see canActivateAbilitiesAsThoughHaste.
+        if (card.controllerSince === lobby.turn.turnNumber && !hasHaste && !canActivateAbilitiesAsThoughHaste(lobby, socket.id)) {
+          socket.emit("actionError", `${card.name} has summoning sickness.`); return;
+        }
       }
     }
     let remainingMana = null;
@@ -7353,6 +7518,11 @@ io.on("connection", (socket) => {
     }
     lobby.combat.attackers = validAttackers;
     lobby.combat.blocks = {};
+    // Raid (Searslicer Goblin and its functional cousins) -- "if you attacked this turn," checked at
+    // the player's own end step, well after lobby.combat.attackers has already been reset by the
+    // Combat -> Main 2 phase transition, so it needs its own persistent flag rather than reading
+    // combat state directly.
+    if (Object.keys(validAttackers).length > 0) p.attackedThisTurn = true;
     // Skip declareBlockers for a defender with no untapped creature to block with — otherwise
     // combat just sits waiting on a no-op "No Blocks" confirmation they may not realize to give.
     const pendingWithBlockers = Array.from(defendersSet).filter((defId) =>

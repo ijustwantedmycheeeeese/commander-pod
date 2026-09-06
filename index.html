@@ -1939,6 +1939,11 @@
       // principle as the blocker checklist). myId is who's doing the targeting.
       if (targetIsUntargetableBy(card, myId, pendingTargetChoiceSource)) return false;
       if (kind === "any") return card.zoneType === "creature" || (card.type || "").toLowerCase().includes("planeswalker");
+      // Boros Charm -- "target player or planeswalker" (excludes creatures/artifacts, unlike "any").
+      if (kind === "playerOrPlaneswalker") return (card.type || "").toLowerCase().includes("planeswalker");
+      // Aerial Assault -- "target tapped creature." The first targetKind restricted by a card's
+      // CURRENT tapped state rather than its type/ownership.
+      if (kind === "tappedCreature") return card.zoneType === "creature" && !!card.tapped;
       if (kind === "permanent") {
         if (!(card.zoneType === "creature" || card.zoneType === "artifact")) return false;
         if (pendingTargetChoiceMinCmc && (card.cmc || 0) < pendingTargetChoiceMinCmc) return false;
@@ -1964,7 +1969,7 @@
       return card.zoneType === kind;
     }
     function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }
-    function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any"; }
+    function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any" || kind === "playerOrPlaneswalker"; }
     // Serra's Emissary's ETB choice -- same fixed list as the server's own CARD_TYPE_CHOICES.
     const CARD_TYPE_CHOICES = ["Creature", "Instant", "Sorcery", "Artifact", "Enchantment", "Planeswalker", "Land"];
     function renderTargetChoiceModeButtons() {
