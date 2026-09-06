@@ -476,7 +476,19 @@ const CARD_ABILITIES = {
   // creature exists in this engine, only Kardur, Doomscourge's table-wide forced-attack shape) and
   // the entire Max Speed subsystem ("Start your engines!", the {T} ability) -- this app tracks no
   // concept of speed at all, a disclosed gap wider than just this one card.
-  "howlsquad heavy": [{ trigger: "beginningOfCombat", label: "Howlsquad Heavy — create a Goblin token", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }]
+  "howlsquad heavy": [{ trigger: "beginningOfCombat", label: "Howlsquad Heavy — create a Goblin token", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  // Wave 15 gap-analysis batch.
+  "coiling oracle": [{ trigger: "etb", label: "Coiling Oracle — reveal the top card, land to battlefield or else to hand", requiresTarget: false, effects: [{ type: "revealTopCardLandToBattlefieldElseHand" }] }],
+  "diregraf colossus": [
+    { trigger: "etb", label: "Diregraf Colossus — +1/+1 counter for each Zombie card in your graveyard", requiresTarget: false, effects: [{ type: "addCountersEqualToGraveyardTypeCount", typeFilter: "zombie" }] },
+    // Magecraft-family reuse (youCastSpell/spellTypeFilter), just filtered by a creature-type
+    // substring ("zombie") instead of a broad instant/sorcery/creature category.
+    { trigger: "youCastSpell", spellTypeFilter: ["zombie"], label: "Diregraf Colossus — create a tapped Zombie token", requiresTarget: false, effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"], tapped: true }] }
+  ],
+  // "Each opponent loses 1 life" needs no new effect -- loseLife's existing target:"eachOpponent"
+  // (built for Archfiend of Despair-style cards) already covers it.
+  "corpse knight": [{ trigger: "otherCreatureEtb", label: "Corpse Knight — each opponent loses 1 life", requiresTarget: false, effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] }],
+  "contagion clasp": [{ trigger: "etb", label: "Contagion Clasp — put a -1/-1 counter on target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "addNegativeCounterTarget" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -766,7 +778,18 @@ const ACTIVATED_ABILITIES = {
   // gate (same (card, lobby) convention as Temple of the False God's own condition), checked against
   // each candidate's REAL effective power (base + counters + equipment/aura + anthem bonuses), not
   // just its printed power.
-  "bonders' enclave": [{ cost: { mana: "{3}", tap: true }, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 4), conditionError: "You need a creature with power 4 or greater to activate this.", label: "Bonders' Enclave — draw a card", effects: [{ type: "drawCards", amount: 1 }] }]
+  "bonders' enclave": [{ cost: { mana: "{3}", tap: true }, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 4), conditionError: "You need a creature with power 4 or greater to activate this.", label: "Bonders' Enclave — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  // Wave 15 gap-analysis batch.
+  "contagion clasp": [{ cost: { mana: "{4}", tap: true }, label: "Contagion Clasp — Proliferate", effects: [{ type: "proliferateAll" }] }],
+  // "Activate only if you control three or more lands with the same name" -- a real activation
+  // condition (same (card, lobby) convention as Bonders' Enclave/Temple of the False God above).
+  "endless atlas": [{ cost: { mana: "{2}", tap: true }, condition: (card, lobby) => {
+    const nameCounts = {};
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner === card.owner && c.zoneType === "mana") nameCounts[archiveKey(c.name)] = (nameCounts[archiveKey(c.name)] || 0) + 1;
+    });
+    return Object.values(nameCounts).some((n) => n >= 3);
+  }, conditionError: "You need three or more lands with the same name to activate this.", label: "Endless Atlas — draw a card", effects: [{ type: "drawCards", amount: 1 }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1093,7 +1116,17 @@ const SPELL_ABILITIES = {
   "akroma's will": { label: "Akroma's Will — choose one", modes: [
     { label: "Akroma's Will — creatures you control gain flying, vigilance, and double strike until end of turn", requiresTarget: false, effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Flying", "Vigilance", "Double strike"] }] },
     { label: "Akroma's Will — creatures you control gain lifelink, indestructible, and protection until end of turn", requiresTarget: false, effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Lifelink", "Indestructible", "Protection"] }] }
-  ] }
+  ] },
+  // Wave 15 gap-analysis batch.
+  "day of judgment": { label: "Day of Judgment — destroy all creatures", effects: [{ type: "destroyAllCreatures" }] },
+  "damnation": { label: "Damnation — destroy all creatures, they can't be regenerated", effects: [{ type: "destroyAllCreatures", noRegen: true }] },
+  "depopulate": { label: "Depopulate — each player with a multicolored creature draws a card, then destroy all creatures", effects: [{ type: "drawForMulticoloredControllersThenDestroyAllCreatures" }] },
+  "end hostilities": { label: "End Hostilities — destroy all creatures and all permanents attached to creatures", effects: [{ type: "destroyAllCreaturesAndAttachments" }] },
+  "dragon fodder": { label: "Dragon Fodder — create two Goblin tokens", effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
+  // Storm isn't modeled (no spell-cast-count-this-turn tracking anywhere in this engine) -- the base
+  // "create two Goblins" half works unconditionally, a disclosed narrower simplification.
+  "empty the warrens": { label: "Empty the Warrens — create two Goblin tokens", effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
+  "cut a deal": { label: "Cut a Deal — each opponent draws a card, then you draw a card for each that did", effects: [{ type: "cutADealDraws" }] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -1287,7 +1320,8 @@ const EFFECTS = {
       spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
         power: params.power, toughness: params.toughness, colors: params.colors || [],
-        keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature")
+        keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature"),
+        tapped: !!params.tapped
       });
     }
   },
@@ -1337,7 +1371,10 @@ const EFFECTS = {
     if (!card) return;
     const amount = params.amount || 1;
     const bonus = amount > 0 ? bonusCountersFor(lobby, card.owner) : 0;
-    card.counters = (card.counters || 0) + amount + bonus;
+    // Corpsejack Menace / Branching Evolution's doubling applies AFTER Hardened Scales' additive
+    // +1 -- see counterMultiplierFor's own comment.
+    const mult = amount > 0 ? counterMultiplierFor(lobby, card.owner) : 1;
+    card.counters = (card.counters || 0) + (amount + bonus) * mult;
     broadcastCard(lobby, card);
   },
   // Atomize -- "Proliferate." Real Magic lets you choose WHICH permanents/players with a counter
@@ -2281,7 +2318,9 @@ const EFFECTS = {
   destroyAllCreatures(lobby, ctx, params) {
     Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => {
       if (effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "indestructible")) return;
-      if (c.regenerationShield > 0) {
+      // Damnation -- "They can't be regenerated." params.noRegen bypasses the regeneration-shield
+      // check below entirely, same shape as every other narrow per-card flag on a shared effect.
+      if (!params.noRegen && c.regenerationShield > 0) {
         c.regenerationShield -= 1;
         c.tapped = true;
         broadcastCard(lobby, c);
@@ -2291,6 +2330,75 @@ const EFFECTS = {
       fireDeathTriggers(lobby, c);
       sendToGraveyardInternal(lobby, c);
     });
+  },
+  // Wave 15 gap-analysis batch.
+  // Depopulate -- "Each player who controls a multicolored creature draws a card. Then destroy all
+  // creatures." Reuses destroyAllCreatures as-is for the wipe half.
+  drawForMulticoloredControllersThenDestroyAllCreatures(lobby, ctx, params) {
+    const drawnFor = new Set();
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.zoneType === "creature" && (c.colors || []).length > 1 && !drawnFor.has(c.owner)) {
+        drawnFor.add(c.owner);
+        drawN(lobby, c.owner, 1);
+      }
+    });
+    EFFECTS.destroyAllCreatures(lobby, ctx, params);
+  },
+  // End Hostilities -- "Destroy all creatures and all permanents attached to creatures." Auras
+  // already go to the graveyard automatically once their host dies (see detachDependents), but
+  // Equipment deliberately stays on the battlefield unattached instead -- captured up front here
+  // (before the wipe detaches it) and destroyed too, matching this card's own broader wording.
+  destroyAllCreaturesAndAttachments(lobby, ctx, params) {
+    const equipmentToDestroy = Object.values(lobby.cards).filter((c) => c.attachedTo && lobby.cards[c.attachedTo] && lobby.cards[c.attachedTo].zoneType === "creature");
+    EFFECTS.destroyAllCreatures(lobby, ctx, params);
+    equipmentToDestroy.forEach((c) => {
+      if (!lobby.cards[c.id]) return;
+      fireDeathTriggers(lobby, c);
+      sendToGraveyardInternal(lobby, c);
+    });
+  },
+  // Cut a Deal -- "Each opponent draws a card, then you draw a card for each opponent who drew a
+  // card this way." drawN's own return value (cards ACTUALLY drawn, 0 if that player's library was
+  // empty) makes this exact, not an approximation -- no need to assume everyone had a card.
+  cutADealDraws(lobby, ctx, params) {
+    let totalDrawn = 0;
+    Object.keys(lobby.players).forEach((id) => { if (id !== ctx.controllerId) totalDrawn += drawN(lobby, id, 1); });
+    if (totalDrawn > 0) drawN(lobby, ctx.controllerId, totalDrawn);
+  },
+  // Coiling Oracle -- "reveal the top card of your library. If it's a land card, put it onto the
+  // battlefield. Otherwise, put that card into your hand."
+  revealTopCardLandToBattlefieldElseHand(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p || !p.library.length) return;
+    const entry = p.library.shift();
+    if ((entry.type || "").toLowerCase().includes("land")) {
+      spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, zoneType: "mana" });
+      pushLog(lobby, `${p.name} reveals ${entry.name || "a land"} and puts it onto the battlefield`);
+    } else {
+      spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, faceDown: true, zoneType: "hand" });
+      pushLog(lobby, `${p.name} reveals ${entry.name || "a card"} and puts it into their hand`);
+    }
+  },
+  // Diregraf Colossus -- "enters with a +1/+1 counter for each Zombie card in your graveyard."
+  // Generic on typeFilter (a lowercase type-line substring), reusable for any future "counters equal
+  // to graveyard cards of type X" card.
+  addCountersEqualToGraveyardTypeCount(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!p || !card) return;
+    const filter = (params.typeFilter || "").toLowerCase();
+    const count = (p.graveyard || []).filter((e) => (e.type || "").toLowerCase().includes(filter)).length;
+    if (count > 0) { card.counters = (card.counters || 0) + count; broadcastCard(lobby, card); }
+  },
+  // Contagion Clasp -- "put a -1/-1 counter on target creature." The first card in this app needing
+  // an automated NEGATIVE counter grant (card.counters is a single signed scalar already, per every
+  // P/T computation that reads it -- a manual -1 Counter button already exists client-side, this is
+  // just its automated-effect counterpart).
+  addNegativeCounterTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    card.counters = (card.counters || 0) - (params.amount || 1);
+    broadcastCard(lobby, card);
   },
   // Generic "destroy every permanent matching a filter" -- covers every modal board-wipe MODE found
   // in the gap analysis (Austere Command's four, Crux of Fate's two, Cleansing Nova's second) with
@@ -3382,6 +3490,20 @@ function bonusCountersFor(lobby, ownerId) {
     if (/\+1\/\+1 counters? would be put on a creature you control, that many plus one/i.test(c.text || "")) bonus += 1;
   }
   return bonus;
+}
+// Corpsejack Menace / Branching Evolution -- the real DOUBLING counterpart to Hardened Scales'
+// additive +1 above ("twice that many...instead", not "that many plus one"). Applied AFTER the
+// additive bonus in addCountersToSelf (a controller-chooses-order replacement-effect nuance this
+// app doesn't model -- same "pick one consistent order" precedent as everywhere else two static
+// replacement effects could theoretically stack in either direction).
+function counterMultiplierFor(lobby, ownerId) {
+  let mult = 1;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (/\+1\/\+1 counters? would be put on a creature you control, twice that many/i.test(c.text || "")) mult *= 2;
+  }
+  return mult;
 }
 function parseKeywordList(raw) {
   return raw.split(/,| and /i).map((s) => s.trim())
