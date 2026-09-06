@@ -407,7 +407,28 @@ const CARD_ABILITIES = {
   // deathYouControl entry narrowed by typeFilter (see fireGlobalTrigger's own comment) rather than
   // sourceNameFilter -- ANY Goblin qualifies, not one specific name. Reuses the existing generic
   // damageTarget effect (Lightning Bolt et al.) targetKind "any".
-  "pashalik mons": [{ trigger: "deathYouControl", typeFilter: "goblin", label: "Pashalik Mons — a Goblin died, deal 1 damage to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget", amount: 1 }] }]
+  "pashalik mons": [{ trigger: "deathYouControl", typeFilter: "goblin", label: "Pashalik Mons — a Goblin died, deal 1 damage to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget", amount: 1 }] }],
+  // Wave 11 gap-analysis batch. Deathtouch/Flying need no table entry (KNOWN_KEYWORDS).
+  "acidic slime": [{ trigger: "etb", label: "Acidic Slime — destroy target artifact, enchantment, or land", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment", "land"], effects: [{ type: "destroyTarget" }] }],
+  // "Destroy target permanent" -- narrowed to creature/artifact, same disclosed simplification as
+  // Despark/Beast Within/Generous Gift/Chaos Warp's existing targetKind:"permanent" entries (a
+  // land/enchantment/planeswalker can't be targeted by any of these yet).
+  "angel of despair": [{ trigger: "etb", label: "Angel of Despair — destroy target permanent", requiresTarget: true, targetKind: "permanent", effects: [{ type: "destroyTarget" }] }],
+  // "Exile up to two target artifacts and/or enchantments" -- narrowed to exactly one target (this
+  // app's target-choice queue takes one target per queued choice; "up to two" would need two
+  // separate, chainable choices with no way to skip the second, not worth building for one clause).
+  // Plainscycling needs no table entry -- see cyclingCostFromText's own comment.
+  "angel of the ruins": [{ trigger: "etb", label: "Angel of the Ruins — exile target artifact or enchantment", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], effects: [{ type: "exileTarget" }] }],
+  // Magecraft -- reuses the exact youCastSpell/spellTypeFilter mechanism built for Guttersnipe.
+  "archmage emeritus": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], label: "Archmage Emeritus — draw a card", requiresTarget: false, effects: [{ type: "drawCards", amount: 1 }] }],
+  // "Whenever ~ enters or attacks, target opponent sacrifices a creature or planeswalker of their
+  // choice, discards a card, and loses 3 life. You draw a card and gain 3 life." Two identical
+  // trigger points sharing the same effects array -- see EFFECTS.targetPlayerSacrifices for the
+  // sacrifice half's own disclosed narrowing (creatures only, not planeswalkers).
+  "archon of cruelty": [
+    { trigger: "etb", label: "Archon of Cruelty — target opponent sacrifices, discards, and loses 3 life; you draw and gain 3", requiresTarget: true, targetKind: "player", effects: [{ type: "targetPlayerSacrifices" }, { type: "targetPlayerDiscards", amount: 1 }, { type: "loseLife", amount: 3 }, { type: "drawCards", amount: 1 }, { type: "gainLife", target: "controller", amount: 3 }] },
+    { trigger: "attack", label: "Archon of Cruelty — target opponent sacrifices, discards, and loses 3 life; you draw and gain 3", requiresTarget: true, targetKind: "player", effects: [{ type: "targetPlayerSacrifices" }, { type: "targetPlayerDiscards", amount: 1 }, { type: "loseLife", amount: 3 }, { type: "drawCards", amount: 1 }, { type: "gainLife", target: "controller", amount: 3 }] }
+  ]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -675,7 +696,14 @@ const ACTIVATED_ABILITIES = {
   // "another"), so sacrificing Pashalik Mons itself IS legal -- but autoSacrificeFilter prefers any
   // OTHER qualifying Goblin first (see the activateAbility handler's own comment) so this doesn't
   // surprise-destroy the payoff engine whenever a different Goblin is available to sacrifice instead.
-  "pashalik mons": [{ cost: { mana: "{3}{R}", autoSacrificeFilter: "goblin" }, label: "Pashalik Mons — Sacrifice a Goblin: create two Goblin tokens", effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }]
+  "pashalik mons": [{ cost: { mana: "{3}{R}", autoSacrificeFilter: "goblin" }, label: "Pashalik Mons — Sacrifice a Goblin: create two Goblin tokens", effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  // "Sacrifice a creature: Add {C}{C}." Reuses autoSacrificeFilter (Pashalik Mons's own new cost
+  // shape) for the "a creature" cost -- unlike Pashalik's "a Goblin," this excludes nothing of its
+  // own, so the auto-pick just needs a broad "creature" filter -- plus manaAbility:true since it's
+  // two units of mana from one activation, same reasoning as Sol Ring/signets/Temple of the False
+  // God. Cost-paying (including autoSacrificeFilter) always runs before the manaAbility/stack branch
+  // check, so the two features already compose correctly with no extra wiring.
+  "ashnod's altar": [{ cost: { autoSacrificeFilter: "creature" }, manaAbility: true, label: "Ashnod's Altar — Sacrifice a creature: Add {C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C"] }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -906,6 +934,26 @@ const SPELL_ABILITIES = {
   "chain reaction": { label: "Chain Reaction — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] },
   "blasphemous act": { label: "Blasphemous Act — deals damage to each creature equal to the number of creatures on the battlefield", effects: [{ type: "damageAllCreaturesTable" }] },
   "swan song": { label: "Swan Song — counter target enchantment, instant, or sorcery spell, its controller gets a 2/2 flying Bird", effects: [{ type: "counterTargetSpellCreateTokenForController", tokenName: "Bird", tokenType: "Token Creature — Bird", power: "2", toughness: "2", colors: ["U"], keywords: ["Flying"] }], requiresTarget: true, targetKind: "spell" },
+  // Wave 11 gap-analysis batch.
+  // "Counter target noncreature spell." Real card restricts to noncreature -- same disclosed
+  // "target spell, no type check" simplification Swan Song's own "enchantment, instant, or sorcery"
+  // restriction already uses (this app doesn't validate a countered spell's own type against any
+  // targetKind:"spell" entry). counterTargetSpellCreateTokenForController's new params.amount (see
+  // its own comment) makes the token count a one-line change from Swan Song's shape.
+  "an offer you can't refuse": { label: "An Offer You Can't Refuse — counter target spell, its controller creates two Treasure tokens", effects: [{ type: "counterTargetSpellCreateTokenForController", tokenName: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg", amount: 2 }], requiresTarget: true, targetKind: "spell" },
+  // "Counter target spell. Its controller may draw up to two cards at the beginning of the next
+  // turn's upkeep. You draw a card at the beginning of the next turn's upkeep." See
+  // EFFECTS.counterTargetSpellDelayedDraws for the "may... up to two" -> unconditional draw
+  // simplification and the new queueDelayedTrigger(firesAtPhase:"Upkeep") usage.
+  "arcane denial": { label: "Arcane Denial — counter target spell, both players draw at the next upkeep", effects: [{ type: "counterTargetSpellDelayedDraws" }], requiresTarget: true, targetKind: "spell" },
+  // "Return target artifact or enchantment card from your graveyard to your hand." New
+  // ownGraveyardTypeList targetKind (see resolveChosenTarget's own comment) plus a matching effect.
+  "argivian find": { label: "Argivian Find — return target artifact or enchantment card from your graveyard to hand", effects: [{ type: "returnOwnGraveyardEntryToHand" }], requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact", "enchantment"] },
+  // "Destroy target nonland permanent. Proliferate." -- reuses the existing targetKind:"permanent"
+  // (creature/artifact only, same disclosed nonland-permanent narrowing as Anguished Unmaking/
+  // Cyclonic Rift's own entries) plus the new proliferateAll effect (see its own comment for what's
+  // simplified -- affects every counter/poison on the table, not a real per-target choice).
+  "atomize": { label: "Atomize — destroy target permanent, proliferate", effects: [{ type: "destroyTarget" }, { type: "proliferateAll" }], requiresTarget: true, targetKind: "permanent" },
   // Real modal spells, using the SAME `modes` mechanism Rip Apart/Rakdos Charm already established
   // above (mode picked via the pendingTargetChoices queue at cast time, then a real target choice
   // if that mode needs one) -- these aren't a new gap needing new infrastructure, just table entries
@@ -1051,9 +1099,15 @@ const EFFECTS = {
     if (!lobby.kardurForcedAttackControllers) lobby.kardurForcedAttackControllers = [];
     if (!lobby.kardurForcedAttackControllers.includes(ctx.controllerId)) lobby.kardurForcedAttackControllers.push(ctx.controllerId);
   },
+  // Archon of Cruelty -- "target opponent... loses 3 life," a real player TARGET (chosen via
+  // requiresTarget/targetKind:"player" and baked into chosenTargetId), unlike every prior loseLife
+  // user which only ever needed "you"/"each opponent" (no real choice). chosenTargetId takes
+  // priority over the effectTargets() shortcut when present -- never set by any existing entry, so
+  // this is purely additive.
   loseLife(lobby, ctx, params) {
     const sourceCardId = ctx.sourceCard && ctx.sourceCard.id;
-    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
+    const targets = params.chosenTargetId ? [params.chosenTargetId] : effectTargets(lobby, ctx.controllerId, params.target);
+    targets.forEach((id) => {
       if (applyLifeLoss(lobby, id, params.amount || 0, sourceCardId)) {
         io.to(lobby.id).emit("spellDamage", { targetId: id, amount: params.amount || 0, sourceCardId });
       }
@@ -1182,6 +1236,19 @@ const EFFECTS = {
     const bonus = amount > 0 ? bonusCountersFor(lobby, card.owner) : 0;
     card.counters = (card.counters || 0) + amount + bonus;
     broadcastCard(lobby, card);
+  },
+  // Atomize -- "Proliferate." Real Magic lets you choose WHICH permanents/players with a counter
+  // already on them get another (and skip the rest, e.g. to avoid also boosting an opponent's own
+  // +1/+1 counters) -- this app has no per-choice multi-select UI for that, so it auto-affects EVERY
+  // card with any counters and every player with any poison, a disclosed simplification (the
+  // opposite-of-favorable case -- proliferating an opponent's counters too -- is rare enough in
+  // practice not to block shipping this on its own). Only `counters` (this app's one generic bucket,
+  // covering +1/+1 and Atomize/The One Ring's own burden counters alike) and `poison` are anything
+  // this app actually tracks as a "counter" -- no loyalty-ability system exists yet to proliferate.
+  proliferateAll(lobby) {
+    Object.values(lobby.cards).forEach((c) => { if (c.counters > 0) { c.counters += 1; broadcastCard(lobby, c); } });
+    Object.values(lobby.players).forEach((p) => { if (p.poison > 0) p.poison += 1; });
+    broadcastPlayers(lobby);
   },
   // The One Ring -- "{T}: Put a burden counter on The One Ring, then draw a card for each burden
   // counter on The One Ring." Placed as a SEPARATE effect right after addCountersToSelf in the same
@@ -1552,6 +1619,19 @@ const EFFECTS = {
     spawnBattlefieldCard(lobby, { ...entry, owner: params.ownerId, zoneType: "hand" });
     broadcastPlayers(lobby);
   },
+  // Argivian Find -- "Return target artifact or enchantment card from your graveyard to your hand."
+  // Same underlying move as returnGraveyardEntryToHandById just above, but reached through a real
+  // target choice (chosenTargetId, baked in by chooseTargetFor) instead of a value pre-baked at
+  // delayed-trigger queue time -- "your own graveyard" means the owner is always the caster.
+  returnOwnGraveyardEntryToHand(lobby, ctx, params) {
+    const owner = lobby.players[ctx.controllerId];
+    if (!owner || !params.chosenTargetId) return;
+    const idx = (owner.graveyard || []).findIndex((e) => e.id === params.chosenTargetId);
+    if (idx === -1) return;
+    const [entry] = owner.graveyard.splice(idx, 1);
+    spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, zoneType: "hand" });
+    broadcastPlayers(lobby);
+  },
   // A specific, pre-chosen card baked in at queue time (see queueDelayedTrigger) -- not a player
   // choice, so this doesn't go through the normal chosenTargetId flow.
   exileChosenCardById(lobby, ctx, params) {
@@ -1674,6 +1754,23 @@ const EFFECTS = {
     const caster = lobby.players[ctx.controllerId];
     if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"}`);
   },
+  // Arcane Denial -- "Counter target spell. Its controller may draw up to two cards at the beginning
+  // of the next turn's upkeep. You draw a card at the beginning of the next turn's upkeep." Both
+  // draws are queued as one-shot delayed triggers (queueDelayedTrigger, the same mechanism Hellkite
+  // Courser/Whip of Erebos/Liesa use for "next end step", just firesAtPhase:"Upkeep" instead) --
+  // "may... up to two" is resolved as an unconditional draw of the max amount, same "no real
+  // downside to always taking it" simplification this app applies to other purely-beneficial
+  // optional effects elsewhere, rather than building a real opt-out prompt for one clause.
+  counterTargetSpellDelayedDraws(lobby, ctx, params) {
+    const item = removeStackItem(lobby, params.chosenTargetId);
+    if (!item) return;
+    const owner = lobby.players[item.owner];
+    const caster = lobby.players[ctx.controllerId];
+    if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"}`);
+    const src = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (owner) queueDelayedTrigger(lobby, { firesAtPhase: "Upkeep", controllerId: item.owner, sourceCard: src, label: "Arcane Denial — draw up to two cards", effects: [{ type: "drawCards", amount: 2 }] });
+    queueDelayedTrigger(lobby, { firesAtPhase: "Upkeep", controllerId: ctx.controllerId, sourceCard: src, label: "Arcane Denial — draw a card", effects: [{ type: "drawCards", amount: 1 }] });
+  },
   // Swan Song -- "Counter target enchantment, instant, or sorcery spell. Its controller creates a
   // 2/2 blue Bird creature token with flying." The token goes to the COUNTERED SPELL's controller
   // (item.owner, captured by removeStackItem before the item is gone), not this spell's own caster --
@@ -1685,11 +1782,15 @@ const EFFECTS = {
     const owner = lobby.players[item.owner];
     const caster = lobby.players[ctx.controllerId];
     if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"}`);
-    spawnBattlefieldCard(lobby, {
-      name: params.tokenName || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
-      power: params.power, toughness: params.toughness, colors: params.colors || [],
-      keywords: params.keywords || [], owner: item.owner, zoneType: classifyType(params.tokenType || "Token Creature")
-    });
+    // params.amount (An Offer You Can't Refuse -- TWO Treasures, not Swan Song's one) -- defaults to
+    // 1 so every existing single-token entry is unaffected.
+    for (let i = 0; i < (params.amount || 1); i++) {
+      spawnBattlefieldCard(lobby, {
+        name: params.tokenName || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
+        power: params.power, toughness: params.toughness, colors: params.colors || [],
+        keywords: params.keywords || [], owner: item.owner, zoneType: classifyType(params.tokenType || "Token Creature")
+      });
+    }
   },
   // Reuses the exact same pendingDiscard mechanism as the existing "discard down to 7 cards" hand-
   // size check (resolveDiscard) -- it was already fully generic (any player, any count, any time),
@@ -2004,6 +2105,18 @@ const EFFECTS = {
       });
       if (match) { fireDeathTriggers(lobby, match); sendToGraveyardInternal(lobby, match); }
     });
+  },
+  // Archon of Cruelty -- "target opponent sacrifices a creature or planeswalker of their choice."
+  // Same auto-pick precedent as eachOpponentSacrifices just above, but for the ONE player chosen via
+  // a real target choice (chosenTargetId) rather than every opponent at once. Planeswalkers aren't
+  // matched -- classifyType folds them into zoneType "artifact" alongside real artifacts, and there's
+  // no separate flag distinguishing the two, so this is scoped to creatures only, a disclosed
+  // narrowing (the far more common half of "creature or planeswalker" in practice).
+  targetPlayerSacrifices(lobby, ctx, params) {
+    const targetId = params.chosenTargetId;
+    if (!targetId) return;
+    const match = Object.values(lobby.cards).find((c) => c.owner === targetId && c.zoneType === "creature");
+    if (match) { fireDeathTriggers(lobby, match); sendToGraveyardInternal(lobby, match); }
   },
   // Chain Reaction / Blasphemous Act -- "deals X damage to each creature, where X is the number of
   // creatures on the battlefield." X is computed fresh here (BEFORE anything dies, matching the real
@@ -2572,6 +2685,13 @@ function cyclingCostFromText(text) {
   const t = text || "";
   let m = t.match(/\bbasic landcycling \{([^}]+)\}/i);
   if (m) return { kind: "basicLand", cost: `{${m[1]}}` };
+  // Plainscycling/Islandcycling/Swampcycling/Mountaincycling/Forestcycling (Angel of the Ruins and
+  // the whole real cycle they belong to) -- the SAME basic-landcycling effect, just restricted to
+  // one specific basic type rather than any land. Checked before the untyped "landcycling" case
+  // can't apply here anyway since none of these end in a bare "landcycling" word boundary, but
+  // ordered first for clarity since they're the more specific pattern.
+  m = t.match(/\b(plains|island|swamp|mountain|forest)cycling \{([^}]+)\}/i);
+  if (m) return { kind: "basicLand", cost: `{${m[2]}}`, landType: m[1] };
   m = t.match(/\bcycling \{([^}]+)\}/i);
   if (m) return { kind: "draw", cost: `{${m[1]}}` };
   return null;
@@ -3524,7 +3644,7 @@ function castSpell(lobby, card, casterId, logSuffix) {
       queueTargetChoice(lobby, {
         kind: "castSpell", controllerId: casterId, spellCard: card, sourceCard: card,
         label: spellAbility.label, effects: spellAbility.effects, targetKind: spellAbility.targetKind,
-        minCmc: spellAbility.minCmc || null, logSuffix: logSuffix || ""
+        minCmc: spellAbility.minCmc || null, typeFilter: spellAbility.typeFilter || null, logSuffix: logSuffix || ""
       });
       return;
     }
@@ -3606,7 +3726,7 @@ function promptTargetChoice(lobby, entry) {
   // what they were told to click got a confusing rejection with no way to tell what went wrong.
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
   const src = entry.spellCard || entry.sourceCard;
-  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", sourceCardId: entry.sourceCard && entry.sourceCard.id, targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null, commanderChoices: entry.commanderChoices || null });
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", sourceCardId: entry.sourceCard && entry.sourceCard.id, targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, typeFilter: entry.typeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null, commanderChoices: entry.commanderChoices || null });
 }
 // Discards any pending target choices belonging to a departing controller (a real disconnect/leave
 // or an elimination) -- otherwise the table would be stuck forever waiting on a target that will
@@ -3657,6 +3777,20 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
+  // Acidic Slime ("target artifact, enchantment, or land"), Angel of the Ruins ("up to two target
+  // artifacts and/or enchantments", narrowed to one -- see its own CARD_ABILITIES comment) -- a
+  // flexible permanent-type-list target, since "permanent" above is hardcoded to creature/artifact
+  // only (an existing, disclosed narrowing predating this) and neither an artifact-only nor a
+  // creature/artifact-only kind fits a card whose real wording explicitly EXCLUDES creatures.
+  // entry.typeFilter is an array of lowercase substrings checked against the target's own type line.
+  if (targetKind === "typeList") {
+    const c = lobby.cards[targetId];
+    if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana")) return { ok: false, error: "Choose a permanent." };
+    const filter = entry.typeFilter || [];
+    if (!filter.some((t) => (c.type || "").toLowerCase().includes(t))) return { ok: false, error: `Choose a ${filter.join("/")} permanent.` };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
   if (targetKind === "ownPermanent") {
     const c = lobby.cards[targetId];
     if (!c || c.owner !== entry.controllerId || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent you control." };
@@ -3691,6 +3825,16 @@ function resolveChosenTarget(lobby, entry, targetId) {
     const p = lobby.players[entry.controllerId];
     const found = p && (p.graveyard || []).find((e) => e.id === targetId && (e.type || "").toLowerCase().includes("creature"));
     if (!found) return { ok: false, error: "Choose a creature card from your own graveyard." };
+    return { ok: true };
+  }
+  // Argivian Find ("artifact or enchantment card from your graveyard") -- same shape as
+  // ownGraveyardCreature just above, generalized with a typeFilter list instead of a hardcoded
+  // "creature" substring check, mirroring the battlefield-side typeList kind.
+  if (targetKind === "ownGraveyardTypeList") {
+    const p = lobby.players[entry.controllerId];
+    const filter = entry.typeFilter || [];
+    const found = p && (p.graveyard || []).find((e) => e.id === targetId && filter.some((t) => (e.type || "").toLowerCase().includes(t)));
+    if (!found) return { ok: false, error: `Choose a ${filter.join("/")} card from your own graveyard.` };
     return { ok: true };
   }
   if (targetKind === "anyGraveyardCreature") {
@@ -3788,7 +3932,7 @@ function fireTrigger(lobby, card, ability) {
       commanderChoices = (p ? p.commanders : []).map((cmd, slot) => (cmd && !cmd.battlefieldId) ? { slot, name: cmd.name } : null).filter(Boolean);
       if (!commanderChoices.length) return;
     }
-    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, commanderChoices });
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, commanderChoices });
   } else {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
   }
@@ -5609,7 +5753,7 @@ io.on("connection", (socket) => {
     p.mana = remaining;
     sendToGraveyardInternal(lobby, card);
     pushLog(lobby, `${p.name} cycles ${card.name || "a card"}`);
-    if (cyc.kind === "basicLand") EFFECTS.tutorToHand(lobby, { controllerId: socket.id }, { typeFilter: "land" });
+    if (cyc.kind === "basicLand") EFFECTS.tutorToHand(lobby, { controllerId: socket.id }, { typeFilter: cyc.landType || "land" });
     else drawN(lobby, socket.id, 1);
     broadcastPlayers(lobby);
   });
