@@ -221,10 +221,10 @@
     #zone-modal-preview-col img { width: 100%; border-radius: 8px; }
     #zone-modal-preview-empty { color: #8a7a55; font-size: 12px; }
 
-    #context-menu { position: fixed; z-index: 100; background: #1c1710; border: 1px solid #5a4423; border-radius: 6px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display: none; min-width: 190px; }
-    #context-menu button { display: block; width: 100%; text-align: left; background: transparent; border: none; border-radius: 0; padding: 8px 12px; font-weight: 400; font-size: 12px; }
-    #context-menu button:hover { background: #4a3820; }
-    #context-menu hr { border: none; border-top: 1px solid #4a3820; margin: 2px 0; }
+    #context-menu, #group-context-menu { position: fixed; z-index: 100; background: #1c1710; border: 1px solid #5a4423; border-radius: 6px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display: none; min-width: 190px; }
+    #context-menu button, #group-context-menu button { display: block; width: 100%; text-align: left; background: transparent; border: none; border-radius: 0; padding: 8px 12px; font-weight: 400; font-size: 12px; }
+    #context-menu button:hover, #group-context-menu button:hover { background: #4a3820; }
+    #context-menu hr, #group-context-menu hr { border: none; border-top: 1px solid #4a3820; margin: 2px 0; }
 
     #zoom-row input[type=range] { width: 100px; }
 
@@ -655,6 +655,26 @@
       <button data-action="remove" style="color:#f87171;">Remove Permanently</button>
       <hr data-action="reportBug">
       <button data-action="reportBug">🐛 This Card Has a Bug</button>
+    </div>
+
+    <!-- Opened instead of #context-menu above when right-clicking a card that's part of a >1-card
+         multi-selection -- a small, deliberately FIXED set of actions known to be safe to fire for
+         every selected card regardless of its own individual state (an already-tapped creature
+         just no-ops on a second Tap, same as it already does one at a time), rather than trying to
+         reuse #context-menu's per-card conditional visibility logic across a mixed selection. -->
+    <div id="group-context-menu">
+      <div id="group-context-menu-label" style="padding:6px 12px;font-size:11px;color:#a89a70;"></div>
+      <hr>
+      <button data-group-action="tap">Tap All</button>
+      <button data-group-action="flip">Flip All Face Up/Down</button>
+      <button data-group-action="counterUp">+1 Counter (each)</button>
+      <button data-group-action="counterDown">-1 Counter (each)</button>
+      <hr>
+      <button data-group-action="toHand">Return All to Hand</button>
+      <button data-group-action="toGraveyard">Send All to Graveyard</button>
+      <button data-group-action="toExile">Send All to Exile</button>
+      <hr>
+      <button data-group-action="remove" style="color:#f87171;">Remove All Permanently</button>
     </div>
 
 
@@ -1481,6 +1501,8 @@
     const logBox = document.getElementById("log-box");
     const playerListEl = document.getElementById("player-list");
     const contextMenu = document.getElementById("context-menu");
+    const groupContextMenu = document.getElementById("group-context-menu");
+    let groupMenuTargetIds = []; // snapshot of selectedCardIds taken when the group menu opens
     const previewPanel = document.getElementById("preview-panel");
 
     let myId = null;
@@ -4807,6 +4829,17 @@
           if (selectedCardIds.has(card.id)) { selectedCardIds.delete(card.id); div.classList.remove("selected"); }
           return;
         }
+        // Right-clicking a card that's part of a real (>1-card) multi-selection opens the group
+        // action menu instead of the normal per-card one -- selecting a single card, or
+        // right-clicking a card OUTSIDE the current selection, still gets the familiar menu.
+        if (selectedCardIds.has(card.id) && selectedCardIds.size > 1) {
+          groupMenuTargetIds = Array.from(selectedCardIds);
+          document.getElementById("group-context-menu-label").textContent = `${groupMenuTargetIds.length} cards selected`;
+          groupContextMenu.style.left = e.clientX + "px";
+          groupContextMenu.style.top = e.clientY + "px";
+          groupContextMenu.style.display = "block";
+          return;
+        }
         activeCardId = card.id;
         updateContextMenuVisibility(card);
         contextMenu.style.left = e.clientX + "px";
@@ -5498,6 +5531,28 @@
     });
     document.addEventListener("click", (e) => {
       if (!contextMenu.contains(e.target)) contextMenu.style.display = "none";
+    });
+
+    // Same event names as the single-card menu above, just fired once per id in the snapshot taken
+    // when the group menu opened -- each handler already guards its own preconditions (Tap on an
+    // already-tapped card is a silent no-op server-side, same as firing it one at a time), so no
+    // extra per-card state checking is needed here.
+    groupContextMenu.querySelectorAll("button[data-group-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const action = btn.dataset.groupAction;
+        const eventName = { tap: "tap", flip: "flip", toHand: "toHand", toGraveyard: "toGraveyard", toExile: "toExile", remove: "removeCard" }[action];
+        groupMenuTargetIds.forEach((id) => {
+          if (eventName) socket.emit(eventName, id);
+          else if (action === "counterUp") socket.emit("counter", { id, delta: 1 });
+          else if (action === "counterDown") socket.emit("counter", { id, delta: -1 });
+        });
+        groupContextMenu.style.display = "none";
+        groupMenuTargetIds = [];
+        clearSelection();
+      });
+    });
+    document.addEventListener("click", (e) => {
+      if (!groupContextMenu.contains(e.target)) groupContextMenu.style.display = "none";
     });
 
     // ---------------- combat modals ----------------
