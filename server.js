@@ -401,6 +401,12 @@ const CARD_ABILITIES = {
     { trigger: "etb", label: "The One Ring — gain protection from everything until your next turn", requiresTarget: false, effects: [{ type: "grantProtectionFromEverything" }] },
     { trigger: "upkeep", label: "The One Ring — lose life equal to its burden counters", requiresTarget: false, effects: [{ type: "loseLifeEqualToSelfCounters" }] }
   ],
+  // Wave 20 -- only the upkeep value engine (the reason this card gets played); its activated
+  // ability ("exile a graveyard creature card, create a 4/4 black Zombie token copy of it") needs a
+  // genuinely different "token copy at OVERRIDDEN stats" shape than any existing reanimation effect,
+  // and the death trigger returning it to hand isn't modeled either -- both disclosed, not built
+  // this wave.
+  "the scarab god": [{ trigger: "upkeep", label: "The Scarab God — each opponent loses life equal to Zombies you control, you scry that many", requiresTarget: false, amountSource: "count", countTypeFilter: ["zombie"], effects: [{ type: "loseLife", target: "eachOpponent" }, { type: "scryN" }] }],
   // "search your library for any number of Goblin cards... put those cards on top" -- see
   // EFFECTS.searchAllMatchingToTop's own comment for what's simplified (order among the found cards).
   "goblin recruiter": [{ trigger: "etb", label: "Goblin Recruiter — search for all Goblin cards, put them on top", requiresTarget: false, effects: [{ type: "searchAllMatchingToTop", typeFilter: ["goblin"] }] }],
@@ -1295,6 +1301,14 @@ const SPELL_ABILITIES = {
   // match to Ponder's own wording.
   "preordain": { label: "Preordain — scry 2, then draw a card", effects: [{ type: "scryN", amount: 2, thenEffects: [{ type: "drawCards", amount: 1 }] }] },
   "ponder": { label: "Ponder — look at the top 3, reorder or send some to the bottom, then draw a card", effects: [{ type: "scryN", amount: 3, thenEffects: [{ type: "drawCards", amount: 1 }] }] },
+  // Wave 20 -- the draw needs to see the POST-scry library order, so it's bundled into scryN's
+  // own thenEffects (see scryN's comment for why a flat sibling would draw against the stale
+  // pre-reorder library) -- same shape as Preordain/Ponder just above.
+  "opt": { label: "Opt — scry 1, then draw a card", effects: [{ type: "scryN", amount: 1, thenEffects: [{ type: "drawCards", amount: 1 }] }] },
+  // Serum Visions draws BEFORE scrying (opposite order from Opt/Preordain) -- the draw doesn't
+  // depend on the reorder here, so a flat sibling is correct, not thenEffects.
+  "serum visions": { label: "Serum Visions — draw a card, then scry 2", effects: [{ type: "drawCards", amount: 1 }, { type: "scryN", amount: 2 }] },
+  "read the bones": { label: "Read the Bones — scry 2, then draw two cards, lose 2 life", effects: [{ type: "scryN", amount: 2, thenEffects: [{ type: "drawCards", amount: 2 }] }, { type: "loseLife", target: "controller", amount: 2 }] },
   // Wave 13 gap-analysis batch.
   // "Destroy target tapped creature. You gain 1 life for each creature you control with flying."
   // New "tappedCreature" targetKind (see index.html's targetKindMatchesCard) -- the first card in
@@ -3469,6 +3483,16 @@ function cyclingCostFromText(text) {
   return null;
 }
 
+// "When this land/permanent/creature enters, scry N." -- a real, common, name-independent ETB
+// template (the "Temple of ..." land cycle and others), detected straight from oracle text so it
+// works for ANY card with this exact wording, no per-card table entry needed -- same precedent as
+// cyclingCostFromText/landfall just above. Hooked directly into fireEtbTriggers's own EFFECTS call
+// (not routed through CARD_ABILITIES/fireTrigger) since it needs no target and no table entry.
+function scryOnEtbFromText(text) {
+  const m = (text || "").match(/when this (?:land|permanent|creature) enters,\s*scry (\d+)\b/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
 // Exotic Orchard / Reflecting Pool-style sources derive their color from OTHER permanents on the
 // battlefield rather than having a fixed set of their own -- detected via oracle text since
 // there's no structured field for it. Deliberately narrow to the opponent-facing wording so a
@@ -4995,6 +5019,11 @@ function fireEtbTriggers(lobby, card) {
   checkRiot(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   getGrantedTriggeredAbilities(card, lobby, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
+  // "When this land/permanent enters, scry N" -- see scryOnEtbFromText's own comment. No target,
+  // no table entry -- calls EFFECTS.scryN directly rather than routing through fireTrigger/the
+  // stack, matching landfall's own "generic text-detected, resolved inline" precedent just below.
+  const scryAmount = scryOnEtbFromText(card.text);
+  if (scryAmount) EFFECTS.scryN(lobby, { controllerId: card.owner, sourceCard: { id: card.id } }, { amount: scryAmount });
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
   fireOpponentCreatureEtbTriggers(lobby, card);
   // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
@@ -5272,7 +5301,17 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       // whole battlefield (itself included, since it's removed from lobby.cards AFTER this fires),
       // so no separate "selfInclusive" flag is needed the way otherCreatureEtb's is.
       if (ability.typeFilter && !(eventCard && (eventCard.type || "").toLowerCase().includes(ability.typeFilter))) return;
-      fireTrigger(lobby, c, ability);
+      // The Scarab God-style "X, where X is the number of [Type] you control" -- same
+      // amountSource:"count" shape fireGlobalOtherCreatureEtbTriggers already uses, baked into
+      // every effect in the array so both halves of "each opponent loses X life and you scry X"
+      // share the identical, freshly-computed X.
+      let fireAbility = ability;
+      if (ability.amountSource === "count") {
+        const filter = ability.countTypeFilter || [];
+        const amount = Object.values(lobby.cards).filter((x) => x.owner === forPlayerId && x.zoneType === "creature" && filter.some((t) => (x.type || "").toLowerCase().includes(t.toLowerCase()))).length;
+        fireAbility = { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, amount })) };
+      }
+      fireTrigger(lobby, c, fireAbility);
     });
   }
 }
