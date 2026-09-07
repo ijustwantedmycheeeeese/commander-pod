@@ -4876,15 +4876,32 @@
         div.style.cursor = "grab";
         div.ondblclick = (e) => {
           e.stopPropagation();
-          // A card whose ENTIRE activated-ability list is just one mana ability (Sol Ring, signets,
-          // Temple of the False God) is deliberately excluded from the plain "tap" shortcut's free
-          // mana (see the server's own tap handler comment) -- double-click would otherwise do
-          // nothing at all, which reads exactly like "doesn't add mana". Route it to the real
-          // ability instead, same as picking it from the right-click menu would.
+          // A card with a real activated ability (Clue's "{2}, Sacrifice: Draw a card," a signet's
+          // mana ability, Horizon Canopy's second "{1}, {T}, Sacrifice: Draw a card" line) needs
+          // MORE than the plain free-tap-mana shortcut to actually do anything -- that shortcut is
+          // deliberately skipped server-side the instant a card has ANY real ACTIVATED_ABILITIES
+          // entry with manaAbility:true (see the server's own tap handler comment), and it was
+          // never going to fire a non-mana ability like Clue's either way. Without this, double-
+          // clicking such a card just flips its tapped flag with NO game effect at all -- exactly
+          // "tapping it does nothing until you right-click" for any single-ability permanent, and
+          // silently nothing for a MULTI-ability one like Horizon Canopy (2 abilities: neither
+          // branch below used to fire, so it fell all the way to a no-op plain tap).
           const abilities = Array.isArray(card.activatedAbilities) ? card.activatedAbilities : [];
-          if (abilities.length === 1 && abilities[0].manaAbility) {
+          if (abilities.length === 1) {
+            // The one and only real option -- just do it, no need to ask.
             socket.emit("activateAbility", { cardId: card.id, abilityIndex: abilities[0].index });
+          } else if (abilities.length > 1) {
+            // More than one real option (a land with both a mana ability and a second sacrifice-
+            // draw ability, say) -- open the same context menu a right-click would, rather than
+            // guessing which one you meant; it already lists every real ability as its own button.
+            activeCardId = card.id;
+            updateContextMenuVisibility(card);
+            contextMenu.style.left = e.clientX + "px";
+            contextMenu.style.top = e.clientY + "px";
+            contextMenu.style.display = "block";
           } else {
+            // No real activated ability at all -- a plain land/mana-dork/vanilla creature. Keep
+            // the existing free-tap-mana-shortcut behavior exactly as it's always worked.
             socket.emit("tap", card.id);
           }
         };
