@@ -6422,10 +6422,15 @@ app.get("/api/tokenArt", async (req, res) => {
     // Double-faced tokens carry their art under card_faces instead of a top-level image_uris --
     // skipped rather than specially handled, same "narrow to the common case" precedent as
     // everywhere else art gets pulled from Scryfall in this app.
+    // `art` (Scryfall's pre-cropped, frame-and-text-free illustration) is what the picker GRID
+    // shows -- a tiny thumbnail of the full card (`img`, still what actually gets stored on the
+    // token when picked, for consistency with every other card's on-board rendering) makes the
+    // actual artwork hard to make out at a glance, since most of the image is frame/text at that
+    // size. Falls back to the full card image if art_crop is ever missing for some reason.
     const options = (json.data || [])
       .filter((c) => c.image_uris && c.image_uris.normal)
       .slice(0, 30)
-      .map((c) => ({ id: c.id, img: c.image_uris.normal, set: c.set_name || "" }));
+      .map((c) => ({ id: c.id, img: c.image_uris.normal, art: c.image_uris.art_crop || c.image_uris.normal, set: c.set_name || "" }));
     res.json({ success: true, options });
   } catch (e) {
     res.json({ success: false, options: [] });

@@ -261,6 +261,12 @@
     .atk-row-disabled:hover { background: none; border-color: transparent; }
     .ineligible-reason { color: #8a7a55; font-size: 11px; font-style: italic; }
     .zone-card-thumb { width: 44px; height: 61px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+    /* Token art picker grid tile -- art_crop's own aspect ratio isn't fixed card-to-card, so the
+       tile just picks a reasonable landscape shape and lets object-fit:cover crop into it, same as
+       every other card-image container in this app. */
+    .tok-art-tile { aspect-ratio: 5/4; border-radius: 6px; cursor: pointer; border: 2px solid transparent; overflow: hidden; transition: border-color 0.15s, transform 0.15s; position: relative; }
+    .tok-art-tile img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+    .tok-art-tile:hover { border-color: #d4af37; transform: scale(1.12); z-index: 5; box-shadow: 0 6px 18px rgba(0,0,0,0.6); }
     .zone-card-name { flex: 1; font-size: 13px; }
     .stack-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
     .stack-item:last-child { border-bottom: none; }
@@ -1016,11 +1022,11 @@
     </div>
 
     <div class="modal-overlay" id="token-art-modal">
-      <div class="modal-box" style="max-width:520px;">
+      <div class="modal-box" style="max-width:720px;">
         <button class="modal-close-x" onclick="closeTokenArtPicker()" title="Close">✕</button>
         <h2 id="token-art-modal-title">Choose Art</h2>
         <div id="token-art-status" style="font-size:12px;color:#a89a70;margin-bottom:8px;">Searching Scryfall...</div>
-        <div id="token-art-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;max-height:400px;overflow-y:auto;"></div>
+        <div id="token-art-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;max-height:480px;overflow-y:auto;"></div>
       </div>
     </div>
 
@@ -3817,8 +3823,16 @@
           return;
         }
         document.getElementById("token-art-status").style.display = "none";
+        // Thumbnails show the ART-ONLY crop (Scryfall's art_crop, no frame/name/text box) so the
+        // actual illustration is what fills the tile instead of being a sliver of a tiny full-card
+        // image -- a hover zoom (scale + lift, own stacking context so it draws over neighboring
+        // tiles instead of being clipped/overlapped by them) helps judge one further before picking.
+        // Clicking still stores the FULL card image (o.img), unchanged -- only the picker's own
+        // preview changes here, not what actually ends up on the token.
         document.getElementById("token-art-grid").innerHTML = options.map((o) => `
-          <img src="${escapeHtml(o.img)}" title="${escapeHtml(o.set || "")}" style="width:100%;aspect-ratio:5/7;object-fit:cover;border-radius:5px;cursor:pointer;border:2px solid transparent;" onmouseenter="this.style.borderColor='#d4af37';" onmouseleave="this.style.borderColor='transparent';" onclick="pickTokenArt('${escapeHtml(o.img)}')">
+          <div class="tok-art-tile" title="${escapeHtml(o.set || "")}" onclick="pickTokenArt('${escapeHtml(o.img)}')">
+            <img src="${escapeHtml(o.art)}">
+          </div>
         `).join("");
       } catch (e) {
         document.getElementById("token-art-status").innerText = "Couldn't reach Scryfall — you can still paste a URL or upload your own.";
