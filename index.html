@@ -217,9 +217,12 @@
        .modal-box the scroll container instead, which drags the preview column along with it as you
        scroll the list rather than leaving it in view. */
     #zone-modal-body { max-height: 60vh; overflow-y: auto; }
-    #zone-modal-preview-col { flex: 1; min-width: 240px; max-width: 320px; max-height: 60vh; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 16px; overflow-y: auto; flex-shrink: 0; align-self: flex-start; }
-    #zone-modal-preview-col img { width: 100%; border-radius: 8px; }
-    #zone-modal-preview-empty { color: #8a7a55; font-size: 12px; }
+    /* Shared docked hover-preview column -- originally the zone (library/graveyard/exile) modal's
+       own #zone-modal-preview-col, generalized to a class so the token art picker (and anything
+       future) can reuse the identical "hover a row on the left, see it bigger on the right" layout. */
+    .docked-preview-col { flex: 1; min-width: 240px; max-width: 320px; max-height: 60vh; background: #171310; border: 1px solid #5a4423; border-radius: 10px; padding: 16px; overflow-y: auto; flex-shrink: 0; align-self: flex-start; }
+    .docked-preview-col img { width: 100%; border-radius: 8px; }
+    .docked-preview-empty { color: #8a7a55; font-size: 12px; }
 
     #context-menu, #group-context-menu { position: fixed; z-index: 100; background: #1c1710; border: 1px solid #5a4423; border-radius: 6px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display: none; min-width: 190px; }
     #context-menu button, #group-context-menu button { display: block; width: 100%; text-align: left; background: transparent; border: none; border-radius: 0; padding: 8px 12px; font-weight: 400; font-size: 12px; }
@@ -261,12 +264,12 @@
     .atk-row-disabled:hover { background: none; border-color: transparent; }
     .ineligible-reason { color: #8a7a55; font-size: 11px; font-style: italic; }
     .zone-card-thumb { width: 44px; height: 61px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
-    /* Token art picker grid tile -- art_crop's own aspect ratio isn't fixed card-to-card, so the
-       tile just picks a reasonable landscape shape and lets object-fit:cover crop into it, same as
-       every other card-image container in this app. */
-    .tok-art-tile { aspect-ratio: 5/4; border-radius: 6px; cursor: pointer; border: 2px solid transparent; overflow: hidden; transition: border-color 0.15s, transform 0.15s; position: relative; }
+    /* Token art picker grid tile -- shows the real full card image (same as everywhere else a card
+       renders in this app), kept small since the docked preview column (like the zone modal's) is
+       what actually shows it bigger on hover instead of relying on the tile itself to be large. */
+    .tok-art-tile { aspect-ratio: 5/7; border-radius: 5px; cursor: pointer; border: 2px solid transparent; overflow: hidden; transition: border-color 0.15s; }
     .tok-art-tile img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
-    .tok-art-tile:hover { border-color: #d4af37; transform: scale(1.12); z-index: 5; box-shadow: 0 6px 18px rgba(0,0,0,0.6); }
+    .tok-art-tile:hover { border-color: #d4af37; }
     .zone-card-name { flex: 1; font-size: 13px; }
     .stack-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
     .stack-item:last-child { border-bottom: none; }
@@ -698,8 +701,8 @@
             <input type="text" id="zone-modal-search" placeholder="Search by name..." oninput="filterZoneModal(this.value)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 10px;background:#171310;border:1px solid #5a4423;border-radius:6px;color:#e8dcc4;font-size:13px;">
             <div id="zone-modal-body"></div>
           </div>
-          <div id="zone-modal-preview-col">
-            <div id="zone-modal-preview-body"><div id="zone-modal-preview-empty">Hover a card to preview it here.</div></div>
+          <div id="zone-modal-preview-col" class="docked-preview-col">
+            <div id="zone-modal-preview-body"><div class="docked-preview-empty">Hover a card to preview it here.</div></div>
           </div>
         </div>
       </div>
@@ -1022,11 +1025,18 @@
     </div>
 
     <div class="modal-overlay" id="token-art-modal">
-      <div class="modal-box" style="max-width:720px;">
+      <div class="modal-box modal-box-wide">
         <button class="modal-close-x" onclick="closeTokenArtPicker()" title="Close">✕</button>
         <h2 id="token-art-modal-title">Choose Art</h2>
         <div id="token-art-status" style="font-size:12px;color:#a89a70;margin-bottom:8px;">Searching Scryfall...</div>
-        <div id="token-art-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;max-height:480px;overflow-y:auto;"></div>
+        <div style="display:flex;gap:16px;">
+          <div style="flex:1.3;min-width:280px;">
+            <div id="token-art-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;max-height:60vh;overflow-y:auto;"></div>
+          </div>
+          <div id="token-art-preview-col" class="docked-preview-col">
+            <div id="token-art-preview-body"><div class="docked-preview-empty">Hover an option to preview it here.</div></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -3801,6 +3811,21 @@
       if (t.includes("artifact")) return "artifact";
       return "";
     }
+    // Options from the most recent search, kept around so the grid's hover handlers can look one
+    // up by index without re-escaping a whole URL into an inline attribute.
+    let tokenArtOptions = [];
+    function tokenArtPreviewClear() {
+      document.getElementById("token-art-preview-body").innerHTML = '<div class="docked-preview-empty">Hover an option to preview it here.</div>';
+    }
+    // Docked preview column, same "hover a small option on the left, see it bigger on the right"
+    // pattern as the zone (library/graveyard/exile) modal's own preview column -- these are bare
+    // Scryfall search results, not full card objects, so this is just the image + set name rather
+    // than the fuller buildCardPreviewHtml text panel the zone modal shows for real card data.
+    function tokenArtPreview(index) {
+      const o = tokenArtOptions[index];
+      if (!o) return;
+      document.getElementById("token-art-preview-body").innerHTML = `<img src="${escapeHtml(o.img)}"><div class="pv-name">${escapeHtml(o.set || "")}</div>`;
+    }
     async function openTokenArtPicker() {
       const name = document.getElementById("tok-name").value.trim();
       if (!name) { document.getElementById("tok-status").innerText = "Enter a name first."; return; }
@@ -3809,6 +3834,8 @@
       document.getElementById("token-art-status").innerText = "Searching Scryfall...";
       document.getElementById("token-art-status").style.display = "block";
       document.getElementById("token-art-grid").innerHTML = "";
+      tokenArtOptions = [];
+      tokenArtPreviewClear();
       document.getElementById("token-art-modal").style.display = "flex";
       try {
         const res = await fetch(`/api/tokenArt?name=${encodeURIComponent(name)}&kind=${encodeURIComponent(kind)}`);
@@ -3823,15 +3850,13 @@
           return;
         }
         document.getElementById("token-art-status").style.display = "none";
-        // Thumbnails show the ART-ONLY crop (Scryfall's art_crop, no frame/name/text box) so the
-        // actual illustration is what fills the tile instead of being a sliver of a tiny full-card
-        // image -- a hover zoom (scale + lift, own stacking context so it draws over neighboring
-        // tiles instead of being clipped/overlapped by them) helps judge one further before picking.
-        // Clicking still stores the FULL card image (o.img), unchanged -- only the picker's own
-        // preview changes here, not what actually ends up on the token.
-        document.getElementById("token-art-grid").innerHTML = options.map((o) => `
-          <div class="tok-art-tile" title="${escapeHtml(o.set || "")}" onclick="pickTokenArt('${escapeHtml(o.img)}')">
-            <img src="${escapeHtml(o.art)}">
+        // Tiles show the real full card image, same as every other card in this app -- kept small
+        // since the docked preview column is what actually shows it bigger, on hover, rather than
+        // the tile itself.
+        tokenArtOptions = options;
+        document.getElementById("token-art-grid").innerHTML = options.map((o, i) => `
+          <div class="tok-art-tile" title="${escapeHtml(o.set || "")}" onmouseenter="tokenArtPreview(${i})" onclick="pickTokenArt('${escapeHtml(o.img)}')">
+            <img src="${escapeHtml(o.img)}">
           </div>
         `).join("");
       } catch (e) {
@@ -3981,7 +4006,7 @@
     // panel would sit behind the modal's own dark backdrop and look washed out, so this renders
     // inside the modal itself instead, same pattern as the Deck Editor's preview column.
     function zoneModalPreviewClear() {
-      document.getElementById("zone-modal-preview-body").innerHTML = '<div id="zone-modal-preview-empty">Hover a card to preview it here.</div>';
+      document.getElementById("zone-modal-preview-body").innerHTML = '<div class="docked-preview-empty">Hover a card to preview it here.</div>';
     }
     function zoneModalPreview(card) {
       if (!card) return;
