@@ -488,6 +488,10 @@ const CARD_ABILITIES = {
   // "Each opponent loses 1 life" needs no new effect -- loseLife's existing target:"eachOpponent"
   // (built for Archfiend of Despair-style cards) already covers it.
   "corpse knight": [{ trigger: "otherCreatureEtb", label: "Corpse Knight — each opponent loses 1 life", requiresTarget: false, effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] }],
+  // Wave 18 -- Cathars' Crusade is an enchantment, not a creature, so "the entering card itself"
+  // (fireGlobalOtherCreatureEtbTriggers' own selfInclusive exclusion) never applies to it -- this
+  // fires for every creature ETB under its controller, no filters/selfInclusive needed at all.
+  "cathars' crusade": [{ trigger: "otherCreatureEtb", label: "Cathars' Crusade — put a +1/+1 counter on each creature you control", requiresTarget: false, effects: [{ type: "addCountersToAllYourCreatures", amount: 1 }] }],
   "contagion clasp": [{ trigger: "etb", label: "Contagion Clasp — put a -1/-1 counter on target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "addNegativeCounterTarget" }] }],
   // Wave 16 -- new "choose a creature type" free-text mechanism (see chooseCreatureType's own
   // comment). Icon of Ancestry's static "+1/+1 to creatures of the chosen type" lives in
@@ -581,8 +585,14 @@ const ACTIVATED_ABILITIES = {
   "boros signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Boros Signet — Add {R}{W}", effects: [{ type: "addFixedMana", colors: ["R", "W"] }] }],
   "simic signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Simic Signet — Add {G}{U}", effects: [{ type: "addFixedMana", colors: ["G", "U"] }] }],
   "archivist": [{ cost: { tap: true }, label: "Archivist — {T}: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "boompile": [{ cost: { tap: true }, label: "Boompile — {T}: Flip a coin. If you win, destroy all nonland permanents", effects: [{ type: "flipCoinDestroyAllNonland" }] }],
   "alchemist's apprentice": [{ cost: { sacrifice: true }, label: "Alchemist's Apprentice — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  // Wave 18 -- Protection from black (a bare keyword, already free via the standard keywords-list
+  // model) and Changeling ("this card is every creature type," disclosed unmodeled -- see
+  // chooseCreatureType's own trust-model comment) aren't touched here; only the real activated
+  // ability needs a table entry.
+  "chameleon colossus": [{ cost: { mana: "{2}{G}{G}" }, label: "Chameleon Colossus — {2}{G}{G}: gets +X/+X until end of turn, where X is its power", effects: [{ type: "grantTemporaryPTEqualToSelfPower" }] }],
   // Batch-generated from data/oracle-catalog.json via tools/scan-trigger-candidates.js -- see the
   // matching comment above CARD_ABILITIES's generated block for how these were produced/verified.
   "campfire": [{ cost: { mana: "{1}", tap: true }, label: "Campfire — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
@@ -1070,6 +1080,28 @@ const SPELL_ABILITIES = {
   "generous gift": { label: "Generous Gift — destroy target permanent, its controller gets a 3/3 Elephant", effects: [{ type: "destroyTargetCreateTokenForController", tokenName: "Elephant", tokenType: "Token Creature — Elephant", power: "3", toughness: "3", colors: ["G"] }], requiresTarget: true, targetKind: "permanent" },
   "reanimate": { label: "Reanimate — put target creature card from a graveyard onto the battlefield, lose life equal to its mana value", effects: [{ type: "reanimateLoseLifeEqualToCmc" }], requiresTarget: true, targetKind: "anyGraveyardCreature" },
   "vampiric tutor": { label: "Vampiric Tutor — search your library for a card, put it on top, lose 2 life", effects: [{ type: "tutorToHand", toTopOfLibrary: true, lifeLoss: 2 }] },
+  // Wave 18 -- "As an additional cost to cast this spell, sacrifice a land/creature." The first two
+  // cards needing a real additional cost to cast (see attemptPlay's new addlCost handling, the
+  // single choke point both playCard and changeZone's hand-cast branch already share) -- everything
+  // past the cost itself reuses existing effects verbatim (searchLandTypes/tutorToHand).
+  "crop rotation": { label: "Crop Rotation — sacrifice a land, search for a land, put it onto the battlefield", additionalCost: { sacrificeType: "land" }, effects: [{ type: "searchLandTypes", types: ["Land"] }] },
+  "diabolic intent": { label: "Diabolic Intent — sacrifice a creature, search for a card, put it into your hand", additionalCost: { sacrificeType: "creature" }, effects: [{ type: "tutorToHand" }] },
+  "brave the elements": { label: "Brave the Elements — choose a color", modes: ["White", "Blue", "Black", "Red", "Green"].map((color) => ({
+    label: `Brave the Elements — white creatures you control gain protection from ${color} until end of turn`,
+    requiresTarget: false,
+    effects: [{ type: "grantProtectionToOwnColorCreatures", creatureColor: "W", quality: color.toLowerCase() }]
+  })) },
+  "distant melody": { label: "Distant Melody — choose a creature type, draw a card for each permanent you control of that type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "drawForPermanentsOfChosenType" }] },
+  // Brokers Charm -- 2 of its real 3 modes. The dropped mode ("Target creature you control gets
+  // +1/+0 until end of turn. It deals damage equal to its power to target creature or planeswalker
+  // an opponent controls") needs TWO independently-typed targets (your own creature, then an
+  // opponent's creature/planeswalker) in a single ability -- this engine's target-choice queue only
+  // ever resolves one target per queued entry, so a genuinely two-target mode has no home here
+  // without a new multi-target choice mechanism. Disclosed and skipped rather than half-modeled.
+  "brokers charm": { label: "Brokers Charm — choose one", modes: [
+    { label: "Brokers Charm — destroy target enchantment", requiresTarget: true, targetKind: "typeList", typeFilter: ["enchantment"], effects: [{ type: "destroyTarget" }] },
+    { label: "Brokers Charm — draw two cards", requiresTarget: false, effects: [{ type: "drawCards", amount: 2 }] }
+  ] },
   "faithless looting": { label: "Faithless Looting — draw two cards, then discard two cards", effects: [{ type: "drawCards", amount: 2 }, { type: "targetPlayerDiscards", self: true, amount: 2 }] },
   // "Draw two cards, then discard two cards. Untap up to three lands." Same self-discard shape as
   // Faithless Looting above, plus EFFECTS.untapUpToNOwnLands (auto-picks the first N tapped lands --
@@ -1467,6 +1499,18 @@ const EFFECTS = {
     card.counters = (card.counters || 0) + (amount + bonus) * mult;
     broadcastCard(lobby, card);
   },
+  // Cathars' Crusade -- addCountersToSelf's controller-wide counterpart: "put a +1/+1 counter on
+  // EACH creature you control" (including whichever creature just entered and triggered this),
+  // not just the source. Same Hardened Scales/doubling hooks, applied per matching creature.
+  addCountersToAllYourCreatures(lobby, ctx, params) {
+    const amount = params.amount || 1;
+    const bonus = amount > 0 ? bonusCountersFor(lobby, ctx.controllerId) : 0;
+    const mult = amount > 0 ? counterMultiplierFor(lobby, ctx.controllerId) : 1;
+    Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature").forEach((c) => {
+      c.counters = (c.counters || 0) + (amount + bonus) * mult;
+      broadcastCard(lobby, c);
+    });
+  },
   // Atomize -- "Proliferate." Real Magic lets you choose WHICH permanents/players with a counter
   // already on them get another (and skip the rest, e.g. to avoid also boosting an opponent's own
   // +1/+1 counters) -- this app has no per-choice multi-select UI for that, so it auto-affects EVERY
@@ -1580,6 +1624,18 @@ const EFFECTS = {
   grantTemporaryKeywordToTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (card) grantTemporaryKeyword(lobby, card, params.keyword);
+  },
+  // Chameleon Colossus's own activated ability ("{2}{G}{G}: This creature gets +X/+X until end of
+  // turn, where X is its power") -- reads its OWN current power (including any equipment/anthem/
+  // earlier-this-turn temporaryPT bonus, same computation Terror of the Peaks' trigger already
+  // uses) and grants that much more via grantTemporaryPT, so repeated activations compound
+  // correctly (each one X's off whatever power it has grown to by then, matching real Magic).
+  grantTemporaryPTEqualToSelfPower(lobby, ctx) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    const bonus = attachedBonusFor(lobby, card), stat = staticBonusFor(lobby, card);
+    const power = Math.max(0, parsePT(card.power) + bonus.powerBonus + stat.powerBonus);
+    grantTemporaryPT(lobby, card, power, power);
   },
   // Beast Within / Generous Gift -- "Destroy target permanent. Its controller creates a 3/3 green
   // [X] creature token." The token goes to the DESTROYED permanent's own controller, not the
@@ -1774,6 +1830,26 @@ const EFFECTS = {
       broadcastCard(lobby, card);
     }
   },
+  // Brave the Elements -- "Choose a color. White creatures you control gain protection from the
+  // chosen color until end of turn." Only ONE real choice (which color to protect from) -- "white
+  // creatures you control" is fixed in the actual oracle text, not itself a variable. Modeled as
+  // one mode per color (same "one button per color" precedent as Mother of Runes' ACTIVATED_
+  // ABILITIES array, since this engine has no single-step 5-way color-picker), each granting the
+  // same real, functional card.grantedProtections Mother/Giver of Runes use (it actually gates
+  // targeting when lobby.settings.enforceTargetingRestrictions is on), not a cosmetic no-op.
+  grantProtectionToOwnColorCreatures(lobby, ctx, params) {
+    const quality = params.quality;
+    if (!quality) return;
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner !== ctx.controllerId || c.zoneType !== "creature") return;
+      if (params.creatureColor && !(c.colors || []).includes(params.creatureColor)) return;
+      if (!c.grantedProtections) c.grantedProtections = [];
+      if (!c.grantedProtections.includes(quality)) {
+        c.grantedProtections.push(quality);
+        broadcastCard(lobby, c);
+      }
+    });
+  },
   // Cursed Mirror -- "become a copy of any creature on the battlefield until end of turn, except
   // it has haste." CR 707 copying is deep (a copy takes on every COPIABLE value -- name, type line,
   // mana cost, colors, P/T, text, keywords/abilities, image; NOT counters or other permanents'
@@ -1860,6 +1936,18 @@ const EFFECTS = {
     card.chosenCreatureType = params.chosenTargetId;
     broadcastCard(lobby, card);
     pushLog(lobby, `${card.name || "A permanent"}'s controller chooses ${params.chosenTargetId}`);
+  },
+  // Distant Melody -- "Choose a creature type. Draw a card for each permanent you control of that
+  // type." A ONE-SHOT use of the same free-text creatureType targetKind, unlike Icon of Ancestry/
+  // Cavern of Souls' PERSISTENT chosenCreatureType above -- read straight off params.chosenTargetId
+  // (baked in by chooseTargetFor for any castSpell-kind target choice) instead of stashing it on a
+  // card. Matches the real wording ("permanent," not "creature") -- counts any permanent whose type
+  // line includes the chosen text, not creature-zoned cards only.
+  drawForPermanentsOfChosenType(lobby, ctx, params) {
+    const type = (params.chosenTargetId || "").toLowerCase();
+    if (!type) return;
+    const count = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && (c.type || "").toLowerCase().includes(type)).length;
+    if (count > 0) drawN(lobby, ctx.controllerId, count);
   },
   // Reya Dawnbringer / Necromancy -- puts a creature card from a graveyard onto the battlefield
   // under the CASTER's control (correct for both: Reya only ever searches her own controller's
@@ -2484,6 +2572,22 @@ const EFFECTS = {
     EFFECTS.destroyAllCreatures(lobby, ctx, params);
     equipmentToDestroy.forEach((c) => {
       if (!lobby.cards[c.id]) return;
+      fireDeathTriggers(lobby, c);
+      sendToGraveyardInternal(lobby, c);
+    });
+  },
+  // Boompile -- "{T}: Flip a coin. If you win the flip, destroy all nonland permanents." A
+  // genuinely new coin-flip mechanism (this app's only prior random-outcome primitive is the d20
+  // roll above) -- a plain 50/50, logged either way so a loss is visibly nothing-happened rather
+  // than silent. "Nonland" is any permanent whose zoneType isn't "mana" (creature or artifact --
+  // covers enchantments/planeswalkers too, per classifyType's own bucketing), Boompile itself
+  // included, matching the real card's own lack of a self-exception.
+  flipCoinDestroyAllNonland(lobby, ctx) {
+    const p = lobby.players[ctx.controllerId];
+    const won = Math.random() < 0.5;
+    pushLog(lobby, `${p ? p.name : "?"} flips a coin for Boompile: ${won ? "wins" : "loses"}`);
+    if (!won) return;
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature" || c.zoneType === "artifact").forEach((c) => {
       fireDeathTriggers(lobby, c);
       sendToGraveyardInternal(lobby, c);
     });
@@ -3266,6 +3370,16 @@ function commanderColorIdentity(lobby, ownerId) {
   const colors = new Set();
   if (p) (p.commanders || []).forEach((cmd) => { if (cmd && Array.isArray(cmd.colorIdentity)) cmd.colorIdentity.forEach((c) => colors.add(c)); });
   return Array.from(colors);
+}
+
+// Chromatic Lantern -- "Lands you control have '{T}: Add one mana of any color.'" A blanket grant
+// to every OTHER land the controller owns, checked by name (unlike dependsOnOpponentLands/
+// dependsOnCommanderColorIdentity's text-pattern approach, since "lands you control have [X]" is
+// this card's own specific grant, not a reusable oracle-text shape). Chromatic Lantern's own "{T}:
+// Add one mana of any color" ability needs no table entry at all -- Scryfall's producedMana already
+// lists all five colors for it, so the tap handler's existing multi-color prompt already covers it.
+function controlsChromaticLantern(lobby, ownerId) {
+  return Object.values(lobby.cards).some((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "chromatic lantern");
 }
 
 // The actual set of colors any opponent's lands could currently produce, for a source like
@@ -4242,11 +4356,35 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   // Goblin Warchief and its functional cousins -- see spellCostReductionFor's own comment.
   const reduction = spellCostReductionFor(lobby, card.owner, card);
   if (reduction > 0) cost.generic = Math.max(0, cost.generic - reduction);
+  // Crop Rotation / Diabolic Intent -- "as an additional cost to cast this spell, sacrifice a
+  // [land/creature]." A real additional cost (paid alongside mana, not a triggered effect after the
+  // fact), so it's checked and paid here in attemptPlay -- the single choke point both playCard and
+  // changeZone's hand-casting branch already funnel through -- rather than as an EFFECTS step, which
+  // would let the spell resolve even when nothing was ever actually paid. Auto-picks a qualifying
+  // permanent (no target-choice-shaped cost exists in this engine, same disclosed simplification as
+  // autoSacrificeFilter for activated abilities) and rejects BEFORE paying any mana if nothing
+  // qualifies, matching real Magic (an unpayable additional cost means the spell can't be cast).
+  const spellAbility = getSpellAbility(card.name);
+  const addlCost = spellAbility && spellAbility.additionalCost;
+  let sacrificeForCost = null;
+  if (addlCost && addlCost.sacrificeType) {
+    const zoneForFilter = addlCost.sacrificeType === "land" ? "mana" : "creature";
+    sacrificeForCost = Object.values(lobby.cards).find((c) => c.owner === card.owner && c.zoneType === zoneForFilter && c.id !== card.id) || null;
+    if (!sacrificeForCost) {
+      return { ok: false, error: `You have no ${addlCost.sacrificeType} to sacrifice as an additional cost.` };
+    }
+  }
   const remaining = canAffordAndPay(p.mana, cost, xValue);
   if (!remaining) {
     return { ok: false, error: `Not enough mana to cast ${card.name || "this card"}.` };
   }
   p.mana = remaining;
+  if (sacrificeForCost) {
+    fireDeathTriggers(lobby, sacrificeForCost);
+    sendToGraveyardInternal(lobby, sacrificeForCost);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} sacrificed ${sacrificeForCost.name || "a permanent"} to cast ${card.name || "a spell"}`);
+  }
   return { ok: true };
 }
 
@@ -6660,6 +6798,11 @@ io.on("connection", (socket) => {
       // Command Tower and the like: narrow to the real commander's color identity instead of the
       // raw (all-five) producedMana list Scryfall reports.
       options = commanderColorIdentity(lobby, socket.id);
+    } else if (classifyType(card.type) === "mana" && controlsChromaticLantern(lobby, socket.id)) {
+      // Chromatic Lantern grants every land you control (even a plain Forest) the ability to add
+      // any color -- checked after the two text-pattern cases above since a card like Command Tower
+      // already has a real, narrower rule to apply instead of the blanket 5-color grant.
+      options = ["W", "U", "B", "R", "G"];
     }
     let color = options ? (options.length === 1 ? options[0] : null) : basicLandColor(card.type);
     if (!color && !options && Array.isArray(card.producedMana) && card.producedMana.length === 1) {
@@ -7028,9 +7171,15 @@ io.on("connection", (socket) => {
       const mode = entry.modes[parseInt(targetId, 10)];
       socket.emit("targetChoiceResolved", id);
       if (mode.requiresTarget) {
+        // Brokers Charm's "Destroy target enchantment" mode (targetKind:"typeList") surfaced a
+        // real gap here: this branch used to forward only targetKind, silently dropping
+        // typeFilter/minCmc -- fields resolveChosenTarget's typeList/permanent branches need to
+        // validate the target at all. The top-level castSpell requiresTarget branch just above
+        // already forwards both; a mode needs the exact same fields for the exact same reason.
         queueTargetChoice(lobby, {
           kind: "castSpell", controllerId: entry.controllerId, spellCard: entry.spellCard, sourceCard: entry.spellCard,
-          label: mode.label, effects: mode.effects, targetKind: mode.targetKind, logSuffix: entry.logSuffix || ""
+          label: mode.label, effects: mode.effects, targetKind: mode.targetKind,
+          minCmc: mode.minCmc || null, typeFilter: mode.typeFilter || null, logSuffix: entry.logSuffix || ""
         });
       } else {
         entry.spellCard._resolvedSpellEffects = mode.effects;
