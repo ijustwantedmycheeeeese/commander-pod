@@ -863,8 +863,78 @@ const ACTIVATED_ABILITIES = {
   "goblin bombardment": [{ cost: { autoSacrificeFilter: "creature" }, requiresTarget: true, targetKind: "any", label: "Goblin Bombardment — Sacrifice a creature: deal 1 damage to any target", effects: [{ type: "damageTarget", amount: 1 }] }],
   "goblin trashmaster": [{ cost: { autoSacrificeFilter: "goblin" }, requiresTarget: true, targetKind: "artifact", label: "Goblin Trashmaster — Sacrifice a Goblin: destroy target artifact", effects: [{ type: "destroyTarget" }] }]
 };
-function getActivatedAbilities(cardName) {
-  return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
+// Generic "[X creatures you control / All Xs / Other creatures you control] have '[ability]'"
+// grant detector -- the Sliver cycle's own defining template (Gemhide Sliver, Clot Sliver, Crypt
+// Sliver, etc.), also used by cards like Hexing Squelcher. A real, name-independent text scan
+// (same precedent as anthemKeywordsFromText/checkRiot), not a per-card table entry -- one grantor
+// on the battlefield retroactively covers every future card using this exact templating, the same
+// leverage the type-scoped anthem branch and the "treasure" ACTIVATED_ABILITIES entry already prove
+// out. Only maps a small, growing library of KNOWN quoted-ability shapes (grantedAbilityFromText) --
+// an unrecognized granted ability text is silently skipped, a disclosed narrowing matching every
+// other text-pattern mechanism in this file.
+function grantedAbilityGrantMatches(text) {
+  const matches = [];
+  const re = /(?:all (\w+)s|(\w+) creatures you control) have "([^"]+)"/gi;
+  let m;
+  while ((m = re.exec(text || ""))) {
+    const typeWord = (m[1] || m[2] || "").toLowerCase();
+    matches.push({ typeWord, abilityText: m[3] });
+  }
+  return matches;
+}
+// Maps ONE granted ability's quoted text to a real ACTIVATED_ABILITIES-shaped entry, reusing
+// existing EFFECTS wherever the shape matches an already-automated single-card ability (Skithiryx's
+// own {B}{B}: Regenerate -> grantRegenerationShield, Treasure's own any-color tap -> chooseManaAnyColor).
+function grantedAbilityFromText(abilityText) {
+  const t = abilityText.trim().replace(/\.$/, "").toLowerCase();
+  let m;
+  if (/^\{t\}: add one mana of any color$/.test(t)) {
+    return { cost: { tap: true }, manaAbility: true, effects: [{ type: "chooseManaAnyColor" }] };
+  }
+  if ((m = t.match(/^\{([^}]+)\}: regenerate this permanent$/))) {
+    return { cost: { mana: `{${m[1].toUpperCase()}}` }, effects: [{ type: "grantRegenerationShield" }] };
+  }
+  if (/^\{t\}: regenerate target \w+$/.test(t)) {
+    return { cost: { tap: true }, requiresTarget: true, targetKind: "creature", effects: [{ type: "grantRegenerationShieldToTarget" }] };
+  }
+  if ((m = t.match(/^pay (\d+) life: return this permanent to its owner'?s hand$/))) {
+    return { cost: { life: parseInt(m[1], 10) || 0 }, effects: [{ type: "bounceSelfToHand" }] };
+  }
+  if ((m = t.match(/^\{([^}]+)\}, sacrifice this permanent: destroy target permanent$/))) {
+    return { cost: { mana: `{${m[1].toUpperCase()}}`, sacrifice: true }, requiresTarget: true, targetKind: "permanent", effects: [{ type: "destroyTarget" }] };
+  }
+  if (/^ward—pay 2 life$/.test(t) || /^ward - pay 2 life$/.test(t)) {
+    // A granted KEYWORD line, not a real activated ability -- Ward isn't modeled as an
+    // enforceable game restriction in this engine at all (same disclosed gap as everywhere else
+    // Ward is printed), so this is intentionally a no-op match (skip, not a table entry).
+    return null;
+  }
+  return null;
+}
+// Self-inclusive for "all Xs"/"[type] creatures you control" (matches how every real card in this
+// shape actually reads); "other creatures you control" is the one variant that excludes the
+// granting card's own copy of the ability.
+function getGrantedActivatedAbilities(card, lobby) {
+  if (!lobby || card.zoneType !== "creature") return [];
+  const cardType = (card.type || "").toLowerCase();
+  const grants = [];
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    grantedAbilityGrantMatches(c.text).forEach(({ typeWord, abilityText }) => {
+      const excludeSelf = typeWord === "other";
+      if (!excludeSelf && typeWord && !cardType.includes(typeWord)) return;
+      if (excludeSelf && c.id === card.id) return;
+      const shape = grantedAbilityFromText(abilityText);
+      if (!shape) return;
+      grants.push({ ...shape, label: `${card.name || "Creature"} — ${abilityText.trim().replace(/\.$/, "")}` });
+    });
+  }
+  return grants;
+}
+function getActivatedAbilities(card, lobby) {
+  const named = ACTIVATED_ABILITIES[archiveKey(card.name)] || [];
+  return [...named, ...getGrantedActivatedAbilities(card, lobby)];
 }
 
 // "Creatures can't attack you unless their controller pays {2} for each creature they control
@@ -1801,6 +1871,21 @@ const EFFECTS = {
     if (!card) return;
     card.regenerationShield = (card.regenerationShield || 0) + 1;
     broadcastCard(lobby, card);
+  },
+  // Crypt Sliver's granted "{T}: Regenerate target [Type]" -- the single-target counterpart to
+  // grantRegenerationShield above, for a granted ability that targets rather than self-buffs.
+  grantRegenerationShieldToTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    card.regenerationShield = (card.regenerationShield || 0) + 1;
+    broadcastCard(lobby, card);
+  },
+  // Hibernation Sliver's granted "Pay 2 life: Return this permanent to its owner's hand" -- a
+  // self-targeting counterpart to bounceTargetToHand, same shape as grantTemporaryKeywordToSelf-
+  // style self effects elsewhere in this file.
+  bounceSelfToHand(lobby, ctx) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (card) bounceCardToHandInternal(lobby, card);
   },
   // Deathless Angel's "target creature gains indestructible UNTIL END OF TURN" -- a genuinely
   // reusable primitive (not a one-off) for any future "target creature gains keyword" card.
@@ -4114,7 +4199,7 @@ function maskCard(card, viewerId, lobby) {
   // and only attached once a name is actually visible to this viewer (the face-down branch above
   // never reaches here) and the card is somewhere an ability could be activated from.
   if (card.zoneType === "hand" || card.zoneType === "stack") return card;
-  const abilities = getActivatedAbilities(card.name);
+  const abilities = getActivatedAbilities(card, lobby);
   if (!abilities.length) return card;
   // `index` has to stay the RAW index into the unfiltered array -- activateAbility looks the chosen
   // ability back up by that same index, so a filtered-out entry must not shift the numbering of the
@@ -6803,7 +6888,7 @@ io.on("connection", (socket) => {
     // neither of which this auto-mana shortcut (built for free, single-choice sources) can
     // represent. Skip it entirely here; the player activates the real ability instead, same as any
     // other costed activated ability, rather than getting free or wrong mana from a plain tap.
-    if (getActivatedAbilities(card.name).some((a) => a.manaAbility)) return;
+    if (getActivatedAbilities(card, lobby).some((a) => a.manaAbility)) return;
     // Auto-add mana for any tapped source with an unambiguous color — lands, rocks, and dorks
     // alike — not just basics. Basic land types are unambiguous by their type line; anything else
     // (rocks, dorks, nonbasic lands) is unambiguous only when the archive says it produces exactly
@@ -6916,7 +7001,7 @@ io.on("connection", (socket) => {
     // fireAttackTriggers already follow, just enforced with a real error here since this is a
     // player-initiated action, not a silent automatic trigger.
     if (!lobby.turn.started) { socket.emit("actionError", "You can't activate abilities before the game starts."); return; }
-    const ability = getActivatedAbilities(card.name)[abilityIndex];
+    const ability = getActivatedAbilities(card, lobby)[abilityIndex];
     if (!ability) return;
     // Reject BEFORE paying anything if this ability could never find a legal target right now --
     // Whip of Erebos with an empty graveyard, say. Without this the player would pay the full
