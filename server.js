@@ -6571,13 +6571,34 @@ io.on("connection", (socket) => {
 
   // ---- battlefield cards ----
 
+  // amount (Create Token's own new field) lets a player create several copies of the SAME token in
+  // one action instead of clicking Create Token repeatedly -- e.g. Goblin Rally's "create three 1/1
+  // red Goblins" is otherwise a real click-three-times chore for a manually-adjudicated card. Capped
+  // well under MAX_CARDS_PER_LOBBY so one bad input can't itself blow the table's card limit; the
+  // existing per-card cap check still runs before EACH one, so a request that would only partially
+  // fit still creates as many as it can rather than failing outright. Untouched (defaults to a
+  // single card) for every other spawnCard caller -- deck-testing's "spawn any card" tool, drawn
+  // face-down cards, etc. -- since none of those ever set `amount`.
   socket.on("spawnCard", (data) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
-    if (Object.keys(lobby.cards).length >= MAX_CARDS_PER_LOBBY) { socket.emit("actionError", "This table has hit its card limit — clean up unused tokens before spawning more."); return; }
-    const card = spawnBattlefieldCard(lobby, { ...data, owner: socket.id, zoneType: classifyType(data.type) });
     const who = lobby.players[socket.id].name;
-    pushLog(lobby, data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
-    if (card.zoneType !== "hand") fireEtbTriggers(lobby, card);
+    const amount = Math.max(1, Math.min(20, parseInt(data.amount, 10) || 1));
+    let created = 0;
+    let lastCard = null;
+    for (let i = 0; i < amount; i++) {
+      if (Object.keys(lobby.cards).length >= MAX_CARDS_PER_LOBBY) break;
+      const card = spawnBattlefieldCard(lobby, { ...data, owner: socket.id, zoneType: classifyType(data.type) });
+      if (card.zoneType !== "hand") fireEtbTriggers(lobby, card);
+      lastCard = card;
+      created++;
+    }
+    if (created === 0) { socket.emit("actionError", "This table has hit its card limit — clean up unused tokens before spawning more."); return; }
+    if (created < amount) socket.emit("actionError", `Table card limit reached -- only created ${created} of ${amount}.`);
+    if (amount > 1) {
+      pushLog(lobby, `${who} created ${created} ${lastCard.name || "token"}${created === 1 ? "" : "s"}`);
+    } else {
+      pushLog(lobby, data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
+    }
   });
 
   socket.on("changeZone", ({ id, zoneType, x }) => {

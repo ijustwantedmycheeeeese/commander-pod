@@ -955,6 +955,7 @@
         <div class="flex-row" style="margin-bottom:6px;">
           <input type="text" id="tok-power" placeholder="Power" style="width:70px;">
           <input type="text" id="tok-toughness" placeholder="Toughness" style="width:70px;">
+          <input type="number" id="tok-amount" placeholder="Amount" value="1" min="1" max="20" style="width:70px;" title="How many copies of this token to create at once">
         </div>
         <div class="mm-label">Art</div>
         <div class="flex-row" style="align-items:center;margin-bottom:2px;">
@@ -3707,6 +3708,7 @@
       renderTokenKeywords();
       document.getElementById("token-role-hint").style.display = "none";
       document.getElementById("tok-img").value = "";
+      document.getElementById("tok-amount").value = "1";
       document.getElementById("tok-status").innerText = "";
       document.getElementById("token-modal").style.display = "flex";
     }
@@ -3768,9 +3770,10 @@
       const img = document.getElementById("tok-img").value.trim();
       const colors = Array.from(document.querySelectorAll(".tok-color:checked")).map((cb) => cb.value);
       const keywords = Array.from(document.querySelectorAll(".tok-kw:checked")).map((cb) => cb.value);
+      const amount = Math.max(1, Math.min(20, parseInt(document.getElementById("tok-amount").value, 10) || 1));
       socket.emit("spawnCard", {
         name, type, img, power: power || null, toughness: toughness || null,
-        colors, colorIdentity: colors, manaCost: "", cmc: 0, text: "", keywords, producedMana: null, faceDown: false
+        colors, colorIdentity: colors, manaCost: "", cmc: 0, text: "", keywords, producedMana: null, faceDown: false, amount
       });
       closeTokenModal();
     }
