@@ -335,6 +335,10 @@ const CARD_ABILITIES = {
     { trigger: "otherCreatureEtb", keywordFilter: ["Flying"], label: "Dragon Tempest — that creature gains haste", requiresTarget: false, effects: [{ type: "grantHasteToEnteringCreature" }] },
     { trigger: "otherCreatureEtb", typeFilter: ["Dragon"], amountSource: "count", countTypeFilter: ["Dragon"], label: "Dragon Tempest — deal damage equal to Dragons you control to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget" }] }
   ],
+  // Wave 21 -- excludeTokenSources: true is the real reason "another NONTOKEN Dragon" matters here
+  // (not just flavor) -- without it, a token Dragon this ability itself just created would keep
+  // re-triggering it forever. See createTokenCopyOfEnteringCreature's own comment.
+  "miirym, sentinel wyrm": [{ trigger: "otherCreatureEtb", typeFilter: ["Dragon"], excludeTokenSources: true, requiresTarget: false, label: "Miirym, Sentinel Wyrm — create a nonlegendary token copy of that Dragon", effects: [{ type: "createTokenCopyOfEnteringCreature" }] }],
   // "opponentDraws"/"opponentFirstNoncreatureSpell" are handled by fireGlobalOpponentDrawTriggers/
   // fireGlobalOpponentFirstNoncreatureSpellTriggers (drawN/pushToStack hooks) rather than
   // fireTrigger, since the choice here belongs to the OPPONENT, not this card's controller -- see
@@ -857,6 +861,7 @@ const ACTIVATED_ABILITIES = {
   // then shuffle." cost.excludeSelf -- see the activateAbility handler's own comment -- since
   // "another" (unlike Pashalik Mons's "a Goblin") means this can't fall back to sacrificing itself.
   "razaketh, the foulblooded": [{ cost: { life: 2, autoSacrificeFilter: "creature", excludeSelf: true }, label: "Razaketh, the Foulblooded — Pay 2 life, Sacrifice another creature: search for a card", effects: [{ type: "tutorToHand" }] }],
+  "tortured existence": [{ cost: { mana: "{B}", autoDiscardFilter: "creature" }, requiresTarget: true, targetKind: "ownGraveyardCreature", label: "Tortured Existence — {B}, Discard a creature card: return target creature card from your graveyard to your hand", effects: [{ type: "returnGraveyardCardToHand" }] }],
   // The real Treasure token ability -- matches ANY token literally named "Treasure", regardless of
   // which effect created it (createTreasureToken/rollD20CreateTreasures/counterTargetSpellCreateTokenForController
   // all use this exact name). See chooseManaAnyColor's own comment for the sacrificed-source-by-the-
@@ -908,6 +913,11 @@ function grantedAbilityFromText(abilityText) {
   }
   if ((m = t.match(/^\{([^}]+)\}, sacrifice this permanent: destroy target permanent$/))) {
     return { cost: { mana: `{${m[1].toUpperCase()}}`, sacrifice: true }, requiresTarget: true, targetKind: "permanent", effects: [{ type: "destroyTarget" }] };
+  }
+  // Hollowhead Sliver's own grant -- reuses the same autoDiscardFilter cost primitive Tortured
+  // Existence's real ACTIVATED_ABILITIES entry needs.
+  if (/^\{t\}, discard a card: draw a card$/.test(t)) {
+    return { cost: { tap: true, autoDiscardFilter: "card" }, effects: [{ type: "drawCards", amount: 1 }] };
   }
   if (/^ward—pay 2 life$/.test(t) || /^ward - pay 2 life$/.test(t)) {
     // A granted KEYWORD line, not a real activated ability -- Ward isn't modeled as an
@@ -2098,6 +2108,15 @@ const EFFECTS = {
     broadcastPlayers(lobby); // the graveyard array just shrank
     fireEtbTriggers(lobby, card);
   },
+  // Tortured Existence -- "Return target creature card from your graveyard to your HAND" (not the
+  // battlefield) -- the one-zone-shallower counterpart to reanimateFromGraveyard, same
+  // findAndRemoveGraveyardEntry primitive.
+  returnGraveyardCardToHand(lobby, ctx, params) {
+    const found = findAndRemoveGraveyardEntry(lobby, params.chosenTargetId);
+    if (!found) return;
+    spawnBattlefieldCard(lobby, { ...found.entry, owner: ctx.controllerId, faceDown: true, zoneType: "hand" });
+    broadcastPlayers(lobby);
+  },
   // Animate Dead -- same core reanimation as reanimateFromGraveyard, plus actually attaching the
   // Aura itself to the reanimated creature (so its own "Enchanted creature gets -1/-0" line applies
   // automatically via the existing attachedBonusFor/equipEffectsFromText machinery, zero extra code
@@ -2283,6 +2302,25 @@ const EFFECTS = {
       label: `Sacrifice the token copy of ${source.name || "a creature"} (Kiki-Jiki, Mirror Breaker)`,
       effects: [{ type: "sacrificeChosenCardById", targetCardId: token.id }]
     });
+  },
+  // Miirym, Sentinel Wyrm -- "create a token that's a copy of it [the entering Dragon], except the
+  // token isn't legendary." Same copiable-characteristics field list as createTokenCopyWithHaste,
+  // minus the haste/sacrifice-at-end-step wrapper (this copy is permanent) and with the Legendary
+  // supertype stripped from the copied type line instead. enteringCardId is baked in by
+  // fireGlobalOtherCreatureEtbTriggers itself (see its own comment), no target needed. Doesn't
+  // re-fire the new token's own ETB triggers, same disclosed precedent as createTokenCopyWithHaste.
+  createTokenCopyOfEnteringCreature(lobby, ctx, params) {
+    const source = lobby.cards[params.enteringCardId];
+    if (!source) return;
+    const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
+    const data = {};
+    COPY_FIELDS.forEach((f) => { data[f] = source[f]; });
+    data.type = (data.type || "").replace(/\blegendary\s+/i, "");
+    data.owner = ctx.controllerId;
+    data.zoneType = classifyType(data.type);
+    const token = spawnBattlefieldCard(lobby, data);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"} creates a token copy of ${source.name || "a creature"}`);
   },
   // Hellkite Courser -- chosenTargetId here is the commander's SLOT (0 or 1, see the
   // ownCommanderInZone targetKind), not a card id. Puts it onto the battlefield with temporary
@@ -5175,6 +5213,10 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
     if (c.owner !== enteringCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
     getAutomatedAbilities(c.name, "otherCreatureEtb").forEach((ability) => {
       if (c.id === enteringCard.id && !ability.selfInclusive) return;
+      // Miirym, Sentinel Wyrm -- "another NONTOKEN Dragon" -- without this, a token Dragon entering
+      // (from Miirym's own copy effect, or any other token-Dragon source) would keep re-triggering
+      // Miirym forever, a real infinite-loop risk, not just a flavor mismatch.
+      if (ability.excludeTokenSources && enteringType.includes("token")) return;
       if (ability.typeFilter && !ability.typeFilter.some((t) => enteringType.includes(t.toLowerCase()))) return;
       if (ability.keywordFilter && !ability.keywordFilter.some((k) => enteringKeywords.includes(k.toLowerCase()))) return;
       if (ability.condition && !ability.condition(c, lobby)) return;
@@ -7125,6 +7167,17 @@ io.on("connection", (socket) => {
         : candidates.find((c) => c.id !== card.id) || candidates.find((c) => c.id === card.id) || null;
       if (!autoSacrificeCard) { socket.emit("actionError", `You have no ${cost.excludeSelf ? "other " : ""}${filter === "creature" ? "creature" : filter} to sacrifice.`); return; }
     }
+    // Tortured Existence-style "Discard a creature card" / Hollowhead Sliver-style "Discard a
+    // card" -- same auto-pick-the-first-qualifying-card shape as autoSacrificeFilter just above,
+    // for hand cards instead of battlefield creatures. "card" (not a real type substring) matches
+    // ANYTHING in hand.
+    let autoDiscardCard = null;
+    if (cost.autoDiscardFilter) {
+      const filter = cost.autoDiscardFilter;
+      const candidates = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "hand" && (filter === "card" || (c.type || "").toLowerCase().includes(filter)));
+      autoDiscardCard = candidates[0] || null;
+      if (!autoDiscardCard) { socket.emit("actionError", `You have no ${filter === "card" ? "card" : filter} card to discard.`); return; }
+    }
 
     if (cost.tap) {
       if (card.tapped) { socket.emit("actionError", `${card.name} is already tapped.`); return; }
@@ -7169,6 +7222,10 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} sacrifices ${autoSacrificeCard.name || "a creature"} to pay the cost`);
       fireDeathTriggers(lobby, autoSacrificeCard);
       sendToGraveyardInternal(lobby, autoSacrificeCard);
+    }
+    if (autoDiscardCard) {
+      pushLog(lobby, `${p.name} discards ${autoDiscardCard.name || "a card"} to pay the cost`);
+      sendToGraveyardInternal(lobby, autoDiscardCard);
     }
     if (ability.manaAbility) {
       // Real Magic (CR 605): a mana ability never uses the stack -- it resolves the instant it's
