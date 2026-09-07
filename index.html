@@ -255,6 +255,11 @@
     .atk-row:hover { background: rgba(255,255,255,0.04); }
     .atk-row:has(.atk-check:checked) { background: rgba(220,38,38,0.18); border-color: #dc2626; }
     .atk-row .atk-check { width: 18px; height: 18px; flex-shrink: 0; }
+    /* Shared by both the attackers and blockers modals -- a creature shown for board awareness but
+       not currently a legal choice, greyed out and inert rather than omitted with no explanation. */
+    .atk-row-disabled { opacity: 0.45; cursor: default; filter: grayscale(0.6); }
+    .atk-row-disabled:hover { background: none; border-color: transparent; }
+    .ineligible-reason { color: #8a7a55; font-size: 11px; font-style: italic; }
     .zone-card-thumb { width: 44px; height: 61px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
     .zone-card-name { flex: 1; font-size: 13px; }
     .stack-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #2e2618; }
@@ -4826,6 +4831,42 @@
       return card.zoneType === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber && !hasHaste;
     }
 
+    // Every reason the server's declareAttackers would actually reject this creature as an
+    // attacker, in plain language -- used so the attackers modal can show EVERY creature (not just
+    // the legal ones) greyed out with why, instead of silently omitting the ineligible ones.
+    function attackIneligibilityReasons(card) {
+      const reasons = [];
+      if (card.tapped) reasons.push("tapped");
+      if (isSummoningSick(card)) reasons.push("summoning sick, no Haste");
+      return reasons;
+    }
+    // Serra's Emissary-style player-level protection (see server.js's cardTypeProtectionBlocks) --
+    // the client mirror needed so the blockers modal can explain a block that's illegal for this
+    // reason instead of just omitting the creature with no explanation.
+    function cardTypeProtectionBlocksClient(protectedPlayerId, sourceCard) {
+      if (!currentLobbySettings.enforceTargetingRestrictions) return false;
+      const p = players[protectedPlayerId];
+      if (!p || !sourceCard) return false;
+      if (p.protectionFromEverything) return true;
+      if (!p.protectionFromCardType) return false;
+      return (sourceCard.type || "").toLowerCase().includes(p.protectionFromCardType.toLowerCase());
+    }
+    // Every reason the server's declareBlockers would actually reject `blocker` from blocking
+    // `attacker`, in plain language -- mirrors every check in server.js's declareBlockers handler.
+    function blockIneligibilityReasons(attacker, blocker) {
+      const reasons = [];
+      const atkKw = attacker ? effectiveKeywords(attacker).map((k) => (k || "").toLowerCase()) : [];
+      if (atkKw.includes("unblockable")) reasons.push("attacker can't be blocked");
+      if (blocker.tapped) reasons.push("tapped");
+      if (atkKw.includes("flying")) {
+        const bkw = effectiveKeywords(blocker).map((k) => (k || "").toLowerCase());
+        if (!bkw.includes("flying") && !bkw.includes("reach")) reasons.push("needs flying or reach");
+      }
+      if (attacker && sourceMatchesProtection(attacker, blocker) && currentLobbySettings.enforceTargetingRestrictions) reasons.push("attacker has protection from this creature");
+      if (attacker && cardTypeProtectionBlocksClient(attacker.owner, blocker)) reasons.push("you have protection from this creature's type");
+      return reasons;
+    }
+
     // Mirrors the server's own instant-speed check in checkTiming (server.js) -- kept as one
     // shared helper for the same reason as isSummoningSick: the client shouldn't have its own,
     // possibly-drifted opinion about what the server will actually allow.
@@ -5610,54 +5651,51 @@
     function openAttackersModal() {
       const body = document.getElementById("attackers-modal-body");
       body.innerHTML = "";
-      const allUntapped = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "creature" && !c.tapped);
-      // The server silently rejects a summoning-sick creature as an attacker (no Haste) -- filter
-      // it out here too instead of showing it as checkable, checking it, hitting Confirm, and
-      // having nothing happen with no explanation. isSummoningSick() mirrors the server's check
-      // exactly (server.js declareAttackers).
-      const myCreatures = allUntapped.filter((c) => !isSummoningSick(c));
-      const sickCount = allUntapped.length - myCreatures.length;
+      // Every creature you control is shown, not just the legal attackers -- ineligible ones stay
+      // visible, greyed out, with the specific reason (mirrors the server's exact declareAttackers
+      // checks: tapped, summoning sickness/no Haste) instead of just vanishing with no explanation.
+      const allCreatures = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "creature");
+      const withReasons = allCreatures.map((c) => ({ card: c, reasons: attackIneligibilityReasons(c) }));
+      const myCreatures = withReasons.filter((x) => x.reasons.length === 0).map((x) => x.card);
       const otherPlayers = Object.entries(players).filter(([id]) => id !== myId);
       const confirmBtn = document.getElementById("confirm-attacks-btn");
       const noAttacksBtn = document.getElementById("no-attacks-btn");
       if (myCreatures.length === 0) {
         confirmBtn.style.display = "none";
         noAttacksBtn.innerText = "Continue";
-        body.innerHTML = allUntapped.length === 0
-          ? "<div style='color:#8a7a55;'>No untapped creatures to attack with.</div>"
-          : `<div style='color:#8a7a55;'>${sickCount} creature${sickCount === 1 ? " still has" : "s still have"} summoning sickness and can't attack yet (no Haste).</div>`;
       } else {
         confirmBtn.style.display = "";
         noAttacksBtn.innerText = "No Attacks";
-        if (sickCount > 0) {
-          const note = document.createElement("div");
-          note.style.cssText = "color:#8a7a55;font-size:11px;margin-bottom:6px;";
-          note.innerText = `${sickCount} other creature${sickCount === 1 ? "" : "s"} can't attack yet (summoning sick, no Haste).`;
-          body.appendChild(note);
+      }
+      if (allCreatures.length === 0) {
+        body.innerHTML = "<div style='color:#8a7a55;'>No creatures on the battlefield.</div>";
+      } else {
+        if (myCreatures.length > 0) {
+          const hint = document.createElement("div");
+          hint.id = "attackers-selected-count";
+          hint.style.cssText = "font-size:12px;color:#a89a70;margin-bottom:8px;";
+          body.appendChild(hint);
         }
+        withReasons.forEach(({ card, reasons }) => {
+          const eligible = reasons.length === 0;
+          // The row itself IS the <label> -- clicking anywhere in it (image, name, empty space)
+          // toggles the checkbox, not just the small tickbox that was easy to miss before. Clicking
+          // the target <select> still works normally (a nested interactive control inside a label
+          // doesn't trigger the label's own click-through, standard browser behavior). A disabled
+          // checkbox's label click is a no-op, so an ineligible row is naturally inert.
+          const row = document.createElement("label");
+          row.className = "zone-card-row atk-row" + (eligible ? "" : " atk-row-disabled");
+          const reasonHtml = eligible ? "" : ` <span class="ineligible-reason">(${escapeHtml(reasons.join(", "))})</span>`;
+          // A 1v1 table has exactly one legal target -- pre-select it so checking the box alone is
+          // enough; a 3+ player pod still requires actually picking who to attack.
+          row.innerHTML = `
+            <input type="checkbox" class="atk-check" data-id="${card.id}" onchange="updateAttackersSelectedCount()"${eligible ? "" : " disabled"}>
+            <img src="${escapeHtml(cardArtSrc(card))}" class="zone-card-thumb">
+            <div class="zone-card-name">${escapeHtml(card.name || '')} (${effectivePT(card)})${reasonHtml}</div>
+            ${eligible ? `<select class="atk-target" data-id="${card.id}"><option value="">-- target --</option>${otherPlayers.map(([id, p]) => `<option value="${id}"${otherPlayers.length === 1 ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}</select>` : ""}`;
+          body.appendChild(row);
+        });
       }
-      if (myCreatures.length > 0) {
-        const hint = document.createElement("div");
-        hint.id = "attackers-selected-count";
-        hint.style.cssText = "font-size:12px;color:#a89a70;margin-bottom:8px;";
-        body.appendChild(hint);
-      }
-      myCreatures.forEach((card) => {
-        // The row itself IS the <label> -- clicking anywhere in it (image, name, empty space)
-        // toggles the checkbox, not just the small tickbox that was easy to miss before. Clicking
-        // the target <select> still works normally (a nested interactive control inside a label
-        // doesn't trigger the label's own click-through, standard browser behavior).
-        const row = document.createElement("label");
-        row.className = "zone-card-row atk-row";
-        // A 1v1 table has exactly one legal target -- pre-select it so checking the box alone is
-        // enough; a 3+ player pod still requires actually picking who to attack.
-        row.innerHTML = `
-          <input type="checkbox" class="atk-check" data-id="${card.id}" onchange="updateAttackersSelectedCount()">
-          <img src="${escapeHtml(cardArtSrc(card))}" class="zone-card-thumb">
-          <div class="zone-card-name">${escapeHtml(card.name || '')} (${effectivePT(card)})</div>
-          <select class="atk-target" data-id="${card.id}"><option value="">-- target --</option>${otherPlayers.map(([id, p]) => `<option value="${id}"${otherPlayers.length === 1 ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}</select>`;
-        body.appendChild(row);
-      });
       updateAttackersSelectedCount();
       document.getElementById("attackers-modal").style.display = "flex";
     }
@@ -5695,7 +5733,10 @@
       const body = document.getElementById("blockers-modal-body");
       body.innerHTML = "";
       const incoming = Object.entries(currentCombat.attackers || {}).filter(([cardId, defId]) => defId === myId);
-      const myCreatures = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "creature" && !c.tapped);
+      // Every creature you control is listed per attacker, not just the legal blockers -- an
+      // ineligible one stays visible, greyed out, with the specific reason instead of just
+      // disappearing with no explanation.
+      const allMyCreatures = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "creature");
       if (incoming.length === 0) { body.innerHTML = "<div style='color:#8a7a55;'>No attackers targeting you.</div>"; }
       incoming.forEach(([attackerId]) => {
         const atk = allCards[attackerId];
@@ -5704,33 +5745,33 @@
         row.className = "zone-card-row";
         row.style.flexDirection = "column";
         row.style.alignItems = "flex-start";
-        // Every legality check the server will actually enforce, mirrored here so the checklist
-        // never offers a choice that would silently do nothing (or get silently dropped, for
-        // Menace) on Confirm -- CR 509.1b flying/reach, Protection's can't-be-blocked-by facet
-        // (toggle-gated, see targetIsUntargetableBy/currentLobbySettings), and Menace itself,
-        // which doesn't filter WHICH creatures are legal so much as require picking 2+ of them.
         const atkKw = atk ? effectiveKeywords(atk).map((k) => (k || "").toLowerCase()) : [];
         const atkFlying = atkKw.includes("flying");
         const atkMenace = atkKw.includes("menace");
-        const legalBlockers = myCreatures.filter((c) => {
-          if (atkFlying) {
-            const bkw = effectiveKeywords(c).map((k) => (k || "").toLowerCase());
-            if (!bkw.includes("flying") && !bkw.includes("reach")) return false;
-          }
-          if (atk && sourceMatchesProtection(atk, c)) return false;
-          return true;
-        });
         const visibleName = atk && !atk.faceDown ? escapeHtml(atk.name || '') : "Face-down attacker";
         const hints = [];
         if (atkFlying) hints.push("flying -- only flying/reach can block");
         if (atkMenace) hints.push("menace -- needs 2+ blockers or none");
         if (atk && allProtectionQualities(atk).length && currentLobbySettings.enforceTargetingRestrictions) hints.push("protection from " + allProtectionQualities(atk).join("/"));
         const hintHtml = hints.length ? ` <span style="color:#8a7a55;font-size:11px;">(${hints.join(", ")})</span>` : "";
-        const checkboxes = legalBlockers.map((c) => `
-          <label style="display:flex;align-items:center;gap:4px;font-size:12px;margin:2px 0;">
-            <input type="checkbox" class="blk-check" data-attacker="${attackerId}" value="${c.id}">
-            ${escapeHtml(c.name || '')} (${effectivePT(c)})
-          </label>`).join("") || `<div style="color:#8a7a55;font-size:11px;">No legal blockers for this attacker.</div>`;
+        // Every legality check the server will actually enforce, mirrored here per-creature so the
+        // checklist shows the whole board and explains any block that's illegal instead of just
+        // omitting the creature -- CR 509.1b flying/reach, Protection's can't-be-blocked-by facet
+        // and its player-level Serra's Emissary cousin (both toggle-gated), and Unblockable. Menace
+        // itself isn't a per-creature exclusion (it just needs 2+ blockers or none), so it's only
+        // called out in the attacker's own hint line above, not per-row.
+        const checkboxes = (allMyCreatures.length
+          ? allMyCreatures.map((c) => {
+              const reasons = blockIneligibilityReasons(atk, c);
+              const eligible = reasons.length === 0;
+              const reasonHtml = eligible ? "" : ` <span class="ineligible-reason">(${escapeHtml(reasons.join(", "))})</span>`;
+              return `
+                <label class="zone-card-row${eligible ? "" : " atk-row-disabled"}" style="display:flex;align-items:center;gap:4px;font-size:12px;margin:2px 0;padding:0;border:none;">
+                  <input type="checkbox" class="blk-check" data-attacker="${attackerId}" value="${c.id}"${eligible ? "" : " disabled"}>
+                  ${escapeHtml(c.name || '')} (${effectivePT(c)})${reasonHtml}
+                </label>`;
+            }).join("")
+          : "") || `<div style="color:#8a7a55;font-size:11px;">No creatures to block with.</div>`;
         row.innerHTML = `
           <div style="display:flex;align-items:center;gap:8px;width:100%;">
             <img src="${escapeHtml(atk && !atk.faceDown ? cardArtSrc(atk) : '')}" class="zone-card-thumb">
