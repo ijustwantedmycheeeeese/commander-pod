@@ -394,6 +394,14 @@ const CARD_ABILITIES = {
     { trigger: "landfall", label: "Tireless Tracker — investigate (create a Clue token)", requiresTarget: false, effects: [{ type: "createToken", name: "Clue", tokenType: "Token Artifact — Clue", img: "https://cards.scryfall.io/normal/front/5/e/5e644586-888f-4e2e-8d66-8aa02bd79ec1.jpg" }] },
     { trigger: "deathYouControl", sourceNameFilter: "clue", label: "Tireless Tracker — +1/+1 counter (sacrificed a Clue)", requiresTarget: false, effects: [{ type: "addCountersToSelf", amount: 1 }] }
   ],
+  // Wave 22 -- "this land or another land you control enters" is landfall's own already-generic
+  // self-inclusive wording (landfall fires for the entering land itself too, no exclusion). The
+  // "seven or more lands with DIFFERENT NAMES" condition is a distinct-name count, not a raw land
+  // count -- checked here rather than as a fixed-amount gate like Endless Atlas/Temple of the False
+  // God's condition functions, since it needs a Set, not just a >= comparison.
+  "field of the dead": [{ trigger: "landfall", requiresTarget: false,
+    condition: (c, lobby) => new Set(Object.values(lobby.cards).filter((x) => x.owner === c.owner && x.zoneType === "mana").map((x) => archiveKey(x.name))).size >= 7,
+    label: "Field of the Dead — create a 2/2 black Zombie", effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] }],
   // See EFFECTS.attachSelfToTarget for the attach itself; the indestructible grant is already
   // generic (equipEffectsFromText) once attached.
   "mithril coat": [{ trigger: "etb", label: "Mithril Coat — attach to target legendary creature you control", requiresTarget: true, targetKind: "ownCreature", effects: [{ type: "attachSelfToTarget" }] }],
@@ -548,7 +556,12 @@ const CARD_ABILITIES = {
   "gray merchant of asphodel": [{ trigger: "etb", label: "Gray Merchant of Asphodel — drain each opponent for your devotion to black", requiresTarget: false, effects: [{ type: "drainForDevotion", color: "B" }] }],
   // Echo isn't modeled (no upkeep-cost-or-sacrifice mechanic exists in this engine) -- the ETB
   // reanimation reuses reanimateFromGraveyard exactly as Reya Dawnbringer/Necromancy already do.
-  "karmic guide": [{ trigger: "etb", label: "Karmic Guide — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }]
+  "karmic guide": [{ trigger: "etb", label: "Karmic Guide — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
+  // Wave 22 -- reuses the pre-existing ownGraveyardTypeList targetKind (built for Argivian Find)
+  // plus returnOwnGraveyardEntryToHand (also pre-existing) -- a straight composition, no new code.
+  "griffin dreamfinder": [{ trigger: "etb", label: "Griffin Dreamfinder — return target enchantment card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] }],
+  "sharuum the hegemon": [{ trigger: "etb", label: "Sharuum the Hegemon — return target artifact card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact"], effects: [{ type: "reanimateFromGraveyard" }] }],
+  "mistmoon griffin": [{ trigger: "death", label: "Mistmoon Griffin — exile it, then return the top creature card of your graveyard to the battlefield", requiresTarget: false, effects: [{ type: "exileSelfAndReanimateTopGraveyardCreature" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -595,6 +608,16 @@ const ACTIVATED_ABILITIES = {
   "boros signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Boros Signet — Add {R}{W}", effects: [{ type: "addFixedMana", colors: ["R", "W"] }] }],
   "simic signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Simic Signet — Add {G}{U}", effects: [{ type: "addFixedMana", colors: ["G", "U"] }] }],
   "archivist": [{ cost: { tap: true }, label: "Archivist — {T}: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  // Wave 22 -- High Market's own "{T}: Add {C}" needs no table entry (already generic).
+  "high market": [{ cost: { tap: true, autoSacrificeFilter: "creature" }, label: "High Market — {T}, Sacrifice a creature: You gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
+  "horizon canopy": [
+    { cost: { tap: true, life: 1 }, manaAbility: true, label: "Horizon Canopy — {T}, Pay 1 life: Add G or W", effects: [{ type: "chooseManaFromColors", colors: ["G", "W"], sourceName: "Horizon Canopy" }] },
+    { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Horizon Canopy — {1}, {T}, Sacrifice this land: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }
+  ],
+  "silent clearing": [
+    { cost: { tap: true, life: 1 }, manaAbility: true, label: "Silent Clearing — {T}, Pay 1 life: Add W or B", effects: [{ type: "chooseManaFromColors", colors: ["W", "B"], sourceName: "Silent Clearing" }] },
+    { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Silent Clearing — {1}, {T}, Sacrifice this land: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }
+  ],
   "boompile": [{ cost: { tap: true }, label: "Boompile — {T}: Flip a coin. If you win, destroy all nonland permanents", effects: [{ type: "flipCoinDestroyAllNonland" }] }],
   "alchemist's apprentice": [{ cost: { sacrifice: true }, label: "Alchemist's Apprentice — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
@@ -1224,6 +1247,8 @@ const SPELL_ABILITIES = {
     { label: "Brokers Charm — destroy target enchantment", requiresTarget: true, targetKind: "typeList", typeFilter: ["enchantment"], effects: [{ type: "destroyTarget" }] },
     { label: "Brokers Charm — draw two cards", requiresTarget: false, effects: [{ type: "drawCards", amount: 2 }] }
   ] },
+  // Cycling {2} needs no table entry (already generic, see cyclingCostFromText).
+  "clear": { label: "Clear — destroy target enchantment", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "typeList", typeFilter: ["enchantment"] },
   "faithless looting": { label: "Faithless Looting — draw two cards, then discard two cards", effects: [{ type: "drawCards", amount: 2 }, { type: "targetPlayerDiscards", self: true, amount: 2 }] },
   // "Draw two cards, then discard two cards. Untap up to three lands." Same self-discard shape as
   // Faithless Looting above, plus EFFECTS.untapUpToNOwnLands (auto-picks the first N tapped lands --
@@ -2060,6 +2085,17 @@ const EFFECTS = {
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: ["W", "U", "B", "R", "G"] });
   },
+  // Horizon Canopy / Silent Clearing-style painlands -- "{T}, Pay 1 life: Add [X] or [Y]." The
+  // fixed-two-color counterpart to chooseManaAnyColor, same "__free__" sentinel pending-choice
+  // flow (reused here purely for consistency with the rest of this file's mana-choice pattern,
+  // even though the source card is still alive when this runs, unlike Treasure's own case).
+  chooseManaFromColors(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.pendingFreeManaChoice = { amount: 1 };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: params.colors || [] });
+  },
   // Battle Cry Goblin -- "Goblins you control get +1/+0 and gain haste until end of turn." Generic
   // on typeFilter (a type-line substring), reusing grantTemporaryPT/grantTemporaryKeyword for the
   // real "until end of turn" duration rather than a permanent-grant simplification.
@@ -2115,6 +2151,31 @@ const EFFECTS = {
     const found = findAndRemoveGraveyardEntry(lobby, params.chosenTargetId);
     if (!found) return;
     spawnBattlefieldCard(lobby, { ...found.entry, owner: ctx.controllerId, faceDown: true, zoneType: "hand" });
+    broadcastPlayers(lobby);
+  },
+  // Mistmoon Griffin -- "When this creature dies, exile it, then return the top creature card of
+  // your graveyard to the battlefield." By the time this (requiresTarget:false, stack-resolved)
+  // effect runs, the dying Griffin is ALREADY sitting in its owner's graveyard array (fireDeathTriggers
+  // fires before sendToGraveyardInternal, but that's a synchronous non-blocking call, while this
+  // effect only runs later once the stack actually resolves) -- "exile it" is just removing that
+  // same entry back out without reanimating it. "The top creature card" is the most-recently-added
+  // (highest index) creature card in the graveyard array, since sendToGraveyardInternal always
+  // pushes onto the end -- searched AFTER removing the Griffin's own entry so it can never pick
+  // itself back up.
+  exileSelfAndReanimateTopGraveyardCreature(lobby, ctx) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p || !ctx.sourceCard) return;
+    const selfIdx = (p.graveyard || []).findIndex((e) => e.id === ctx.sourceCard.id);
+    if (selfIdx !== -1) p.graveyard.splice(selfIdx, 1);
+    for (let i = p.graveyard.length - 1; i >= 0; i--) {
+      if ((p.graveyard[i].type || "").toLowerCase().includes("creature")) {
+        const [entry] = p.graveyard.splice(i, 1);
+        const card = spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, zoneType: classifyType(entry.type) });
+        broadcastPlayers(lobby);
+        fireEtbTriggers(lobby, card);
+        return;
+      }
+    }
     broadcastPlayers(lobby);
   },
   // Animate Dead -- same core reanimation as reanimateFromGraveyard, plus actually attaching the
@@ -3530,6 +3591,13 @@ function scryOnEtbFromText(text) {
   const m = (text || "").match(/when this (?:land|permanent|creature) enters,\s*scry (\d+)\b/i);
   return m ? parseInt(m[1], 10) : null;
 }
+// The life-gain sibling of scryOnEtbFromText -- same real, common, name-independent ETB template
+// (a gain-life land cycle: Rugged Highlands, Swiftwater Cliffs, etc.), same "resolve inline, no
+// table entry" approach.
+function gainLifeOnEtbFromText(text) {
+  const m = (text || "").match(/when this (?:land|permanent|creature) enters,\s*you gain (\d+) life\b/i);
+  return m ? parseInt(m[1], 10) : null;
+}
 
 // Exotic Orchard / Reflecting Pool-style sources derive their color from OTHER permanents on the
 // battlefield rather than having a fixed set of their own -- detected via oracle text since
@@ -3904,6 +3972,23 @@ function anthemEffectsFromText(text) {
     if (["red", "white", "blue", "black", "green", "creature"].includes(word)) continue;
     clauses.push({ powerBonus: parseInt(tm[2], 10) || 0, toughnessBonus: parseInt(tm[3], 10) || 0, colorFilter: null, typeFilter: word });
   }
+  // Self-inclusive type-scoped anthem ("Legendary creatures you control get +1/+0", no "other") --
+  // the P/T counterpart to anthemKeywordsFromText's own self-inclusive typed branch (built for
+  // Whip of Erebos), which staticBonusFor never needed to check for until now since every prior
+  // anthemEffectsFromText clause required "other". A plain lookbehind-based "not preceded by other"
+  // regex turns out unsafe here (a failed lookbehind just makes the engine retry one character
+  // later, silently matching a truncated word like "oblins" instead of "Goblins") -- verified
+  // directly before shipping, so this instead runs the bare pattern first and then checks the 6
+  // characters immediately before each match for a literal "other " to skip, exactly mirroring
+  // what the "other"-prefixed branch above already consumed.
+  const bareTypeRe = /\b(\w+?)s?(?: creatures)? you control get ([+-]\d+)\/([+-]\d+)/gi;
+  let sm;
+  while ((sm = bareTypeRe.exec(t))) {
+    const word = sm[1].toLowerCase();
+    if (["red", "white", "blue", "black", "green", "creature", "other"].includes(word)) continue;
+    if (t.slice(Math.max(0, sm.index - 6), sm.index).toLowerCase() === "other ") continue;
+    clauses.push({ powerBonus: parseInt(sm[2], 10) || 0, toughnessBonus: parseInt(sm[3], 10) || 0, colorFilter: null, typeFilter: word, includesSelf: true });
+  }
   return clauses;
 }
 // The keyword-granting counterpart to anthemEffectsFromText -- "Other creatures/permanents you
@@ -4047,9 +4132,22 @@ function staticBonusFor(lobby, card) {
   if (card.temporaryPT) { powerBonus += card.temporaryPT.power || 0; toughnessBonus += card.temporaryPT.toughness || 0; }
   const cardColors = card.colors || [];
   for (const id in lobby.cards) {
-    if (id === card.id) continue;
     const c = lobby.cards[id];
     if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    // "Other creatures..." is enforced structurally by skipping card.id -- but a self-inclusive
+    // anthem (Rising of the Day's own "Legendary creatures you control get +1/+0", no "other")
+    // needs its OWN text checked against itself too, so the id===card.id skip only applies to
+    // clauses that aren't includesSelf. Previously this loop always skipped id===card.id
+    // unconditionally, since no self-inclusive P/T clause existed yet to need the exception.
+    if (id === card.id) {
+      anthemEffectsFromText(c.text).forEach((eff) => {
+        if (!eff.includesSelf) return;
+        if (eff.typeFilter && !(card.type || "").toLowerCase().includes(eff.typeFilter)) return;
+        powerBonus += eff.powerBonus;
+        toughnessBonus += eff.toughnessBonus;
+      });
+      continue;
+    }
     anthemEffectsFromText(c.text).forEach((eff) => {
       if (eff.colorFilter && !cardColors.includes(eff.colorFilter)) return;
       if (eff.typeFilter && !(card.type || "").toLowerCase().includes(eff.typeFilter)) return;
@@ -5016,6 +5114,17 @@ function fireTrigger(lobby, card, ability) {
       const hasMatch = p && (p.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("creature"));
       if (!hasMatch) return;
     }
+    // Griffin Dreamfinder/Sharuum the Hegemon-style "target artifact/enchantment card in your
+    // graveyard" -- same CR 603.3c auto-fizzle as ownGraveyardCreature just above (this one was
+    // missing it entirely -- an empty-of-that-type graveyard, the overwhelmingly common case for a
+    // fresh ETB, would otherwise queue an unanswerable prompt and block anything behind it, the
+    // exact same failure mode the typeList fix below was built for).
+    if (ability.targetKind === "ownGraveyardTypeList") {
+      const p = lobby.players[card.owner];
+      const filter = ability.typeFilter || [];
+      const hasMatch = p && (p.graveyard || []).some((e) => filter.some((t) => (e.type || "").toLowerCase().includes(t)));
+      if (!hasMatch) return;
+    }
     // Hellkite Courser: "put a commander you own from the command zone onto the battlefield" --
     // there are only ever 1-2 real choices, so the eligible commanders (in the zone, not currently
     // on the battlefield) are computed here and sent as commanderChoices (slot + name) for the
@@ -5062,6 +5171,12 @@ function fireEtbTriggers(lobby, card) {
   // stack, matching landfall's own "generic text-detected, resolved inline" precedent just below.
   const scryAmount = scryOnEtbFromText(card.text);
   if (scryAmount) EFFECTS.scryN(lobby, { controllerId: card.owner, sourceCard: { id: card.id } }, { amount: scryAmount });
+  const gainLifeAmount = gainLifeOnEtbFromText(card.text);
+  // applyLifeGain itself never broadcasts (every other call site handles that downstream via
+  // whatever ELSE it does after -- checkEliminations+broadcastPlayers, a spell's own
+  // executeSpellEffectsNow, etc.) -- a real, silent bug caught here since this is the first call
+  // site with nothing else after it to accidentally cover for the missing broadcast.
+  if (gainLifeAmount) { applyLifeGain(lobby, card.owner, gainLifeAmount); broadcastPlayers(lobby); }
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
   fireOpponentCreatureEtbTriggers(lobby, card);
   // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
