@@ -3353,8 +3353,17 @@
     }
     function keywordBadgeRow(card) {
       const keywords = effectiveKeywords(card);
-      if (!keywords.length) return "";
-      return `<div class="kw-badges">${keywords.map((k) => `<span class="kw-badge" title="${escapeHtml(k)}">${KEYWORD_ICONS[k] || k[0]}</span>`).join("")}</div>`;
+      const badges = keywords.map((k) => `<span class="kw-badge" title="${escapeHtml(k)}">${KEYWORD_ICONS[k] || k[0]}</span>`);
+      // Protection (printed or granted) rides in the same badge row as the real keyword icons --
+      // reuses the existing flex-wrap layout instead of inventing a new corner placement that would
+      // just collide with the keyword row, the stolen-card label, or the counter/equipment badges
+      // already claiming every other corner of a 108px-wide card. Icon-only (a color's initial
+      // alone can't tell black from blue apart) -- the title tooltip and the full hover-preview
+      // panel both spell out exactly what it's protected from.
+      const protectionLabel = protectionLabelText(card);
+      if (protectionLabel) badges.push(`<span class="kw-badge" title="${escapeHtml(protectionLabel)}">🛡️</span>`);
+      if (!badges.length) return "";
+      return `<div class="kw-badges">${badges.join("")}</div>`;
     }
 
     // ---------------- equipment/aura continuous effects (client mirror of server.js) ----------------
@@ -3517,6 +3526,25 @@
       if (!card.originalOwner) return "";
       const trueOwner = (players[card.originalOwner] && players[card.originalOwner].name) || "?";
       return `<div class="control-label">🏴 stolen from ${escapeHtml(trueOwner)}</div>`;
+    }
+
+    // ---------------- protection ----------------
+    // Printed "protection from X[, Y]" (parsed straight from the card's own oracle text, same
+    // shape server.js's own parsedProtectionQualities regex uses) UNIONED with any GRANTED
+    // protection (Giver of Runes/Mother of Runes/Brave the Elements -- card.grantedProtections is
+    // a real field already sent on every card update via maskCard's plain object spread, just
+    // never rendered anywhere before this). Previously the only way to know a creature had been
+    // granted protection was to already remember doing it yourself.
+    function protectionQualitiesFor(card) {
+      const printed = [];
+      const m = (card.text || "").match(/protection from ([^.\n]+)/i);
+      if (m) m[1].split(/,| and /i).forEach((s) => { const t = s.replace(/^\s*from\s+/i, "").trim().toLowerCase(); if (t) printed.push(t); });
+      return [...new Set([...printed, ...(card.grantedProtections || [])])];
+    }
+    function protectionLabelText(card) {
+      const qualities = protectionQualitiesFor(card);
+      if (!qualities.length) return "";
+      return "Protection from " + qualities.map((q) => q.charAt(0).toUpperCase() + q.slice(1)).join(", ");
     }
 
     // ---------------- token creation ----------------
@@ -5403,6 +5431,11 @@
       let html = escapeHtml(extra) + (card.manaCost ? "<br>" + manaCostPips(card.manaCost) : "");
       const shownKeywords = effectiveKeywords(card);
       if (shownKeywords.length) html += `<div style="font-size:12px;margin-top:2px;">${shownKeywords.map((k) => `${KEYWORD_ICONS[k] || ""} ${escapeHtml(k)}`).join(" · ")}</div>`;
+      // Spelled out explicitly (not just the shield badge's hover title) since GRANTED protection
+      // (Giver of Runes, etc.) has no printed text of its own to fall back on -- the raw card.text
+      // dump just below would show nothing at all for a granted-only case.
+      const protectionLabel = protectionLabelText(card);
+      if (protectionLabel) html += `<div style="font-size:12px;margin-top:2px;color:#5ec8f0;">🛡️ ${escapeHtml(protectionLabel)}</div>`;
       if (card.text) html += `<div class="pv-text">${escapeHtml(card.text)}</div>`;
       return html;
     }
