@@ -1915,6 +1915,7 @@
       if (kind === "permanent") return `Click a creature, artifact, enchantment, or planeswalker${pendingTargetChoiceMinCmc ? ` with mana value ${pendingTargetChoiceMinCmc}+` : ""} to target it.`;
       if (kind === "ownPermanent") return "Click one of your own permanents to sacrifice it.";
       if (kind === "cardType") return "Choose a card type:";
+      if (kind === "creatureType") return "Choose a creature type:";
       if (kind === "mode") return "Choose one:";
       if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
       if (kind === "ownGraveyardCreature") return "Open your Graveyard and click \"Target This\" on a creature card.";
@@ -1927,7 +1928,7 @@
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal or as mode-style buttons instead
+      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
@@ -1983,6 +1984,14 @@
       } else if (pendingTargetChoiceKind === "ownCommanderInZone" && pendingCommanderChoices) {
         el.style.display = "flex";
         el.innerHTML = pendingCommanderChoices.map((c) => `<button class="mini-btn" onclick="chooseTargetFor('${c.slot}')">${escapeHtml(c.name || "Commander")}</button>`).join("");
+      } else if (pendingTargetChoiceKind === "creatureType") {
+        // Free text, not a fixed button list -- there's no practical fixed list of every real
+        // creature type (hundreds exist), and this app's other "choose one" prompts are all small,
+        // enumerable sets. Same trust model as everywhere else: not validated against a real
+        // creature-type list, matching this app's established "players self-police" precedent.
+        el.style.display = "flex";
+        el.innerHTML = `<input type="text" id="creature-type-input" placeholder="e.g. Goblin, Elf, Dragon..." style="flex:1;min-width:140px;" onkeydown="if(event.key==='Enter')submitCreatureTypeChoice();">
+          <button class="mini-btn" onclick="submitCreatureTypeChoice()">Confirm</button>`;
       } else {
         el.style.display = "none"; el.innerHTML = "";
       }
@@ -2000,6 +2009,12 @@
     function chooseTargetFor(cardId) {
       if (!pendingTargetChoiceId) return;
       socket.emit("chooseTargetFor", { id: pendingTargetChoiceId, targetId: cardId });
+    }
+    function submitCreatureTypeChoice() {
+      const input = document.getElementById("creature-type-input");
+      const value = (input && input.value || "").trim();
+      if (!value) return;
+      chooseTargetFor(value);
     }
     // The escape hatch: real Magic auto-fizzles a triggered ability with zero legal targets, which
     // this app doesn't check for when queuing one, so this is the manual way out of a choice that
