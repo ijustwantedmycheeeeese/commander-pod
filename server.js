@@ -488,7 +488,34 @@ const CARD_ABILITIES = {
   // "Each opponent loses 1 life" needs no new effect -- loseLife's existing target:"eachOpponent"
   // (built for Archfiend of Despair-style cards) already covers it.
   "corpse knight": [{ trigger: "otherCreatureEtb", label: "Corpse Knight — each opponent loses 1 life", requiresTarget: false, effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] }],
-  "contagion clasp": [{ trigger: "etb", label: "Contagion Clasp — put a -1/-1 counter on target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "addNegativeCounterTarget" }] }]
+  "contagion clasp": [{ trigger: "etb", label: "Contagion Clasp — put a -1/-1 counter on target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "addNegativeCounterTarget" }] }],
+  // Wave 16 -- new "choose a creature type" free-text mechanism (see chooseCreatureType's own
+  // comment). Icon of Ancestry's static "+1/+1 to creatures of the chosen type" lives in
+  // staticBonusFor; its dig ability is a new ACTIVATED_ABILITIES entry below. Cavern of Souls'
+  // "{T}: Add one mana of any color" needs no table entry -- already generic (the free-tap-shortcut
+  // already prompts a real color choice for any land whose real producedMana lists more than one
+  // color); "that spell can't be countered" isn't modeled -- no per-mana-source "tag" tracking
+  // exists to know later which mana a spell was actually paid with.
+  "icon of ancestry": [{ trigger: "etb", label: "Icon of Ancestry — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
+  "cavern of souls": [{ trigger: "etb", label: "Cavern of Souls — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
+  // Shared Animosity needs no table entry -- see applySharedAnimosity, called directly from
+  // declareAttackers since it needs every attacker known at once, not a per-creature trigger.
+  // Pack tactics -- "Whenever this creature attacks, if you attacked with creatures with total power
+  // 6 or greater this combat, create a 1/1 red Goblin creature token that's tapped and attacking."
+  "battle cry goblin": [{ trigger: "attack", label: "Battle Cry Goblin — Pack tactics: create a tapped, attacking Goblin token", condition: (card, lobby) => {
+    const total = Object.keys(lobby.combat.attackers || {}).reduce((sum, id) => {
+      const c = lobby.cards[id];
+      if (!c) return sum;
+      return sum + parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus;
+    }, 0);
+    return total >= 6;
+  }, requiresTarget: false, effects: [{ type: "createAttackingToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  // Goldspan Dragon -- "Flying, haste" needs no table entry (KNOWN_KEYWORDS). Its Treasure-upgrade
+  // static ability lives in EFFECTS.chooseManaAnyColor (see the generic "treasure"
+  // ACTIVATED_ABILITIES entry). "...or becomes the target of a spell" isn't modeled -- no
+  // "becomes the target of a spell" trigger type exists in this engine, a disclosed narrowing
+  // (only the attack half of this trigger fires).
+  "goldspan dragon": [{ trigger: "attack", label: "Goldspan Dragon — create a Treasure token", requiresTarget: false, effects: [{ type: "createTreasureToken" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -789,7 +816,20 @@ const ACTIVATED_ABILITIES = {
       if (c.owner === card.owner && c.zoneType === "mana") nameCounts[archiveKey(c.name)] = (nameCounts[archiveKey(c.name)] || 0) + 1;
     });
     return Object.values(nameCounts).some((n) => n >= 3);
-  }, conditionError: "You need three or more lands with the same name to activate this.", label: "Endless Atlas — draw a card", effects: [{ type: "drawCards", amount: 1 }] }]
+  }, conditionError: "You need three or more lands with the same name to activate this.", label: "Endless Atlas — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
+  "battle cry goblin": [{ cost: { mana: "{1}{R}" }, label: "Battle Cry Goblin — Goblins you control get +1/+0 and gain haste until end of turn", effects: [{ type: "grantTemporaryPTAndKeywordsToType", typeFilter: "goblin", power: 1, toughness: 0, keywords: ["Haste"] }] }],
+  // "Pay 2 life, Sacrifice ANOTHER creature: Search your library for a card, put it into your hand,
+  // then shuffle." cost.excludeSelf -- see the activateAbility handler's own comment -- since
+  // "another" (unlike Pashalik Mons's "a Goblin") means this can't fall back to sacrificing itself.
+  "razaketh, the foulblooded": [{ cost: { life: 2, autoSacrificeFilter: "creature", excludeSelf: true }, label: "Razaketh, the Foulblooded — Pay 2 life, Sacrifice another creature: search for a card", effects: [{ type: "tutorToHand" }] }],
+  // The real Treasure token ability -- matches ANY token literally named "Treasure", regardless of
+  // which effect created it (createTreasureToken/rollD20CreateTreasures/counterTargetSpellCreateTokenForController
+  // all use this exact name). See chooseManaAnyColor's own comment for the sacrificed-source-by-the-
+  // time-effects-run mechanics and the Goldspan Dragon upgrade it also handles.
+  "treasure": [{ cost: { sacrifice: true, tap: true }, manaAbility: true, label: "Treasure — Sacrifice this artifact: Add one mana of any color", effects: [{ type: "chooseManaAnyColor", sourceName: "Treasure" }] }],
+  // Icon of Ancestry's dig -- typeFromChosenCreatureType reads the ETB choice at activation time
+  // instead of a fixed table-defined type list (see lookTopNRevealTypesToHand's own comment).
+  "icon of ancestry": [{ cost: { mana: "{3}", tap: true }, label: "Icon of Ancestry — look at the top three, take creature(s) of the chosen type to hand", effects: [{ type: "lookTopNRevealTypesToHand", amount: 3, typeFromChosenCreatureType: true }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1730,6 +1770,43 @@ const EFFECTS = {
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} and their creatures gain protection from ${params.chosenTargetId}`);
   },
+  // The generic Treasure token's own real ability -- "{T}, Sacrifice this artifact: Add one mana of
+  // any color." Since the source is already sacrificed by the time this runs (cost-paying always
+  // happens before effects), there's no live card left to hang a chooseMana prompt off of the usual
+  // way (resolveManaChoice needs card.producedMana) -- uses a per-PLAYER pending-choice flag instead
+  // (p.pendingFreeManaChoice), resolved by the same client-side chooseMana modal via a "__free__"
+  // sentinel cardId. Goldspan Dragon's "Treasures you control have '...Add TWO mana of any one
+  // color'" upgrade (checked by text-scan, no fixed name list) is threaded through the same flow.
+  chooseManaAnyColor(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const upgraded = Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /treasures you control have .*add two mana of any one color/i.test(c.text || ""));
+    p.pendingFreeManaChoice = { amount: upgraded ? 2 : 1 };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: ["W", "U", "B", "R", "G"] });
+  },
+  // Battle Cry Goblin -- "Goblins you control get +1/+0 and gain haste until end of turn." Generic
+  // on typeFilter (a type-line substring), reusing grantTemporaryPT/grantTemporaryKeyword for the
+  // real "until end of turn" duration rather than a permanent-grant simplification.
+  grantTemporaryPTAndKeywordsToType(lobby, ctx, params) {
+    const filter = (params.typeFilter || "").toLowerCase();
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner !== ctx.controllerId || c.zoneType !== "creature" || !(c.type || "").toLowerCase().includes(filter)) return;
+      if (params.power || params.toughness) grantTemporaryPT(lobby, c, params.power || 0, params.toughness || 0);
+      (params.keywords || []).forEach((k) => grantTemporaryKeyword(lobby, c, k));
+    });
+  },
+  // Icon of Ancestry / Cavern of Souls -- "As this permanent enters, choose a creature type." Free
+  // text (targetKind:"creatureType"), not validated against a real creature-type list -- same
+  // "players self-police" trust model as everywhere else in this app. Read back by staticBonusFor
+  // (Icon of Ancestry's own anthem) and lookTopNRevealTypesToHand (its dig ability).
+  chooseCreatureType(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card || !params.chosenTargetId) return;
+    card.chosenCreatureType = params.chosenTargetId;
+    broadcastCard(lobby, card);
+    pushLog(lobby, `${card.name || "A permanent"}'s controller chooses ${params.chosenTargetId}`);
+  },
   // Reya Dawnbringer / Necromancy -- puts a creature card from a graveyard onto the battlefield
   // under the CASTER's control (correct for both: Reya only ever searches her own controller's
   // graveyard in the first place, so "under the owner's control" and "under the caster's control"
@@ -2500,13 +2577,11 @@ const EFFECTS = {
   },
   // Ancient Copper Dragon -- "whenever this creature deals combat damage to a player, roll a d20.
   // You create a number of Treasure tokens equal to the result." Real d20 roll (Math.random, not
-  // player-chosen), real tokens -- but a plain artifact token, not a fully-modeled Treasure (no
-  // "{T}, Sacrifice: Add one mana of any color" activated ability exists on created tokens
-  // anywhere in this app), same disclosed-simplification precedent as everywhere else a token's
-  // real activated ability isn't representable.
-  // Smothering Tithe's declined-payment consequence -- same disclosed plain-artifact-token
-  // simplification as rollD20CreateTreasures just below (no sacrifice-for-mana ability on the
-  // created token).
+  // player-chosen), real tokens -- and since ACTIVATED_ABILITIES has a generic "treasure" entry
+  // (any token literally named "Treasure" matches it, regardless of which effect created it), these
+  // tokens get their real "{T}, Sacrifice: Add one mana of any color" ability for free.
+  // Smothering Tithe's declined-payment consequence -- same real Treasure (see the generic
+  // "treasure" ACTIVATED_ABILITIES entry) as rollD20CreateTreasures just below.
   createTreasureToken(lobby, ctx, params) {
     spawnBattlefieldCard(lobby, {
       name: "Treasure", type: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg",
@@ -2534,7 +2609,16 @@ const EFFECTS = {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
     const n = params.amount || 6;
-    const types = params.types || [];
+    // Icon of Ancestry -- the type to reveal is a per-permanent CHOICE (see chooseCreatureType),
+    // not a fixed list baked into the table entry, when params.types is absent. Real wording is "a
+    // creature card" (singular) -- approximated the same "take every match, no real choice among
+    // several" way Kaalia, Zenith Seeker's own use of this function already does, since a 3-card
+    // sample rarely has more than one match anyway.
+    let types = params.types || [];
+    if (!types.length && params.typeFromChosenCreatureType) {
+      const src = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+      if (src && src.chosenCreatureType) types = [src.chosenCreatureType];
+    }
     const seen = [];
     for (let i = 0; i < n && p.library.length > 0; i++) seen.push(p.library.shift());
     const matched = seen.filter((e) => types.some((t) => (e.type || "").toLowerCase().includes(t.toLowerCase())));
@@ -3228,6 +3312,41 @@ function grantTemporaryKeyword(lobby, card, keyword) {
     broadcastCard(lobby, card);
   }
 }
+// The numeric counterpart to grantTemporaryKeyword -- a real "until end of turn" P/T buff (Shared
+// Animosity, Battle Cry Goblin), additive across multiple grants in the same turn (Shared Animosity
+// can fire more than once per combat). Read by staticBonusFor -- see its own comment -- so every
+// existing P/T computation (combat damage, damageTarget, activation conditions, etc.) already
+// includes it with no call-site changes needed.
+function grantTemporaryPT(lobby, card, powerDelta, toughnessDelta) {
+  if (!card.temporaryPT) card.temporaryPT = { power: 0, toughness: 0 };
+  card.temporaryPT.power += powerDelta;
+  card.temporaryPT.toughness += toughnessDelta;
+  broadcastCard(lobby, card);
+}
+// The subtype words after the em-dash in a creature's type line ("Creature — Human Knight" ->
+// ["human","knight"]), lowercased for case-insensitive comparison. Generalizable for any future
+// "shares a creature type" card, not just Shared Animosity below.
+function creatureSubtypesOf(card) {
+  const m = (card.type || "").match(/creature\s*[—-]\s*(.+)$/i);
+  if (!m) return [];
+  return m[1].split(/\s+/).map((s) => s.toLowerCase());
+}
+// Shared Animosity -- "Whenever a creature you control attacks, it gets +1/+0 until end of turn for
+// each other attacking creature that shares a creature type with it." Computed once, right after
+// declareAttackers locks in the full attacker set (every attacker's bonus depends on every OTHER
+// attacker's types, so this can't be a simple per-creature trigger the way fireAttackTriggers is).
+function applySharedAnimosity(lobby, attackerIds) {
+  const attackers = attackerIds.map((id) => lobby.cards[id]).filter(Boolean);
+  if (!attackers.length) return;
+  const hasSharedAnimosity = (ownerId) => Object.values(lobby.cards).some((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /whenever a creature you control attacks, it gets \+1\/\+0 until end of turn for each other attacking creature that shares a creature type with it/i.test(c.text || ""));
+  attackers.forEach((atk) => {
+    if (!hasSharedAnimosity(atk.owner)) return;
+    const atkTypes = creatureSubtypesOf(atk);
+    if (!atkTypes.length) return;
+    const count = attackers.filter((other) => other.id !== atk.id && creatureSubtypesOf(other).some((t) => atkTypes.includes(t))).length;
+    if (count > 0) grantTemporaryPT(lobby, atk, count, 0);
+  });
+}
 // Called once per real new turn (the End Step -> next Untap wraparound in advanceOnePhase) --
 // every temporary keyword granted at any point during the turn that just ended is now expired,
 // same real-Magic cleanup-step timing (CR 514) "until end of turn" effects actually follow. Also
@@ -3241,12 +3360,14 @@ function cleanupTemporaryKeywords(lobby) {
     // alongside temporaryKeywords in the same pass rather than a second loop over lobby.cards.
     const hasTempKw = c.temporaryKeywords && c.temporaryKeywords.length;
     const hasGrantedProt = c.grantedProtections && c.grantedProtections.length;
+    const hasTempPT = c.temporaryPT && (c.temporaryPT.power || c.temporaryPT.toughness);
     // Cursed Mirror -- "until end of turn" copy revert. Restores every field
     // EFFECTS.becomeCopyUntilEOT overwrote, using the snapshot it took before copying.
     const hasCopy = !!c._copyOriginal;
-    if (hasTempKw || hasGrantedProt || hasCopy) {
+    if (hasTempKw || hasGrantedProt || hasTempPT || hasCopy) {
       c.temporaryKeywords = [];
       c.grantedProtections = [];
+      c.temporaryPT = null;
       if (hasCopy) {
         Object.assign(c, c._copyOriginal);
         c._copyOriginal = null;
@@ -3517,6 +3638,9 @@ function parseKeywordList(raw) {
 function staticBonusFor(lobby, card) {
   let powerBonus = 0, toughnessBonus = 0;
   if (card.zoneType !== "creature") return { powerBonus, toughnessBonus };
+  // grantTemporaryPT's own grant, read here (rather than at every P/T call site) since this
+  // function is already the shared "how much extra P/T does this card have" aggregator.
+  if (card.temporaryPT) { powerBonus += card.temporaryPT.power || 0; toughnessBonus += card.temporaryPT.toughness || 0; }
   const cardColors = card.colors || [];
   for (const id in lobby.cards) {
     if (id === card.id) continue;
@@ -3527,6 +3651,17 @@ function staticBonusFor(lobby, card) {
       powerBonus += eff.powerBonus;
       toughnessBonus += eff.toughnessBonus;
     });
+    // Icon of Ancestry-style "Creatures you control of the chosen type get +X/+Y" -- a DYNAMIC
+    // anthem keyed off a per-permanent chosen value (see chooseCreatureType/targetKind:"creatureType"),
+    // not a literal color/type word in the text, so it needs its own check here rather than fitting
+    // anthemEffectsFromText's plain-text pattern.
+    if (c.chosenCreatureType) {
+      const m = (c.text || "").match(/creatures you control of the chosen type get ([+-]\d+)\/([+-]\d+)/i);
+      if (m && (card.type || "").toLowerCase().includes(c.chosenCreatureType.toLowerCase())) {
+        powerBonus += parseInt(m[1], 10) || 0;
+        toughnessBonus += parseInt(m[2], 10) || 0;
+      }
+    }
   }
   return { powerBonus, toughnessBonus };
 }
@@ -4311,6 +4446,12 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!CARD_TYPE_CHOICES.includes(targetId)) return { ok: false, error: "Choose a card type." };
     return { ok: true };
   }
+  // Icon of Ancestry / Cavern of Souls -- free text, not checked against a real creature-type list
+  // (hundreds exist; see chooseCreatureType's own comment for the trust-model precedent).
+  if (targetKind === "creatureType") {
+    if (typeof targetId !== "string" || !targetId.trim()) return { ok: false, error: "Choose a creature type." };
+    return { ok: true };
+  }
   // Mother of Runes -- "target creature you control." Self-targeting is always legal (protection
   // never restricts your own creatures from your own abilities, same precedent as
   // targetIsUntargetableBy's "owner === controller" bypass), so no untargetable check is needed.
@@ -4813,7 +4954,15 @@ function fireVilisDrawTrigger(lobby, playerId, amount) {
 // check AND declareAttackers' own pendingTargetChoices check, not by anything here.
 function fireAttackTriggers(lobby, card) {
   if (!lobby.turn.started) return;
-  getAutomatedAbilities(card.name, "attack").forEach((ability) => fireTrigger(lobby, card, ability));
+  // Battle Cry Goblin's Pack Tactics -- bakes in attackerDefenderId (who THIS card is attacking) the
+  // same way fireGlobalAttackTypeTriggers already does for the "otherAttacks" variant, so
+  // createAttackingToken can join a self-referential "attack" trigger's own attack too, not just the
+  // non-self-referential one.
+  const defenderId = lobby.combat.attackers[card.id];
+  getAutomatedAbilities(card.name, "attack").forEach((ability) => {
+    const effects = (ability.effects || []).map((e) => ({ ...e, attackerDefenderId: defenderId }));
+    fireTrigger(lobby, card, { ...ability, effects });
+  });
 }
 
 // The non-self-referential counterpart to fireAttackTriggers (Utvara Hellkite: "whenever a DRAGON
@@ -6413,8 +6562,21 @@ io.on("connection", (socket) => {
   // possible color.
   socket.on("resolveManaChoice", ({ cardId, color }) => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
-    const card = lobby && lobby.cards[cardId];
-    if (!p || !card || card.owner !== socket.id || !card.tapped) return;
+    if (!p) return;
+    // Treasure (and anything else that sacrifices its source as part of the cost) -- the card is
+    // already gone by the time this resolves, see chooseManaAnyColor's own comment, so there's no
+    // producedMana to validate against; any of the 5 colors is always legal here.
+    if (cardId === "__free__") {
+      if (!p.pendingFreeManaChoice || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
+      const amount = p.pendingFreeManaChoice.amount || 1;
+      p.pendingFreeManaChoice = false;
+      p.mana[color] = (p.mana[color] || 0) + amount;
+      broadcastPlayers(lobby);
+      pushLog(lobby, `${p.name} adds {${color}}${amount > 1 ? ` x${amount}` : ""}`);
+      return;
+    }
+    const card = lobby.cards[cardId];
+    if (!card || card.owner !== socket.id || !card.tapped) return;
     if (!Array.isArray(card.producedMana) || !card.producedMana.includes(color) || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
     p.mana[color] = (p.mana[color] || 0) + 1;
     broadcastPlayers(lobby);
@@ -6497,8 +6659,13 @@ io.on("connection", (socket) => {
     if (cost.autoSacrificeFilter) {
       const filter = cost.autoSacrificeFilter;
       const candidates = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "creature" && (filter === "creature" || (c.type || "").toLowerCase().includes(filter)));
-      autoSacrificeCard = candidates.find((c) => c.id !== card.id) || candidates.find((c) => c.id === card.id) || null;
-      if (!autoSacrificeCard) { socket.emit("actionError", `You have no ${filter === "creature" ? "creature" : filter} to sacrifice.`); return; }
+      // Razaketh-style "Sacrifice ANOTHER creature" -- unlike Pashalik Mons's "a Goblin" (where
+      // sacrificing itself is legal and only a fallback), "another" means the ability simply can't
+      // be activated at all when no OTHER qualifying creature exists, never self-sacrifice instead.
+      autoSacrificeCard = cost.excludeSelf
+        ? candidates.find((c) => c.id !== card.id) || null
+        : candidates.find((c) => c.id !== card.id) || candidates.find((c) => c.id === card.id) || null;
+      if (!autoSacrificeCard) { socket.emit("actionError", `You have no ${cost.excludeSelf ? "other " : ""}${filter === "creature" ? "creature" : filter} to sacrifice.`); return; }
     }
 
     if (cost.tap) {
@@ -7742,6 +7909,10 @@ io.on("connection", (socket) => {
     // Combat -> Main 2 phase transition, so it needs its own persistent flag rather than reading
     // combat state directly.
     if (Object.keys(validAttackers).length > 0) p.attackedThisTurn = true;
+    // Shared Animosity -- needs every attacker known at once (each one's bonus depends on every
+    // OTHER attacker's types), so it's computed once right here rather than as a per-creature
+    // trigger like fireAttackTriggers/fireGlobalAttackTypeTriggers just below.
+    applySharedAnimosity(lobby, Object.keys(validAttackers));
     // Skip declareBlockers for a defender with no untapped creature to block with — otherwise
     // combat just sits waiting on a no-op "No Blocks" confirmation they may not realize to give.
     const pendingWithBlockers = Array.from(defendersSet).filter((defId) =>
