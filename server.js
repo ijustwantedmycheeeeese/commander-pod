@@ -515,7 +515,26 @@ const CARD_ABILITIES = {
   // ACTIVATED_ABILITIES entry). "...or becomes the target of a spell" isn't modeled -- no
   // "becomes the target of a spell" trigger type exists in this engine, a disclosed narrowing
   // (only the attack half of this trigger fires).
-  "goldspan dragon": [{ trigger: "attack", label: "Goldspan Dragon — create a Treasure token", requiresTarget: false, effects: [{ type: "createTreasureToken" }] }]
+  "goldspan dragon": [{ trigger: "attack", label: "Goldspan Dragon — create a Treasure token", requiresTarget: false, effects: [{ type: "createTreasureToken" }] }],
+  // Wave 17 gap-analysis batch.
+  // Goblin Chieftain/Goblin Trashmaster/Hobgoblin Bandit Lord's "Other Goblins you control get
+  // +1/+1" need no table entry -- see anthemEffectsFromText's new type-scoped branch. Chieftain's
+  // "...and have haste" was already generic (anthemKeywordsFromText's own type-scoped branch, built
+  // for Goblin Warchief). Goblin Piledriver/Goblin Wardriver's attack-triggered pumps need no table
+  // entry either -- see applySelfAttackTypeCountPump/applyBattleCry, called from declareAttackers.
+  "goblin instigator": [{ trigger: "etb", label: "Goblin Instigator — create a Goblin token", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  "impact tremors": [{ trigger: "otherCreatureEtb", label: "Impact Tremors — deal 1 damage to each opponent", requiresTarget: false, effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] }],
+  // "of their choice" isn't a real per-opponent picker -- reuses eachOpponentSacrifices' existing
+  // auto-pick (built for Pick Your Poison), same disclosed simplification as everywhere else.
+  "grave pact": [{ trigger: "deathYouControl", label: "Grave Pact — each other player sacrifices a creature", requiresTarget: false, effects: [{ type: "eachOpponentSacrifices", zoneTypeFilter: "creature" }] }],
+  "grave titan": [
+    { trigger: "etb", label: "Grave Titan — create two Zombie tokens", requiresTarget: false, effects: [{ type: "createToken", amount: 2, name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] },
+    { trigger: "attack", label: "Grave Titan — create two Zombie tokens", requiresTarget: false, effects: [{ type: "createToken", amount: 2, name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] }
+  ],
+  "gray merchant of asphodel": [{ trigger: "etb", label: "Gray Merchant of Asphodel — drain each opponent for your devotion to black", requiresTarget: false, effects: [{ type: "drainForDevotion", color: "B" }] }],
+  // Echo isn't modeled (no upkeep-cost-or-sacrifice mechanic exists in this engine) -- the ETB
+  // reanimation reuses reanimateFromGraveyard exactly as Reya Dawnbringer/Necromancy already do.
+  "karmic guide": [{ trigger: "etb", label: "Karmic Guide — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -829,7 +848,10 @@ const ACTIVATED_ABILITIES = {
   "treasure": [{ cost: { sacrifice: true, tap: true }, manaAbility: true, label: "Treasure — Sacrifice this artifact: Add one mana of any color", effects: [{ type: "chooseManaAnyColor", sourceName: "Treasure" }] }],
   // Icon of Ancestry's dig -- typeFromChosenCreatureType reads the ETB choice at activation time
   // instead of a fixed table-defined type list (see lookTopNRevealTypesToHand's own comment).
-  "icon of ancestry": [{ cost: { mana: "{3}", tap: true }, label: "Icon of Ancestry — look at the top three, take creature(s) of the chosen type to hand", effects: [{ type: "lookTopNRevealTypesToHand", amount: 3, typeFromChosenCreatureType: true }] }]
+  "icon of ancestry": [{ cost: { mana: "{3}", tap: true }, label: "Icon of Ancestry — look at the top three, take creature(s) of the chosen type to hand", effects: [{ type: "lookTopNRevealTypesToHand", amount: 3, typeFromChosenCreatureType: true }] }],
+  // Wave 17 gap-analysis batch.
+  "goblin bombardment": [{ cost: { autoSacrificeFilter: "creature" }, requiresTarget: true, targetKind: "any", label: "Goblin Bombardment — Sacrifice a creature: deal 1 damage to any target", effects: [{ type: "damageTarget", amount: 1 }] }],
+  "goblin trashmaster": [{ cost: { autoSacrificeFilter: "goblin" }, requiresTarget: true, targetKind: "artifact", label: "Goblin Trashmaster — Sacrifice a Goblin: destroy target artifact", effects: [{ type: "destroyTarget" }] }]
 };
 function getActivatedAbilities(cardName) {
   return ACTIVATED_ABILITIES[archiveKey(cardName)] || [];
@@ -1166,7 +1188,20 @@ const SPELL_ABILITIES = {
   // Storm isn't modeled (no spell-cast-count-this-turn tracking anywhere in this engine) -- the base
   // "create two Goblins" half works unconditionally, a disclosed narrower simplification.
   "empty the warrens": { label: "Empty the Warrens — create two Goblin tokens", effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
-  "cut a deal": { label: "Cut a Deal — each opponent draws a card, then you draw a card for each that did", effects: [{ type: "cutADealDraws" }] }
+  "cut a deal": { label: "Cut a Deal — each opponent draws a card, then you draw a card for each that did", effects: [{ type: "cutADealDraws" }] },
+  // Wave 17 gap-analysis batch.
+  "krenko's command": { label: "Krenko's Command — create two Goblin tokens", effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
+  "goblin rally": { label: "Goblin Rally — create four Goblin tokens", effects: [{ type: "createToken", amount: 4, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
+  "hordeling outburst": { label: "Hordeling Outburst — create three Goblin tokens", effects: [{ type: "createToken", amount: 3, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
+  "hive stirrings": { label: "Hive Stirrings — create two Sliver tokens", effects: [{ type: "createToken", amount: 2, name: "Sliver", tokenType: "Token Creature — Sliver", power: "1", toughness: "1", colors: [] }] },
+  // Identical shape to Cultivate (search two basics, one to battlefield tapped, the other to hand).
+  "kodama's reach": { label: "Kodama's Reach — search for a basic land tapped, then another to hand", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "tutorToHand", typeFilter: "basic land" }] }] },
+  // "Look at target player's hand" isn't modeled -- no "temporarily reveal a hand to one viewer" UI
+  // exists anywhere in this engine, a disclosed narrowing; the draw half is unconditional and real.
+  "gitaxian probe": { label: "Gitaxian Probe — draw a card", effects: [{ type: "drawCards", amount: 1 }] },
+  // Reuses grantIndestructibleToAllYours' newly-generalized keywords param (see its own comment) --
+  // already permanent-wide, not creature-restricted, so no other change was needed for this card.
+  "heroic intervention": { label: "Heroic Intervention — permanents you control gain hexproof and indestructible until end of turn", effects: [{ type: "grantIndestructibleToAllYours", keywords: ["Hexproof", "Indestructible"] }] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -1288,6 +1323,21 @@ const EFFECTS = {
         io.to(lobby.id).emit("spellDamage", { targetId: id, amount: params.amount || 0, sourceCardId });
       }
     });
+  },
+  // Gray Merchant of Asphodel -- "each opponent loses X life, where X is your devotion to black.
+  // You gain life equal to the life lost this way." The gain is the SUM of what opponents actually
+  // lost (via applyLifeLoss's own lifeLocked/Deflecting-Palm-aware return value), not just X flat,
+  // matching the real card's "equal to the life lost this way" wording exactly.
+  drainForDevotion(lobby, ctx, params) {
+    const amount = devotionToColor(lobby, ctx.controllerId, params.color || "B");
+    if (amount <= 0) return;
+    let totalLost = 0;
+    Object.keys(lobby.players).forEach((id) => {
+      if (id === ctx.controllerId) return;
+      if (applyLifeLoss(lobby, id, amount)) totalLost += amount;
+    });
+    if (totalLost > 0) applyLifeGain(lobby, ctx.controllerId, totalLost);
+    broadcastPlayers(lobby);
   },
   // Teferi's Protection -- "until your next turn, your life total can't change and you gain
   // protection from everything. All permanents you control phase out." Phasing (CR 702.26) is
@@ -1515,9 +1565,13 @@ const EFFECTS = {
   },
   // Boros Charm's "permanents you control gain indestructible until end of turn" mode -- applies
   // grantTemporaryKeyword (see its own comment) to every permanent the controller has, not just one.
+  // Generalized to any keyword list (default ["Indestructible"], Boros Charm's own case unchanged)
+  // for Heroic Intervention's "gain hexproof AND indestructible" -- already permanent-wide, not
+  // creature-restricted, so no other change was needed for that card.
   grantIndestructibleToAllYours(lobby, ctx, params) {
+    const keywords = params.keywords || ["Indestructible"];
     Object.values(lobby.cards).forEach((c) => {
-      if (c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack") grantTemporaryKeyword(lobby, c, "Indestructible");
+      if (c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack") keywords.forEach((k) => grantTemporaryKeyword(lobby, c, k));
     });
   },
   // The single-target counterpart to grantIndestructibleToAllYours -- "target creature gains X until
@@ -3347,6 +3401,46 @@ function applySharedAnimosity(lobby, attackerIds) {
     if (count > 0) grantTemporaryPT(lobby, atk, count, 0);
   });
 }
+// Devotion to a color (CR 704.5v-ish) -- count of that color's mana symbols in the mana costs of
+// permanents you control, including hybrid symbols mentioning that color. Doesn't attempt Phyrexian
+// mana symbols. Reusable for any future devotion-scaling card, not just Gray Merchant of Asphodel.
+function devotionToColor(lobby, ownerId, color) {
+  let count = 0;
+  Object.values(lobby.cards).forEach((c) => {
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") return;
+    const symbols = (c.manaCost || "").match(/\{[^}]+\}/g) || [];
+    symbols.forEach((sym) => { if (sym.toUpperCase().includes(color)) count++; });
+  });
+  return count;
+}
+// Battle cry -- a real named keyword ("Whenever this creature attacks, each OTHER attacking
+// creature gets +1/+0 until end of turn"). Applies regardless of controller (the real reminder text
+// has no "you control" restriction, unlike Shared Animosity), matching every attacker present.
+function applyBattleCry(lobby, attackerIds) {
+  const attackers = attackerIds.map((id) => lobby.cards[id]).filter(Boolean);
+  if (!attackers.length) return;
+  const battleCriers = attackers.filter((c) => /\bbattle cry\b/i.test(c.text || ""));
+  if (!battleCriers.length) return;
+  attackers.forEach((atk) => {
+    const bonus = battleCriers.filter((bc) => bc.id !== atk.id).length;
+    if (bonus > 0) grantTemporaryPT(lobby, atk, bonus, 0);
+  });
+}
+// Goblin Piledriver-style "Whenever this creature attacks, it gets +X/+0 until end of turn for each
+// other attacking [Type]" -- self-only (unlike Shared Animosity's dynamic "shares a type with it"),
+// counting every OTHER currently-attacking creature (any controller, matching the real card's own
+// unrestricted wording) against one FIXED type named in the source's own text.
+function applySelfAttackTypeCountPump(lobby, attackerIds) {
+  const attackers = attackerIds.map((id) => lobby.cards[id]).filter(Boolean);
+  attackers.forEach((atk) => {
+    const m = (atk.text || "").match(/whenever this creature attacks, it gets \+(\d+)\/\+0 until end of turn for each other attacking (\w+)/i);
+    if (!m) return;
+    const perAmount = parseInt(m[1], 10) || 0;
+    const type = m[2].toLowerCase();
+    const count = attackers.filter((other) => other.id !== atk.id && (other.type || "").toLowerCase().includes(type)).length;
+    if (count > 0) grantTemporaryPT(lobby, atk, perAmount * count, 0);
+  });
+}
 // Called once per real new turn (the End Step -> next Untap wraparound in advanceOnePhase) --
 // every temporary keyword granted at any point during the turn that just ended is now expired,
 // same real-Magic cleanup-step timing (CR 514) "until end of turn" effects actually follow. Also
@@ -3500,6 +3594,19 @@ function anthemEffectsFromText(text) {
     const colorFilter = m[1] ? PROTECTION_COLOR_WORDS[m[1].toLowerCase()] : null;
     clauses.push({ powerBonus: parseInt(m[2], 10) || 0, toughnessBonus: parseInt(m[3], 10) || 0, colorFilter });
   }
+  // Type-scoped P/T anthem ("Other Goblins you control get +1/+1", "Other Goblin creatures you
+  // control get +1/+1") -- the P/T counterpart to anthemKeywordsFromText's own type-scoped branch
+  // (built for Goblin Warchief's haste grant). Excludes the 5 color words (already handled just
+  // above) and the bare word "creature[s]" itself (the untyped case above already covers that
+  // wording -- without this exclusion, "Other creatures you control get..." would double-match
+  // here too, since "creature"+"s" fits the same (\w+?)s? shape as a real type word).
+  const typeRe = /other (\w+?)s?(?: creatures)? you control get ([+-]\d+)\/([+-]\d+)/gi;
+  let tm;
+  while ((tm = typeRe.exec(t))) {
+    const word = tm[1].toLowerCase();
+    if (["red", "white", "blue", "black", "green", "creature"].includes(word)) continue;
+    clauses.push({ powerBonus: parseInt(tm[2], 10) || 0, toughnessBonus: parseInt(tm[3], 10) || 0, colorFilter: null, typeFilter: word });
+  }
   return clauses;
 }
 // The keyword-granting counterpart to anthemEffectsFromText -- "Other creatures/permanents you
@@ -3648,6 +3755,7 @@ function staticBonusFor(lobby, card) {
     if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
     anthemEffectsFromText(c.text).forEach((eff) => {
       if (eff.colorFilter && !cardColors.includes(eff.colorFilter)) return;
+      if (eff.typeFilter && !(card.type || "").toLowerCase().includes(eff.typeFilter)) return;
       powerBonus += eff.powerBonus;
       toughnessBonus += eff.toughnessBonus;
     });
@@ -4057,11 +4165,25 @@ function spawnBattlefieldCard(lobby, data) {
   return card;
 }
 
+// Laboratory Maniac / Jace, Wielder of Mysteries -- "If you would draw a card while your library
+// has no cards in it, you win the game instead." No base "lose by decking out" mechanic exists
+// anywhere in this engine at all (a real, separate gap) -- but this replacement effect is fully
+// self-contained regardless, so it doesn't need one to exist first to be meaningful.
+function hasWinOnEmptyDraw(lobby, ownerId) {
+  return Object.values(lobby.cards).some((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /if you would draw a card while your library has no cards in it, you win the game instead/i.test(c.text || ""));
+}
 function drawN(lobby, ownerId, n) {
   const p = lobby.players[ownerId];
   if (!p) return 0;
   let drawn = 0;
-  for (let i = 0; i < n && p.library.length > 0; i++) {
+  for (let i = 0; i < n; i++) {
+    if (p.library.length === 0) {
+      if (hasWinOnEmptyDraw(lobby, ownerId)) {
+        pushLog(lobby, `${p.name} would draw from an empty library -- wins the game instead!`);
+        io.to(lobby.id).emit("gameOver", { winnerId: ownerId, winnerName: p.name });
+      }
+      break;
+    }
     const entry = p.library.shift();
     spawnBattlefieldCard(lobby, { ...entry, owner: ownerId, faceDown: true, zoneType: "hand" });
     drawn++;
@@ -7909,10 +8031,13 @@ io.on("connection", (socket) => {
     // Combat -> Main 2 phase transition, so it needs its own persistent flag rather than reading
     // combat state directly.
     if (Object.keys(validAttackers).length > 0) p.attackedThisTurn = true;
-    // Shared Animosity -- needs every attacker known at once (each one's bonus depends on every
-    // OTHER attacker's types), so it's computed once right here rather than as a per-creature
-    // trigger like fireAttackTriggers/fireGlobalAttackTypeTriggers just below.
+    // Shared Animosity / Battle Cry / Goblin Piledriver-style pumps -- all three need every
+    // attacker known at once (each one's bonus depends on every OTHER attacker), so they're
+    // computed once right here rather than as a per-creature trigger like
+    // fireAttackTriggers/fireGlobalAttackTypeTriggers just below.
     applySharedAnimosity(lobby, Object.keys(validAttackers));
+    applyBattleCry(lobby, Object.keys(validAttackers));
+    applySelfAttackTypeCountPump(lobby, Object.keys(validAttackers));
     // Skip declareBlockers for a defender with no untapped creature to block with — otherwise
     // combat just sits waiting on a no-op "No Blocks" confirmation they may not realize to give.
     const pendingWithBlockers = Array.from(defendersSet).filter((defId) =>
