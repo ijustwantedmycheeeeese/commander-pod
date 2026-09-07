@@ -937,6 +937,42 @@ function getActivatedAbilities(card, lobby) {
   return [...named, ...getGrantedActivatedAbilities(card, lobby)];
 }
 
+// The TRIGGERED-ability counterpart to grantedAbilityFromText/getGrantedActivatedAbilities above --
+// same grant-clause detection (grantedAbilityGrantMatches), a different small shape library for
+// quoted ETB-triggered text instead of activated-ability text. Harmonic Sliver/Lavabelly Sliver's
+// own ETB grants map onto CARD_ABILITIES' real "etb" trigger shape (requiresTarget/targetKind/
+// effects/label), letting fireEtbTriggers fire them through the exact same fireTrigger call path a
+// name-keyed CARD_ABILITIES entry already uses -- no separate resolution machinery needed.
+function grantedTriggeredAbilityFromText(abilityText) {
+  const t = abilityText.trim().replace(/\.$/, "");
+  let m;
+  if ((m = t.match(/^when this (?:creature|permanent) enters, it deals (\d+) damage to target player or planeswalker and you gain (\d+) life$/i))) {
+    return { trigger: "etb", requiresTarget: true, targetKind: "playerOrPlaneswalker", effects: [{ type: "damageTarget", amount: parseInt(m[1], 10) || 0 }, { type: "gainLife", target: "controller", amount: parseInt(m[2], 10) || 0 }] };
+  }
+  if (/^when this permanent enters, destroy target artifact or enchantment$/i.test(t)) {
+    return { trigger: "etb", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], effects: [{ type: "destroyTarget" }] };
+  }
+  return null;
+}
+function getGrantedTriggeredAbilities(card, lobby, triggerType) {
+  if (!lobby || card.zoneType !== "creature") return [];
+  const cardType = (card.type || "").toLowerCase();
+  const grants = [];
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    grantedAbilityGrantMatches(c.text).forEach(({ typeWord, abilityText }) => {
+      const excludeSelf = typeWord === "other";
+      if (!excludeSelf && typeWord && !cardType.includes(typeWord)) return;
+      if (excludeSelf && c.id === card.id) return;
+      const shape = grantedTriggeredAbilityFromText(abilityText);
+      if (!shape || shape.trigger !== triggerType) return;
+      grants.push({ ...shape, label: `${card.name || "Creature"} — ${abilityText.trim().replace(/\.$/, "")}` });
+    });
+  }
+  return grants;
+}
+
 // "Creatures can't attack you unless their controller pays {2} for each creature they control
 // that's attacking you." A real static restriction on DECLARING an attacker (checked/paid for right
 // in declareAttackers below), not a triggered ability -- there's nothing to trigger, it's a cost
@@ -4929,6 +4965,17 @@ function fireTrigger(lobby, card, ability) {
       commanderChoices = (p ? p.commanders : []).map((cmd, slot) => (cmd && !cmd.battlefieldId) ? { slot, name: cmd.name } : null).filter(Boolean);
       if (!commanderChoices.length) return;
     }
+    // Same CR 603.3c auto-fizzle as the checks above, for "target artifact/enchantment/[whatever
+    // typeFilter names]" -- without this, a trigger with no currently-legal target (Harmonic
+    // Sliver's own "destroy target artifact or enchantment" once nothing of either type remains,
+    // say) sits queued forever with nothing able to answer it, silently blocking every OTHER
+    // target choice queued behind it (discovered via a granted-ETB-trigger test where a second
+    // Sliver's own trigger could never get prompted because this one was stuck in front of it).
+    if (ability.targetKind === "typeList") {
+      const filter = ability.typeFilter || [];
+      const hasMatch = Object.values(lobby.cards).some((c) => (c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana") && filter.some((t) => (c.type || "").toLowerCase().includes(t)));
+      if (!hasMatch) return;
+    }
     queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, commanderChoices });
   } else {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
@@ -4947,6 +4994,7 @@ function fireEtbTriggers(lobby, card) {
   checkMoxDiamondLandDiscard(lobby, card);
   checkRiot(lobby, card);
   getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
+  getGrantedTriggeredAbilities(card, lobby, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
   fireOpponentCreatureEtbTriggers(lobby, card);
   // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
