@@ -104,6 +104,12 @@
     .card.face-down-mine { box-shadow: 0 0 0 2px #f59e0b inset; }
     @keyframes castableGlowAnim { 0%, 100% { box-shadow: 0 0 0 2px #d4af37, 0 4px 12px rgba(0,0,0,0.7); } 50% { box-shadow: 0 0 10px 3px #d4af37, 0 4px 12px rgba(0,0,0,0.7); } }
     .card.castable-now { animation: castableGlowAnim 1.4s ease-in-out infinite; }
+    .card.selected { box-shadow: 0 0 0 3px #5ec8f0, 0 0 10px 2px rgba(94,200,240,0.7), 0 4px 12px rgba(0,0,0,0.7); }
+    /* Rendered as a direct child of table-wrapper (not playmat), in plain viewport/client
+       coordinates -- getBoundingClientRect() already accounts for the playmat's own zoom/pan, so
+       comparing screen-space rects for hit-testing needs no manual scale math. Starts hidden;
+       shown only once a real drag (not just a click) is detected. */
+    .marquee-select-box { position: fixed; border: 1px solid #5ec8f0; background: rgba(94,200,240,0.15); pointer-events: none; z-index: 70; display: none; }
 
     /* ---- visual effects ---- */
     #fx-layer { position: absolute; inset: 0; pointer-events: none; z-index: 55; }
@@ -955,7 +961,7 @@
         <div class="flex-row" style="margin-bottom:6px;">
           <input type="text" id="tok-power" placeholder="Power" style="width:70px;">
           <input type="text" id="tok-toughness" placeholder="Toughness" style="width:70px;">
-          <input type="number" id="tok-amount" placeholder="Amount" value="1" min="1" max="20" style="width:70px;" title="How many copies of this token to create at once">
+          <input type="number" id="tok-amount" placeholder="Amount" value="1" min="1" style="width:70px;" title="How many copies of this token to create at once">
         </div>
         <div class="mm-label">Art</div>
         <div class="flex-row" style="align-items:center;margin-bottom:2px;">
@@ -1491,6 +1497,13 @@
     let seenCardIds = new Set();
     let pendingCastPulse = new Set();
     let cardEls = {};
+    // Board-level multi-select (click-drag a marquee, or ctrl+right-click a selected card to drop
+    // it out) -- distinct from selectedDiscardIds below, which is a modal's own unrelated checkbox
+    // state. Scoped implicitly to whichever board tab is currently visible, same as cardEls itself
+    // -- renderVisibleBoard rebuilds every .card element from scratch on nearly every update, so
+    // renderCard re-applies the "selected" class from this set each time rather than the DOM
+    // element's own class surviving between renders.
+    let selectedCardIds = new Set();
     let activeCardId = null;
     let activeBoardOwner = null;
     let currentTurn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null };
@@ -3770,7 +3783,7 @@
       const img = document.getElementById("tok-img").value.trim();
       const colors = Array.from(document.querySelectorAll(".tok-color:checked")).map((cb) => cb.value);
       const keywords = Array.from(document.querySelectorAll(".tok-kw:checked")).map((cb) => cb.value);
-      const amount = Math.max(1, Math.min(20, parseInt(document.getElementById("tok-amount").value, 10) || 1));
+      const amount = Math.max(1, parseInt(document.getElementById("tok-amount").value, 10) || 1);
       socket.emit("spawnCard", {
         name, type, img, power: power || null, toughness: toughness || null,
         colors, colorIdentity: colors, manaCost: "", cmc: 0, text: "", keywords, producedMana: null, faceDown: false, amount
@@ -4520,6 +4533,66 @@
       activePings.push(entry);
     }
     function playPingCue() { playTone(740, 0.12, "sine", sfxVolumeTarget); setTimeout(() => playTone(990, 0.15, "sine", sfxVolumeTarget), 90); }
+
+    // ---------------- multi-select (click-drag a marquee, ctrl+right-click to deselect one) ----------------
+    function clearSelection() {
+      if (selectedCardIds.size === 0) return;
+      selectedCardIds.forEach((id) => { const el = cardEls[id]; if (el) el.classList.remove("selected"); });
+      selectedCardIds.clear();
+    }
+    function setSelection(ids) {
+      clearSelection();
+      ids.forEach((id) => { selectedCardIds.add(id); const el = cardEls[id]; if (el) el.classList.add("selected"); });
+    }
+    const marqueeBox = document.createElement("div");
+    marqueeBox.className = "marquee-select-box";
+    document.body.appendChild(marqueeBox);
+    // Only starts tracking from genuinely empty board background -- an ALLOWLIST (not a denylist of
+    // things to avoid) of the few elements that are never themselves clickable: table-wrapper,
+    // playmat, its background mat image, and the zone bands/labels behind the card rows. Anything
+    // else (a card, a pile icon, a button) keeps its own existing click/drag behavior untouched.
+    function isEmptyBoardBackground(target) {
+      if (target === document.getElementById("table-wrapper") || target === playmat || target.id === "playmat-mat-img") return true;
+      return target.classList && (target.classList.contains("zone-band") || target.classList.contains("zone-band-label"));
+    }
+    document.getElementById("table-wrapper").addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || !isEmptyBoardBackground(e.target)) return;
+      const startX = e.clientX, startY = e.clientY;
+      let moved = false;
+      function updateBox(curX, curY) {
+        marqueeBox.style.left = Math.min(startX, curX) + "px";
+        marqueeBox.style.top = Math.min(startY, curY) + "px";
+        marqueeBox.style.width = Math.abs(curX - startX) + "px";
+        marqueeBox.style.height = Math.abs(curY - startY) + "px";
+      }
+      function onMove(ev) {
+        if (!moved && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3)) {
+          moved = true;
+          marqueeBox.style.display = "block";
+        }
+        if (moved) updateBox(ev.clientX, ev.clientY);
+      }
+      document.addEventListener("mousemove", onMove);
+      document.onmouseup = (ev) => {
+        document.removeEventListener("mousemove", onMove);
+        document.onmouseup = null;
+        marqueeBox.style.display = "none";
+        if (!moved) { clearSelection(); return; }
+        // getBoundingClientRect() already reflects the playmat's own zoom/pan transform, so plain
+        // viewport-space rectangle intersection needs no manual scale math -- same reasoning the
+        // CSS comment on .marquee-select-box gives.
+        const left = Math.min(startX, ev.clientX), right = Math.max(startX, ev.clientX);
+        const top = Math.min(startY, ev.clientY), bottom = Math.max(startY, ev.clientY);
+        const hits = [];
+        playmat.querySelectorAll(".card").forEach((el) => {
+          const card = allCards[el.id];
+          if (!card || card.owner !== myId) return; // only your own cards are ever selectable/draggable
+          const r = el.getBoundingClientRect();
+          if (r.left < right && r.right > left && r.top < bottom && r.bottom > top) hits.push(el.id);
+        });
+        setSelection(hits);
+      };
+    });
     function renderOneCursor(playerId) {
       const c = otherCursors[playerId];
       const layer = document.getElementById("cursor-layer");
@@ -4725,6 +4798,15 @@
 
       div.oncontextmenu = (e) => {
         e.preventDefault();
+        // Ctrl+right-click is a dedicated "drop this one card out of the current selection"
+        // gesture -- it never opens the normal per-card menu, even when the card isn't currently
+        // selected (a plain right-click is always available for that instead), so the modifier
+        // combo reads as one consistent action rather than sometimes deselecting and sometimes
+        // opening a menu depending on prior state.
+        if (e.ctrlKey) {
+          if (selectedCardIds.has(card.id)) { selectedCardIds.delete(card.id); div.classList.remove("selected"); }
+          return;
+        }
         activeCardId = card.id;
         updateContextMenuVisibility(card);
         contextMenu.style.left = e.clientX + "px";
@@ -4775,11 +4857,27 @@
         };
         div.onmousedown = (e) => {
           if (e.button !== 0) return;
+          // Dragging a card that's part of the current multi-selection (with at least one OTHER
+          // card also selected) moves the whole group together; dragging anything else collapses
+          // the selection to just that one card first, same "click-drag an unselected item starts
+          // a fresh single-item interaction" convention most multi-select UIs use.
+          const isGroupDrag = selectedCardIds.has(card.id) && selectedCardIds.size > 1;
+          if (!isGroupDrag) clearSelection();
           const scale = getZoomScale();
           const shiftX = e.clientX - div.getBoundingClientRect().left;
           const shiftY = e.clientY - div.getBoundingClientRect().top;
           let lastY = card._layoutY;
           let moved = false;
+          // Captured once at drag-start: each OTHER selected card's own starting position and DOM
+          // element, so every mousemove just applies the SAME delta to each rather than repeating
+          // the cursor-to-card math per card. Only your own cards can be selected in the first
+          // place (see the marquee's own owner filter), so no ownership check is needed here.
+          const groupMembers = isGroupDrag
+            ? Array.from(selectedCardIds).filter((id) => id !== card.id).map((id) => {
+                const c = allCards[id], el = cardEls[id];
+                return (c && el) ? { card: c, el, startX: c._layoutX, startY: c._layoutY } : null;
+              }).filter(Boolean)
+            : [];
 
           function moveAt(clientX, clientY) {
             moved = true;
@@ -4787,35 +4885,50 @@
             const rect = playmat.getBoundingClientRect();
             const x = (clientX - rect.left - shiftX) / scale;
             const y = (clientY - rect.top - shiftY) / scale;
+            const dx = x - card._layoutX, dy = y - card._layoutY;
             lastY = y;
             div.style.left = x + "px";
             div.style.top = y + "px";
+            groupMembers.forEach((m) => {
+              m.el.classList.add("dragging");
+              m.el.style.left = (m.startX + dx) + "px";
+              m.el.style.top = (m.startY + dy) + "px";
+            });
           }
           function onMouseMove(event) { moveAt(event.clientX, event.clientY); }
           document.addEventListener("mousemove", onMouseMove);
+          // Shared by the primary card and every group member below -- each one's own FINAL Y
+          // (the primary's real drag position; a member's start position plus the same delta)
+          // decides its own target zone independently, since a drag can carry a group across a
+          // zone boundary that not every member actually crosses. Returns true only when a real
+          // changeZone was actually emitted for this card (not a same-zone no-op or a cancelled
+          // X prompt) -- the caller uses this to decide whether an explicit re-render is still
+          // needed, matching the original single-card behavior of leaving a successfully-moved
+          // card's DOM position alone (the server's own broadcast will settle it) but snapping an
+          // unchanged one straight back.
+          function resolveDrop(cardObj, finalY) {
+            const targetZone = zoneForY(finalY).key;
+            if (targetZone === "hand" && cardObj.zoneType !== "hand") return false; // pick-up-to-hand isn't a drag action -- see Return to Hand in the right-click menu
+            if (targetZone === cardObj.zoneType) return false;
+            if (cardObj.zoneType === "hand" && targetZone !== "hand" && costHasX(cardObj.manaCost)) {
+              const val = prompt(`Choose a value for X (${cardObj.name || "card"}):`, "0");
+              if (val === null) return false;
+              socket.emit("changeZone", { id: cardObj.id, zoneType: targetZone, x: parseInt(val) || 0 });
+            } else {
+              socket.emit("changeZone", { id: cardObj.id, zoneType: targetZone });
+            }
+            return true;
+          }
           document.onmouseup = () => {
             document.removeEventListener("mousemove", onMouseMove);
             document.onmouseup = null;
             div.classList.remove("dragging");
+            groupMembers.forEach((m) => m.el.classList.remove("dragging"));
             if (!moved) return;
-            const targetZone = zoneForY(lastY).key;
-            if (targetZone === "hand" && card.zoneType !== "hand") {
-              // Returning a permanent to hand isn't a drag action — there's no general rule that lets
-              // you just pick it back up. Use "Return to Hand" from the right-click menu instead.
-              renderVisibleBoard();
-              return;
-            }
-            if (targetZone !== card.zoneType) {
-              if (card.zoneType === "hand" && targetZone !== "hand" && costHasX(card.manaCost)) {
-                const val = prompt("Choose a value for X:", "0");
-                if (val === null) { renderVisibleBoard(); return; }
-                socket.emit("changeZone", { id: card.id, zoneType: targetZone, x: parseInt(val) || 0 });
-              } else {
-                socket.emit("changeZone", { id: card.id, zoneType: targetZone });
-              }
-            } else {
-              renderVisibleBoard();
-            }
+            const dy = lastY - card._layoutY;
+            const primaryChanged = resolveDrop(card, lastY);
+            const anyMemberChanged = groupMembers.map((m) => resolveDrop(m.card, m.startY + dy)).some(Boolean);
+            if (!primaryChanged && !anyMemberChanged) renderVisibleBoard();
           };
         };
       } else {
@@ -4826,6 +4939,7 @@
       div.classList.toggle("tapped", !!card.tapped);
       div.classList.toggle("summoning-sick", isSummoningSick(card));
       div.classList.toggle("castable-now", card.owner === myId && card.zoneType === "hand" && hasPriority() && isInstantSpeed(card));
+      div.classList.toggle("selected", selectedCardIds.has(card.id));
 
       // ---- visual effects ----
       if (!seenCardIds.has(card.id)) {

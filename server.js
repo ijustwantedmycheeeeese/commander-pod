@@ -6902,16 +6902,16 @@ io.on("connection", (socket) => {
 
   // amount (Create Token's own new field) lets a player create several copies of the SAME token in
   // one action instead of clicking Create Token repeatedly -- e.g. Goblin Rally's "create three 1/1
-  // red Goblins" is otherwise a real click-three-times chore for a manually-adjudicated card. Capped
-  // well under MAX_CARDS_PER_LOBBY so one bad input can't itself blow the table's card limit; the
-  // existing per-card cap check still runs before EACH one, so a request that would only partially
-  // fit still creates as many as it can rather than failing outright. Untouched (defaults to a
-  // single card) for every other spawnCard caller -- deck-testing's "spawn any card" tool, drawn
-  // face-down cards, etc. -- since none of those ever set `amount`.
+  // red Goblins" is otherwise a real click-three-times chore for a manually-adjudicated card. No
+  // upper bound of its own -- MAX_CARDS_PER_LOBBY (checked before EACH card in the loop below) is
+  // already the real ceiling, so a huge request just creates as many as fit and stops there, same
+  // as a modest one that happens to hit the table limit. Untouched (defaults to a single card) for
+  // every other spawnCard caller -- deck-testing's "spawn any card" tool, drawn face-down cards,
+  // etc. -- since none of those ever set `amount`.
   socket.on("spawnCard", (data) => {
     const lobby = currentLobby(); if (!lobby || !lobby.players[socket.id]) return;
     const who = lobby.players[socket.id].name;
-    const amount = Math.max(1, Math.min(20, parseInt(data.amount, 10) || 1));
+    const amount = Math.max(1, parseInt(data.amount, 10) || 1);
     let created = 0;
     let lastCard = null;
     for (let i = 0; i < amount; i++) {
