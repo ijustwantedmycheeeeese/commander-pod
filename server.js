@@ -618,6 +618,25 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true, life: 1 }, manaAbility: true, label: "Silent Clearing — {T}, Pay 1 life: Add W or B", effects: [{ type: "chooseManaFromColors", colors: ["W", "B"], sourceName: "Silent Clearing" }] },
     { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Silent Clearing — {1}, {T}, Sacrifice this land: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }
   ],
+  // Wave 23 -- both halves need real table entries once EITHER does (adding a manaAbility entry
+  // for the conditional half disqualifies the plain "{T}: Add {C}" half from the free-tap
+  // shortcut too -- see the "tap" handler's own comment on why). "control a Swamp" mirrors Temple
+  // of the False God's own condition/conditionError shape, just checking a type-line substring
+  // instead of a land count.
+  "tainted isle": [
+    { cost: { tap: true }, manaAbility: true, label: "Tainted Isle — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes("swamp")), conditionError: "You need to control a Swamp to activate this.", label: "Tainted Isle — Add U or B", effects: [{ type: "chooseManaFromColors", colors: ["U", "B"], sourceName: "Tainted Isle" }] }
+  ],
+  "tainted wood": [
+    { cost: { tap: true }, manaAbility: true, label: "Tainted Wood — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes("swamp")), conditionError: "You need to control a Swamp to activate this.", label: "Tainted Wood — Add B or G", effects: [{ type: "chooseManaFromColors", colors: ["B", "G"], sourceName: "Tainted Wood" }] }
+  ],
+  // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
+  // effect) plus a real life cost and an artifact-control condition instead of a type check.
+  "spire of industry": [
+    { cost: { tap: true }, manaAbility: true, label: "Spire of Industry — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true, life: 1 }, manaAbility: true, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && (c.type || "").toLowerCase().includes("artifact")), conditionError: "You need to control an artifact to activate this.", label: "Spire of Industry — Pay 1 life: Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }
+  ],
   "boompile": [{ cost: { tap: true }, label: "Boompile — {T}: Flip a coin. If you win, destroy all nonland permanents", effects: [{ type: "flipCoinDestroyAllNonland" }] }],
   "alchemist's apprentice": [{ cost: { sacrifice: true }, label: "Alchemist's Apprentice — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
@@ -3703,6 +3722,28 @@ function checkEquipmentDeathDraw(lobby, dyingCard) {
   }
 }
 
+// Rogue's Gloves / Curiosity / Ophidian Eye and their functional cousins -- "Whenever equipped/
+// enchanted creature deals [combat] damage to a[n] player/opponent, you may draw a card." Same
+// generic, name-independent, oracle-text-detected precedent as equipDeathDrawFromText just above
+// (the "may" is a real choice in Magic, but this app has no standing "optional trigger" prompt
+// anywhere else either -- same disclosed simplification as every other "you may" ETB/trigger this
+// app auto-resolves as always-yes, since the upside is one-sided and no real decision exists).
+function equipCombatDamageDrawFromText(text) {
+  return /whenever (?:equipped|enchanted) creature deals (?:combat )?damage to (?:a player|an opponent|opponents), you may draw a card\.?/i.test(text || "");
+}
+// Called from resolveCombatDamage right alongside fireCombatDamageToPlayerTriggers/
+// fireBreathOfFuryTrigger (its two call sites, unblocked damage and trample overflow) -- same
+// "already fired, still attached, still a real hit" precondition both of those already checked at
+// their call site before calling in.
+function checkEquipmentCombatDamageDraw(lobby, dealingCard) {
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.attachedTo !== dealingCard.id || !equipCombatDamageDrawFromText(c.text)) continue;
+    drawN(lobby, c.owner, 1);
+    pushLog(lobby, `${(lobby.players[c.owner] || {}).name || "Someone"} draws a card (${c.name || "Equipment"} — dealt combat damage to a player)`);
+  }
+}
+
 // Live-computed, never stored on the card -- scans for anything currently attachedTo this card
 // each time it's needed, so detaching (detachCard) or the host leaving (detachDependents, which
 // already severs attachedTo in both the "equipment survives" and "aura dies" branches) requires
@@ -6152,6 +6193,7 @@ function resolveCombatDamage(lobby) {
                   pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
                   fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
                   fireBreathOfFuryTrigger(lobby, attacker, defenderId, toPlayer);
+                  checkEquipmentCombatDamageDraw(lobby, attacker);
                 }
               }
             }
@@ -6213,6 +6255,7 @@ function resolveCombatDamage(lobby) {
             if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, dealt);
             fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, dealt);
             fireBreathOfFuryTrigger(lobby, attacker, defenderId, dealt);
+            checkEquipmentCombatDamageDraw(lobby, attacker);
           }
         }
       }
