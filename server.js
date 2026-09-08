@@ -1134,7 +1134,9 @@ const ACTIVATED_ABILITIES = {
     effects: [{ type: "bounceSelfToHand" }, { type: "returnGraveyardCardToHand" }]
   }],
   "kyodai, soul of kamigawa": [{ cost: { mana: "{W}{U}{B}{R}{G}" }, label: "Kyodai, Soul of Kamigawa — gets +5/+5 until end of turn", effects: [{ type: "grantTemporaryPTToSelf", power: 5, toughness: 5 }] }],
-  "chulane, teller of tales": [{ cost: { mana: "{3}", tap: true }, requiresTarget: true, targetKind: "ownCreature", label: "Chulane, Teller of Tales — return target creature you control to its owner's hand", effects: [{ type: "bounceTargetToHand" }] }]
+  "chulane, teller of tales": [{ cost: { mana: "{3}", tap: true }, requiresTarget: true, targetKind: "ownCreature", label: "Chulane, Teller of Tales — return target creature you control to its owner's hand", effects: [{ type: "bounceTargetToHand" }] }],
+  // Field of Ruin -- its plain "{T}: Add {C}" half needs no table entry (free-tap shortcut).
+  "field of ruin": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, requiresTarget: true, targetKind: "opponentNonbasicLand", label: "Field of Ruin — destroy target nonbasic land an opponent controls; each player searches for a basic land", effects: [{ type: "destroyTarget" }, { type: "eachPlayerSearchesForBasicLand" }] }]
 };
 // Generic "[X creatures you control / All Xs / Other creatures you control] have '[ability]'"
 // grant detector -- the Sliver cycle's own defining template (Gemhide Sliver, Clot Sliver, Crypt
@@ -3048,6 +3050,15 @@ const EFFECTS = {
     p.pendingFetch = { types: params.types || [], basicOnly: !!params.basicOnly, forceTapped: !!params.entersTapped, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id, untapIfLandCountAtLeast: params.untapIfLandCountAtLeast || null };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("searchLibrary", { types: p.pendingFetch.types, basicOnly: p.pendingFetch.basicOnly });
+  },
+  // Field of Ruin -- "Each player searches their library for a basic land card, puts it onto the
+  // battlefield, then shuffles." Same pendingFetch/searchLibrary flow as searchLandTypes just
+  // above, looped over every real player at the table instead of only the ability's own controller
+  // -- each player gets their own independent search prompt via the existing fetchLand handler.
+  eachPlayerSearchesForBasicLand(lobby, ctx, params) {
+    Object.keys(lobby.players).forEach((pid) => {
+      EFFECTS.searchLandTypes(lobby, { controllerId: pid, sourceCard: ctx.sourceCard }, { types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true });
+    });
   },
   // "Search your library for a card, put it into your hand" (Demonic Tutor and similar) -- same
   // "server sets up a pending choice, client prompts via the library zone-modal, a dedicated handler
@@ -5862,6 +5873,17 @@ function resolveChosenTarget(lobby, entry, targetId) {
   if (targetKind === "ownLand") {
     const c = lobby.cards[targetId];
     if (!c || c.owner !== entry.controllerId || c.zoneType !== "mana") return { ok: false, error: "Choose a land you control." };
+    return { ok: true };
+  }
+  // Field of Ruin -- "target NONBASIC land an OPPONENT controls." First targetKind restricted to
+  // lands with a real basic/nonbasic distinction (basicLandColor already does exactly this check
+  // elsewhere for auto-mana purposes, reused here instead of a fresh regex).
+  if (targetKind === "opponentNonbasicLand") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "mana") return { ok: false, error: "Choose a land." };
+    if (c.owner === entry.controllerId) return { ok: false, error: "Choose an opponent's land." };
+    if (basicLandColor(c.type)) return { ok: false, error: "Choose a NONBASIC land." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That land"} can't be targeted by this.` };
     return { ok: true };
   }
   if (targetKind === "ownPermanent") {
