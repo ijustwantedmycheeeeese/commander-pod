@@ -353,6 +353,10 @@ const CARD_ABILITIES = {
   "smothering tithe": [{ trigger: "opponentDraws", label: "Smothering Tithe — pay {2} or its controller creates a Treasure", costLabel: "{2}", cost: { mana: "{2}" }, declinedEffects: [{ type: "createTreasureToken" }] }],
   "esper sentinel": [{ trigger: "opponentFirstNoncreatureSpell", label: "Esper Sentinel — pay {X} or its controller draws a card", xFromPower: true, declinedEffects: [{ type: "drawCards", amount: 1 }] }],
   "rhystic study": [{ trigger: "opponentCastsSpell", label: "Rhystic Study — pay {1} or its controller draws a card", cost: { mana: "{1}" }, costLabel: "{1}", declinedEffects: [{ type: "drawCards", amount: 1 }] }],
+  // "Other creatures you control have haste" needs no table entry (already generic). The graveyard-
+  // name-match trigger reuses loseLife's existing chosenTargetId override to hit the CASTER, not
+  // Kolaghan's own controller -- see fireGlobalOpponentCastsMatchingGraveyardCardTrigger's comment.
+  "dragonlord kolaghan": [{ trigger: "opponentCastsMatchingGraveyardCard", label: "Dragonlord Kolaghan — that player loses 10 life", requiresTarget: false, effects: [{ type: "loseLife", amount: 10 }] }],
   "rakdos, patron of chaos": [{ trigger: "endStep", label: "Rakdos, Patron of Chaos — target opponent may sacrifice two nonland permanents or you draw two cards", requiresTarget: true, targetKind: "player", effects: [{ type: "offerSacrificeOrDraw", sacrificeCount: 2, declinedDraw: 2 }] }],
   "serra's emissary": [{ trigger: "etb", label: "Serra's Emissary — choose a card type for protection", requiresTarget: true, targetKind: "cardType", effects: [{ type: "grantPlayerProtectionFromCardType" }] }],
   // Two independent youCastSpell triggers, each gated by its own colorFilter (fireGlobalTrigger)
@@ -5470,6 +5474,7 @@ function pushToStack(lobby, card, casterId) {
   fireGlobalTrigger(lobby, "youCastSpell", casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
   fireGlobalOpponentCastsSpellTriggers(lobby, casterId);
+  fireGlobalOpponentCastsMatchingGraveyardCardTrigger(lobby, casterId, card);
   // Ledger Shredder -- "whenever A PLAYER casts their second spell each turn" watches every
   // player's cast count, not just the caster's own permanents (unlike every other fireGlobalTrigger
   // event, which only ever scans the acting player's own battlefield) -- see
@@ -5523,6 +5528,27 @@ function fireGlobalOpponentCastsSpellTriggers(lobby, casterId) {
         playerId: casterId, controllerId: c.owner, sourceCard: c, label: ability.label,
         costLabel: ability.costLabel || "{1}", cost: ability.cost || { mana: "{1}" }, declinedEffects: ability.declinedEffects
       });
+    });
+  }
+}
+// Dragonlord Kolaghan -- "Whenever an opponent casts a creature or planeswalker spell with the
+// same name as a card in THEIR OWN graveyard, that player loses 10 life." Checked against the
+// CASTER's own graveyard (not the ability's controller's), and the effect targets the CASTER too
+// (loseLife already supports an explicit chosenTargetId override for exactly this "not the
+// controller" shape) -- a real, different relationship from every other opponentCastsX dispatcher
+// above, which all act on/for the ability's own controller.
+function fireGlobalOpponentCastsMatchingGraveyardCardTrigger(lobby, casterId, card) {
+  if (!lobby.turn.started) return;
+  const t = (card.type || "").toLowerCase();
+  if (!t.includes("creature") && !t.includes("planeswalker")) return;
+  const casterP = lobby.players[casterId];
+  if (!casterP || !(casterP.graveyard || []).some((e) => archiveKey(e.name) === archiveKey(card.name))) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === casterId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "opponentCastsMatchingGraveyardCard").forEach((ability) => {
+      const effects = (ability.effects || []).map((e) => ({ ...e, chosenTargetId: casterId }));
+      pushAbilityToStack(lobby, { sourceCard: c, controllerId: c.owner, label: ability.label, effects });
     });
   }
 }
