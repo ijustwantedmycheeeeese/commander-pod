@@ -705,6 +705,10 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Kor Haven — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{1}{W}", tap: true }, label: "Kor Haven — prevent all combat damage from target attacking creature this turn", requiresTarget: true, targetKind: "attackingCreature", effects: [{ type: "preventCombatDamageFromTarget" }] }
   ],
+  "war room": [
+    { cost: { tap: true }, manaAbility: true, label: "War Room — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{3}", tap: true, life: (lobby, controllerId) => commanderColorIdentity(lobby, controllerId).length }, label: "War Room — pay life equal to your commanders' color identity, draw a card", effects: [{ type: "drawCards", amount: 1 }] }
+  ],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -7745,13 +7749,16 @@ io.on("connection", (socket) => {
       if (!remainingMana) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s ability.`); return; }
     }
     // cost.sacrifice has nothing to validate -- you already own it and it's on the battlefield.
-    // cost.life (a plain number, e.g. fetchlands' "Pay 1 life") has nothing to validate either --
-    // real Magic never blocks paying life as a cost, even at 1 life or below; it can legally kill you.
+    // cost.life (a plain number, e.g. fetchlands' "Pay 1 life", OR a function(lobby, controllerId)
+    // for a dynamic amount like War Room's "life equal to the number of colors in your commanders'
+    // color identity") has nothing to validate either -- real Magic never blocks paying life as a
+    // cost, even at 1 life or below; it can legally kill you.
+    const lifeCost = typeof cost.life === "function" ? cost.life(lobby, socket.id) : cost.life;
 
     if (cost.tap) { card.tapped = true; broadcastCard(lobby, card); }
     if (cost.mana) { p.mana = remainingMana; broadcastPlayers(lobby); }
-    if (cost.life) {
-      applyLifeLoss(lobby, socket.id, cost.life);
+    if (lifeCost) {
+      applyLifeLoss(lobby, socket.id, lifeCost);
       checkEliminations(lobby); // paying life is a real way to die -- check immediately, not just at resolution
       broadcastPlayers(lobby);
     }
