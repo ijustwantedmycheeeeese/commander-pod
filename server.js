@@ -715,6 +715,10 @@ const ACTIVATED_ABILITIES = {
   // table entry needed for that half at all.
   "chromatic lantern": [{ cost: { tap: true }, manaAbility: true, label: "Chromatic Lantern — Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }],
   "torch courier": [{ cost: { sacrifice: true }, label: "Torch Courier — another target creature gains haste until end of turn", requiresTarget: true, targetKind: "otherCreature", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Haste" }] }],
+  "vault of the archangel": [
+    { cost: { tap: true }, manaAbility: true, label: "Vault of the Archangel — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{2}{W}{B}", tap: true }, label: "Vault of the Archangel — creatures you control gain deathtouch and lifelink until end of turn", effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Deathtouch", "Lifelink"] }] }
+  ],
   "ominous cemetery": [
     { cost: { tap: true }, manaAbility: true, label: "Ominous Cemetery — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{5}", tap: true, exile: true }, label: "Ominous Cemetery — target creature's owner shuffles it into their library", requiresTarget: true, targetKind: "creature", effects: [{ type: "shuffleTargetIntoLibrary" }] }
