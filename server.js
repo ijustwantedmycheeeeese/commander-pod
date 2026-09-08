@@ -368,6 +368,12 @@ const CARD_ABILITIES = {
   // land-count condition (same pattern as Temple of the False God's own condition/lobby.cards scan,
   // just counting Plains specifically instead of any land).
   "emeria, the sky ruin": [{ trigger: "upkeep", label: "Emeria, the Sky Ruin — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", condition: (card, lobby) => Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes("plains")).length >= 7, effects: [{ type: "reanimateFromGraveyard" }] }],
+  // Wave 27 -- the "Thriving" land cycle. "This land enters tapped" is already generic; this is
+  // just the ETB half of the one-time color choice (chooseColorOtherThan) -- see the matching
+  // ACTIVATED_ABILITIES entries below for the ongoing mana ability that reads it back.
+  "thriving bluff": [{ trigger: "etb", label: "Thriving Bluff — choose a color other than red", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "R" }] }],
+  "thriving grove": [{ trigger: "etb", label: "Thriving Grove — choose a color other than green", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "G" }] }],
+  "thriving heath": [{ trigger: "etb", label: "Thriving Heath — choose a color other than white", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "W" }] }],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }],
   // Kardur's "attack each combat if able and attack a player other than you if able" half is
@@ -644,6 +650,13 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Tainted Wood — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { tap: true }, manaAbility: true, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes("swamp")), conditionError: "You need to control a Swamp to activate this.", label: "Tainted Wood — Add B or G", effects: [{ type: "chooseManaFromColors", colors: ["B", "G"], sourceName: "Tainted Wood" }] }
   ],
+  // Wave 27 -- the "Thriving" cycle's own ongoing mana ability, reading back whatever
+  // chooseColorOtherThan (see the matching CARD_ABILITIES ETB entries) stored on THIS card
+  // instance via chooseManaOwnOrChosenColor -- a single manaAbility entry each, no second
+  // plain-{T}-for-C ability needed since these lands have no colorless-only half at all.
+  "thriving bluff": [{ cost: { tap: true }, manaAbility: true, label: "Thriving Bluff — Add R or the chosen color", effects: [{ type: "chooseManaOwnOrChosenColor", ownColor: "R" }] }],
+  "thriving grove": [{ cost: { tap: true }, manaAbility: true, label: "Thriving Grove — Add G or the chosen color", effects: [{ type: "chooseManaOwnOrChosenColor", ownColor: "G" }] }],
+  "thriving heath": [{ cost: { tap: true }, manaAbility: true, label: "Thriving Heath — Add W or the chosen color", effects: [{ type: "chooseManaOwnOrChosenColor", ownColor: "W" }] }],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -2148,6 +2161,37 @@ const EFFECTS = {
     p.pendingFreeManaChoice = { amount: 1 };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: params.colors || [] });
+  },
+  // The "Thriving" land cycle -- "As it enters, choose a color other than [X]." A ONE-TIME choice
+  // made at ETB and remembered for the rest of the game (card.chosenColor), distinct from every
+  // other chooseMana-shaped prompt in this app, which all resolve immediately into mana. Reuses the
+  // client's existing chooseMana modal purely for the UI (a real cardId, not the "__free__"
+  // sentinel, so resolveManaChoice's own new pendingColorChoice branch -- checked before either of
+  // its two existing branches -- can tell this apart and store instead of adding mana).
+  chooseColorOtherThan(lobby, ctx, params) {
+    const card = lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    card.pendingColorChoice = true;
+    broadcastCard(lobby, card);
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    const options = ["W", "U", "B", "R", "G"].filter((c) => c !== params.excludeColor);
+    if (sock) sock.emit("chooseMana", { cardId: card.id, cardName: card.name || "Land", options });
+  },
+  // The Thriving cycle's own ongoing mana ability -- "{T}: Add [X] or one mana of the chosen
+  // color." Computed fresh at activation (own color is a fixed param, the second is whatever
+  // chooseColorOtherThan stored on this exact card instance) rather than baked into the table entry
+  // like chooseManaFromColors' fixed pair, since the second color varies per permanent. Falls back
+  // to a single-color choice (no prompt at all) if the ETB choice was somehow never made -- should
+  // never happen in practice (the ETB effect always fires first), just a safe default.
+  chooseManaOwnOrChosenColor(lobby, ctx, params) {
+    const card = lobby.cards[ctx.sourceCard.id];
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const colors = (card && card.chosenColor) ? [params.ownColor, card.chosenColor] : [params.ownColor];
+    if (colors.length === 1) { p.mana[colors[0]] = (p.mana[colors[0]] || 0) + 1; broadcastPlayers(lobby); return; }
+    p.pendingFreeManaChoice = { amount: 1 };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: (card && card.name) || "Land", options: colors });
   },
   // Battle Cry Goblin -- "Goblins you control get +1/+0 and gain haste until end of turn." Generic
   // on typeFilter (a type-line substring), reusing grantTemporaryPT/grantTemporaryKeyword for the
@@ -7366,6 +7410,18 @@ io.on("connection", (socket) => {
       p.mana[color] = (p.mana[color] || 0) + amount;
       broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} adds {${color}}${amount > 1 ? ` x${amount}` : ""}`);
+      return;
+    }
+    // The Thriving cycle's one-time ETB "choose a color" (chooseColorOtherThan) -- STORES the pick
+    // on the card instead of adding mana, checked before the tapped-mana-source branch below since
+    // this card is neither tapped nor being tapped for mana right now, just entering.
+    const pendingColorCard = lobby.cards[cardId];
+    if (pendingColorCard && pendingColorCard.pendingColorChoice) {
+      if (pendingColorCard.owner !== socket.id || !["W", "U", "B", "R", "G"].includes(color)) return;
+      pendingColorCard.pendingColorChoice = false;
+      pendingColorCard.chosenColor = color;
+      broadcastCard(lobby, pendingColorCard);
+      pushLog(lobby, `${p.name} chose ${color} for ${pendingColorCard.name || "a land"}`);
       return;
     }
     const card = lobby.cards[cardId];
