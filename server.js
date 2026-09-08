@@ -410,6 +410,7 @@ const CARD_ABILITIES = {
   // "Whenever you cast an instant or sorcery spell, this creature deals 2 damage to each opponent."
   // See fireGlobalTrigger's spellTypeFilter comment for how the instant-or-sorcery restriction works.
   "guttersnipe": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], label: "Guttersnipe — deal 2 damage to each opponent", requiresTarget: false, effects: [{ type: "damageEachOpponent", amount: 2 }] }],
+  "electrostatic field": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], label: "Electrostatic Field — deal 1 damage to each opponent", requiresTarget: false, effects: [{ type: "damageEachOpponent", amount: 1 }] }],
   // "Whenever Krenko attacks, put a +1/+1 counter on it, then create a number of 1/1 red Goblin
   // creature tokens equal to Krenko's power." Effects resolve strictly in array order, so
   // createTokensEqualToSelfPower correctly sees the counter addCountersToSelf just added -- see its
