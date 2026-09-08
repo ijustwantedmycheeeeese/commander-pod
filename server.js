@@ -4347,6 +4347,30 @@ function checkEquipmentCombatDamageTreasure(lobby, dealingCard, amount) {
     pushLog(lobby, `${(lobby.players[dealingCard.owner] || {}).name || "Someone"} creates ${amount} Treasure token${amount === 1 ? "" : "s"} (${c.name || "Equipment"} — dealt combat damage to a player)`);
   }
 }
+// Tarrian's Soulcleaver -- "Whenever another artifact or creature is put into a graveyard from the
+// battlefield, put a +1/+1 counter on equipped creature." A genuinely GLOBAL death watch for an
+// equipment (unlike the rest of this "reacts to its own held creature" family above, which only
+// ever react to damage dealt BY the equipped creature) -- any artifact or creature dying anywhere
+// on the table counts, regardless of controller. Called from fireDeathTriggers, the one real
+// universal "this permanent just died from the battlefield" choke point (see its own comment) --
+// but that runs BEFORE the dying card is deleted/detached, so this explicitly skips the case where
+// the dying permanent IS the equipped host itself (no legal recipient left once it's gone, matching
+// real Magic), rather than relying on deletion timing to make that true.
+function checkTarrianSoulcleaverCounter(lobby, dyingCard) {
+  const t = (dyingCard.type || "").toLowerCase();
+  if (!t.includes("artifact") && !t.includes("creature")) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.id === dyingCard.id || !c.attachedTo || c.attachedTo === dyingCard.id) continue;
+    if (!/whenever another artifact or creature is put into a graveyard from the battlefield, put a \+1\/\+1 counter on equipped creature/i.test(c.text || "")) continue;
+    const host = lobby.cards[c.attachedTo];
+    if (!host) continue;
+    const bonus = bonusCountersFor(lobby, host.owner);
+    const mult = counterMultiplierFor(lobby, host.owner);
+    host.counters = (host.counters || 0) + (1 + bonus) * mult;
+    broadcastCard(lobby, host);
+  }
+}
 
 // Live-computed, never stored on the card -- scans for anything currently attachedTo this card
 // each time it's needed, so detaching (detachCard) or the host leaving (detachDependents, which
@@ -6309,6 +6333,13 @@ function fireDeathTriggers(lobby, card) {
   fireKardurDoomscourgeDeathTrigger(lobby, card);
   checkEquipmentDeathDraw(lobby, card);
   checkEquipmentDeathToken(lobby, card);
+  // Tarrian's Soulcleaver -- fireDeathTriggers is the ONE real universal choke point for "a
+  // permanent genuinely died from the battlefield" (both the manual moveOut path and every
+  // automated destroy/sacrifice site already call this before actually removing the card), unlike
+  // sendToGraveyardInternal alone which ALSO fires for a plain hand discard. Runs while the dying
+  // card is still fully live (not yet deleted/detached), so checkTarrianSoulcleaverCounter itself
+  // has to guard against the dying permanent being the very host it would counter.
+  checkTarrianSoulcleaverCounter(lobby, card);
 }
 // Kardur, Doomscourge -- "whenever an attacking creature dies, each opponent loses 1 life and you
 // gain 1 life." Unlike deathYouControl (Zulaport Cutthroat, Venerated Stormsinger), this cares
