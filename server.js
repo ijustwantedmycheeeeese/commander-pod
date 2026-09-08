@@ -4204,6 +4204,23 @@ function checkEquipmentCombatDamageCounters(lobby, dealingCard, amount) {
     pushLog(lobby, `${dealingCard.name || "A creature"} gets ${amount} +1/+1 counter(s) (${c.name || "Equipment"} — dealt combat damage to a player)`);
   }
 }
+// The Reaver Cleaver's own granted ability -- "create that many Treasure tokens" (same "that many"
+// = the actual damage dealt). Fifth variant in this same family; "or planeswalker" is left
+// unmodeled the same way every other combat-damage-to-planeswalker case in this engine already is
+// (this app has no planeswalker-damage tracking at all) -- the player-damage half is real and is
+// the overwhelmingly common case anyway.
+function equipCombatDamageTreasureFromText(text) {
+  return /when(?:ever)? (?:equipped|enchanted|this) creature deals (?:combat )?damage to (?:a player|an opponent|opponents)(?: or planeswalker)?, create that many treasure tokens?\.?/i.test(text || "");
+}
+function checkEquipmentCombatDamageTreasure(lobby, dealingCard, amount) {
+  if (!amount) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.attachedTo !== dealingCard.id || !equipCombatDamageTreasureFromText(c.text)) continue;
+    for (let i = 0; i < amount; i++) EFFECTS.createTreasureToken(lobby, { controllerId: dealingCard.owner });
+    pushLog(lobby, `${(lobby.players[dealingCard.owner] || {}).name || "Someone"} creates ${amount} Treasure token${amount === 1 ? "" : "s"} (${c.name || "Equipment"} — dealt combat damage to a player)`);
+  }
+}
 
 // Live-computed, never stored on the card -- scans for anything currently attachedTo this card
 // each time it's needed, so detaching (detachCard) or the host leaving (detachDependents, which
@@ -6888,6 +6905,7 @@ function resolveCombatDamage(lobby) {
                   fireBreathOfFuryTrigger(lobby, attacker, defenderId, toPlayer);
                   checkEquipmentCombatDamageDraw(lobby, attacker);
                   checkEquipmentCombatDamageCounters(lobby, attacker, toPlayer);
+                  checkEquipmentCombatDamageTreasure(lobby, attacker, toPlayer);
                 }
               }
             }
@@ -6952,6 +6970,7 @@ function resolveCombatDamage(lobby) {
             fireBreathOfFuryTrigger(lobby, attacker, defenderId, dealt);
             checkEquipmentCombatDamageDraw(lobby, attacker);
             checkEquipmentCombatDamageCounters(lobby, attacker, dealt);
+            checkEquipmentCombatDamageTreasure(lobby, attacker, dealt);
           }
         }
       }
