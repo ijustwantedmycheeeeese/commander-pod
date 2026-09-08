@@ -596,6 +596,7 @@ const CARD_ABILITIES = {
   // plus returnOwnGraveyardEntryToHand (also pre-existing) -- a straight composition, no new code.
   "griffin dreamfinder": [{ trigger: "etb", label: "Griffin Dreamfinder — return target enchantment card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] }],
   "mortuary mire": [{ trigger: "etb", label: "Mortuary Mire — put target creature card from your graveyard on top of your library", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["creature"], effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
+  "archivist of oghma": [{ trigger: "opponentSearchesLibrary", label: "Archivist of Oghma — gain 1 life and draw a card", requiresTarget: false, effects: [{ type: "gainLife", target: "controller", amount: 1 }, { type: "drawCards", amount: 1 }] }],
   "sun titan": [
     { trigger: "etb", label: "Sun Titan — return target permanent card with mana value 3 or less from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardMvFilter", maxCmc: 3, effects: [{ type: "reanimateFromGraveyard" }] },
     { trigger: "attack", label: "Sun Titan — return target permanent card with mana value 3 or less from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardMvFilter", maxCmc: 3, effects: [{ type: "reanimateFromGraveyard" }] }
@@ -5801,6 +5802,19 @@ function fireOpponentCreatureEtbTriggers(lobby, enteringCard) {
     getAutomatedAbilities(c.name, "opponentCreatureEtb").forEach((ability) => fireTrigger(lobby, c, ability));
   }
 }
+// Archivist of Oghma -- "whenever an opponent searches their library." Same shape as
+// fireOpponentCreatureEtbTriggers just above, keyed off the searching PLAYER's id instead of an
+// entering card -- called at every real "a library search actually happened" site (fetchLand,
+// tutorCard, drawSpecific, and their own cancel/find-nothing paths, since CR 701.19 counts a
+// search as happening whether or not anything was found).
+function fireOpponentSearchTrigger(lobby, searchingPlayerId) {
+  if (!lobby.turn.started) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === searchingPlayerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "opponentSearchesLibrary").forEach((ability) => fireTrigger(lobby, c, ability));
+  }
+}
 
 // Fires every authored "dies" ability for `card` (self-referential only). Must be called BEFORE
 // the card is actually removed from lobby.cards, so its data (owner, etc.) is still intact to
@@ -8339,6 +8353,7 @@ io.on("connection", (socket) => {
     spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} searched their library for a card`);
+    fireOpponentSearchTrigger(lobby, socket.id);
   });
 
   // Answers a pending EFFECTS.searchLandTypes prompt (a fetchland) -- validates the chosen library
@@ -8372,6 +8387,7 @@ io.on("connection", (socket) => {
     p.pendingFetch = null;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
+    fireOpponentSearchTrigger(lobby, socket.id);
     fireEtbTriggers(lobby, card);
     // Cultivate's own "...and the other into your hand" -- see searchLandTypes' comment for why
     // this can't just be a sibling effect in the original effects array.
@@ -8390,6 +8406,7 @@ io.on("connection", (socket) => {
     p.pendingFetch = null;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} found nothing`);
+    fireOpponentSearchTrigger(lobby, socket.id);
   });
 
   // Answers a pending EFFECTS.tutorToHand prompt (Demonic Tutor and similar) -- same shape as
@@ -8420,6 +8437,7 @@ io.on("connection", (socket) => {
     }
     p.pendingTutor = null;
     broadcastPlayers(lobby);
+    fireOpponentSearchTrigger(lobby, socket.id);
     if (thenEffects) {
       const ctx = { controllerId: socket.id, sourceCard: sourceCardId ? { id: sourceCardId } : null };
       thenEffects.forEach((e) => { const fn = EFFECTS[e.type]; if (fn) fn(lobby, ctx, e); });
@@ -8480,6 +8498,7 @@ io.on("connection", (socket) => {
     p.pendingTutor = null;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} found nothing`);
+    fireOpponentSearchTrigger(lobby, socket.id);
   });
 
   socket.on("millCard", (count) => {
