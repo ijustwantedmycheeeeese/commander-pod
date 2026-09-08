@@ -2879,7 +2879,7 @@ const EFFECTS = {
     // controller's own life total or creatures, matching its real "an opponent" wording.
     const p = lobby.players[params.chosenTargetId];
     if (p) {
-      if (params.chosenTargetId !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
+      if (params.chosenTargetId !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId, ctx.sourceCard);
       amount = reduceDamageForVictim(lobby, params.chosenTargetId, amount);
       if (applyLifeLoss(lobby, params.chosenTargetId, amount, sourceCardId)) {
         io.to(lobby.id).emit("spellDamage", { targetId: params.chosenTargetId, amount, sourceCardId });
@@ -2888,7 +2888,7 @@ const EFFECTS = {
     }
     const card = lobby.cards[params.chosenTargetId];
     if (!card) return;
-    if (card.owner !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId);
+    if (card.owner !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId, ctx.sourceCard);
     // Emitted for the visual burst regardless of whether this ends up lethal -- a creature target
     // taking sub-lethal damage still has nothing MECHANICAL to represent (see the comment on this
     // effect's doc block above), but there's no reason it shouldn't visibly react.
@@ -6716,10 +6716,20 @@ function graveyardRedirectFor(lobby, card) {
 // assignment loop's lethal-toughness math, a much higher-risk change for a less commonly relevant
 // case) -- a disclosed narrowing, same precedent as every other scope-limited card in this engine.
 const DAMAGE_DOUBLING_CARDS = ["twinflame tyrant", "gisela, blade of goldnight"];
-function damageMultiplierFor(lobby, controllerId) {
+function damageMultiplierFor(lobby, controllerId, sourceCard) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
-    if (c.owner === controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && DAMAGE_DOUBLING_CARDS.includes(archiveKey(c.name))) return 2;
+    if (c.owner !== controllerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (DAMAGE_DOUBLING_CARDS.includes(archiveKey(c.name))) return 2;
+    // Neriv, Heart of the Storm -- "If a creature you control that entered this turn would deal
+    // damage, it deals twice that much damage instead." Narrower than the flat controller-wide
+    // doublers above: only applies when the actual damage SOURCE is a creature that entered THIS
+    // turn (reuses controllerSince, same "entered this turn" check Hobgoblin Bandit Lord's own
+    // effect already established), so it needs sourceCard threaded in, not just controllerId. A
+    // non-creature source (a spell/ability's ctx.sourceCard) simply fails the zoneType check, no
+    // false positive.
+    if (sourceCard && sourceCard.zoneType === "creature" && sourceCard.controllerSince === lobby.turn.turnNumber
+      && /if a creature you control that entered this turn would deal damage, it deals twice that much damage instead/i.test(c.text || "")) return 2;
   }
   return 1;
 }
@@ -7083,7 +7093,7 @@ function resolveCombatDamage(lobby) {
               remaining -= toThis;
             });
             const toPlayerBase = atkTrample ? remaining : 0;
-            const toPlayer = reduceDamageForVictim(lobby, defenderId, toPlayerBase * damageMultiplierFor(lobby, attacker.owner));
+            const toPlayer = reduceDamageForVictim(lobby, defenderId, toPlayerBase * damageMultiplierFor(lobby, attacker.owner, attacker));
             if (toPlayer > 0) {
               const defender = lobby.players[defenderId];
               // Teferi's Protection -- see the non-trample branch below for why the whole event is
@@ -7144,7 +7154,7 @@ function resolveCombatDamage(lobby) {
         // whole damage event (no poison, no commander-damage tracking either) rather than just
         // zeroing the life change.
         if (defender && atkPower > 0 && !defender.protectionFromEverything) {
-          const dealt = reduceDamageForVictim(lobby, defenderId, atkPower * damageMultiplierFor(lobby, attacker.owner));
+          const dealt = reduceDamageForVictim(lobby, defenderId, atkPower * damageMultiplierFor(lobby, attacker.owner, attacker));
           // Deflecting Palm only intercepts real life loss -- infect's poison-counter conversion
           // (CR 702.90c) isn't a life change at all, so it's never redirectable and always lands.
           const tookIt = hasKw(attacker, "infect") ? (defender.poison = (defender.poison || 0) + dealt, true) : applyLifeLoss(lobby, defenderId, dealt, attacker.id);
