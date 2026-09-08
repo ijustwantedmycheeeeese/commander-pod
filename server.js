@@ -611,7 +611,8 @@ const CARD_ABILITIES = {
   "sharuum the hegemon": [{ trigger: "etb", label: "Sharuum the Hegemon — return target artifact card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact"], effects: [{ type: "reanimateFromGraveyard" }] }],
   // Wave 24 -- reuses the pre-existing untapUpToNOwnLands effect (built for Frantic Search) as-is.
   "peregrine drake": [{ trigger: "etb", label: "Peregrine Drake — untap up to five lands", requiresTarget: false, effects: [{ type: "untapUpToNOwnLands", amount: 5 }] }],
-  "mistmoon griffin": [{ trigger: "death", label: "Mistmoon Griffin — exile it, then return the top creature card of your graveyard to the battlefield", requiresTarget: false, effects: [{ type: "exileSelfAndReanimateTopGraveyardCreature" }] }]
+  "mistmoon griffin": [{ trigger: "death", label: "Mistmoon Griffin — exile it, then return the top creature card of your graveyard to the battlefield", requiresTarget: false, effects: [{ type: "exileSelfAndReanimateTopGraveyardCreature" }] }],
+  "child of alara": [{ trigger: "death", label: "Child of Alara — destroy all nonland permanents, they can't be regenerated", requiresTarget: false, effects: [{ type: "destroyAllNonlandPermanents", noRegen: true }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -3186,6 +3187,28 @@ const EFFECTS = {
     EFFECTS.destroyAllCreatures(lobby, ctx, params);
     equipmentToDestroy.forEach((c) => {
       if (!lobby.cards[c.id]) return;
+      fireDeathTriggers(lobby, c);
+      sendToGraveyardInternal(lobby, c);
+    });
+  },
+  // Child of Alara -- "destroy all nonland permanents. They can't be regenerated." Same
+  // indestructible/regeneration handling as destroyAllCreatures, just widened from the "creature"
+  // zoneType alone to the creature+artifact pair -- this app's classifyType only ever buckets a
+  // permanent into "mana" (land), "creature", or "artifact" (which also covers enchantments and
+  // planeswalkers, see classifyType's own comment), so that pair already IS "every nonland
+  // permanent" here. Unlike Boompile's flipCoinDestroyAllNonland just below (which skips the
+  // indestructible/regen checks entirely as a deliberate, disclosed Boompile-only simplification),
+  // this is a real destroy effect and respects both, same as destroyAllCreatures does.
+  destroyAllNonlandPermanents(lobby, ctx, params) {
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature" || c.zoneType === "artifact").forEach((c) => {
+      if (effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "indestructible")) return;
+      if (!params.noRegen && c.regenerationShield > 0) {
+        c.regenerationShield -= 1;
+        c.tapped = true;
+        broadcastCard(lobby, c);
+        pushLog(lobby, `${c.name || "A permanent"} regenerates instead of being destroyed`);
+        return;
+      }
       fireDeathTriggers(lobby, c);
       sendToGraveyardInternal(lobby, c);
     });
