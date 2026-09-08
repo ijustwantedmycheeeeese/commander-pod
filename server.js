@@ -4181,6 +4181,29 @@ function checkEquipmentCombatDamageDraw(lobby, dealingCard) {
     pushLog(lobby, `${(lobby.players[c.owner] || {}).name || "Someone"} draws a card (${c.name || "Equipment"} — dealt combat damage to a player)`);
   }
 }
+// Power Fist's granted ability -- "Whenever this creature deals combat damage to a player, put
+// that many +1/+1 counters on it." Same live-text-scan/attachedTo-scan shape and call sites as
+// checkEquipmentCombatDamageDraw just above, adding counters equal to the actual damage amount
+// dealt (routed through bonusCountersFor/counterMultiplierFor, same as any other real
+// +1/+1-counter-adding effect -- a Doubling Season-style doubler should apply here too).
+function equipCombatDamageCountersFromText(text) {
+  // Power Fist's own wording quotes the granted ability in the CREATURE's voice ("this creature
+  // deals...") rather than the equipment's own voice ("equipped creature deals..." -- Rogue's
+  // Gloves' unquoted style) -- both phrasings mean the same thing here, so both are accepted.
+  return /when(?:ever)? (?:equipped|enchanted|this) creature deals (?:combat )?damage to (?:a player|an opponent|opponents), put that many \+1\/\+1 counters on it\.?/i.test(text || "");
+}
+function checkEquipmentCombatDamageCounters(lobby, dealingCard, amount) {
+  if (!amount) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.attachedTo !== dealingCard.id || !equipCombatDamageCountersFromText(c.text)) continue;
+    const bonus = bonusCountersFor(lobby, dealingCard.owner);
+    const mult = counterMultiplierFor(lobby, dealingCard.owner);
+    dealingCard.counters = (dealingCard.counters || 0) + (amount + bonus) * mult;
+    broadcastCard(lobby, dealingCard);
+    pushLog(lobby, `${dealingCard.name || "A creature"} gets ${amount} +1/+1 counter(s) (${c.name || "Equipment"} — dealt combat damage to a player)`);
+  }
+}
 
 // Live-computed, never stored on the card -- scans for anything currently attachedTo this card
 // each time it's needed, so detaching (detachCard) or the host leaving (detachDependents, which
@@ -6864,6 +6887,7 @@ function resolveCombatDamage(lobby) {
                   fireGlobalCombatDamageToPlayerTrigger(lobby, attacker, defenderId, toPlayer);
                   fireBreathOfFuryTrigger(lobby, attacker, defenderId, toPlayer);
                   checkEquipmentCombatDamageDraw(lobby, attacker);
+                  checkEquipmentCombatDamageCounters(lobby, attacker, toPlayer);
                 }
               }
             }
@@ -6927,6 +6951,7 @@ function resolveCombatDamage(lobby) {
             fireGlobalCombatDamageToPlayerTrigger(lobby, attacker, defenderId, dealt);
             fireBreathOfFuryTrigger(lobby, attacker, defenderId, dealt);
             checkEquipmentCombatDamageDraw(lobby, attacker);
+            checkEquipmentCombatDamageCounters(lobby, attacker, dealt);
           }
         }
       }
