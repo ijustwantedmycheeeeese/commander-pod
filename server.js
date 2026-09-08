@@ -1082,6 +1082,18 @@ const ACTIVATED_ABILITIES = {
     conditionError: "You need seven or more cards in your graveyard to activate this.",
     label: "Cephalid Coliseum — target player draws three cards, then discards three cards",
     effects: [{ type: "targetPlayerDraws", amount: 3 }, { type: "targetPlayerDiscards", amount: 3 }]
+  }],
+  // Mtenda Griffin -- "Activate only during your upkeep" is a real activation-condition gate
+  // reusing the exact same (card, lobby) mechanism as every other conditioned ability above; this
+  // one is the first to check turn.phase/activeIndex instead of board state. bounceSelfToHand
+  // (already built for Hibernation Sliver's granted ability) + the existing ownGraveyardTypeList
+  // targetKind (Hall of Heliod's Generosity) cover both halves with zero new effects.
+  "mtenda griffin": [{
+    cost: { mana: "{W}", tap: true }, requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["griffin"],
+    condition: (card, lobby) => lobby.turn.phase === "Upkeep" && lobby.turn.order[lobby.turn.activeIndex] === card.owner,
+    conditionError: "You can only activate this during your own upkeep.",
+    label: "Mtenda Griffin — return this creature to hand and return target Griffin card from your graveyard to your hand",
+    effects: [{ type: "bounceSelfToHand" }, { type: "returnGraveyardCardToHand" }]
   }]
 };
 // Generic "[X creatures you control / All Xs / Other creatures you control] have '[ability]'"
