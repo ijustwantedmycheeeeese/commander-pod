@@ -1845,6 +1845,22 @@ const EFFECTS = {
       });
     }
   },
+  // Forbidden Orchard -- "target opponent creates a 1/1 colorless Spirit creature token." The
+  // chosen-target counterpart to createToken (which always makes tokens for the controller) --
+  // owner: params.chosenTargetId instead of ctx.controllerId, same "owner override" shape
+  // counterTargetSpellCreateTokenForController already uses for a different card.
+  createTokenForTargetPlayer(lobby, ctx, params) {
+    const ownerId = params.chosenTargetId;
+    if (!lobby.players[ownerId]) return;
+    const n = params.amount || 1;
+    for (let i = 0; i < n; i++) {
+      spawnBattlefieldCard(lobby, {
+        name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
+        power: params.power, toughness: params.toughness, colors: params.colors || [],
+        keywords: params.keywords || [], owner: ownerId, zoneType: classifyType(params.tokenType || "Token Creature")
+      });
+    }
+  },
   // Krenko, Mob Boss -- "Create X 1/1 red Goblin creature tokens, where X is the number of Goblins
   // you control." Computed fresh here (params.typeFilter, e.g. ["goblin"]) rather than threaded in
   // as an amount, same "the activated-ability path has no generic dynamic-amount pipeline, so the
@@ -5586,6 +5602,14 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (cardTypeProtectionBlocks(lobby, targetId, entry.spellCard || entry.sourceCard)) return { ok: false, error: "That player has protection from this." };
     return { ok: true };
   }
+  // Forbidden Orchard-style "target OPPONENT" -- same as "player" but the controller themselves is
+  // never a legal choice, unlike plain "player" (Desolate Lighthouse-style self-discard, say).
+  if (targetKind === "opponent") {
+    if (!lobby.players[targetId]) return { ok: false, error: "Choose a player." };
+    if (targetId === entry.controllerId) return { ok: false, error: "Choose an opponent." };
+    if (cardTypeProtectionBlocks(lobby, targetId, entry.spellCard || entry.sourceCard)) return { ok: false, error: "That player has protection from this." };
+    return { ok: true };
+  }
   if (targetKind === "spell") {
     if (!lobby.stack.some((s) => s.id === targetId)) return { ok: false, error: "Choose a spell or ability on the stack." };
     return { ok: true };
@@ -7996,6 +8020,20 @@ io.on("connection", (socket) => {
     checkEliminations(lobby); // a real way to die, checked immediately -- same as any other life-loss cost
     broadcastPlayers(lobby);
   }
+  // Forbidden Orchard -- "Whenever you tap this land for mana, target opponent creates a 1/1
+  // colorless Spirit creature token." Same text-scan/two-choke-point shape as the painland check
+  // just above, but this one needs a REAL target choice (the new "opponent" targetKind), not an
+  // automatic effect, so it goes through queueTargetChoice like any other triggered ability instead
+  // of resolving inline.
+  function checkLandTapOpponentTokenTrigger(lobby, card, playerId) {
+    const m = (card.text || "").match(/whenever you tap this land for mana, target opponent creates an? (\d+)\/(\d+) (\w+) (\w+) creature tokens?\.?/i);
+    if (!m) return;
+    queueTargetChoice(lobby, {
+      controllerId: playerId, sourceCard: card, label: `${card.name || "This land"} — target opponent creates a token`,
+      targetKind: "opponent",
+      effects: [{ type: "createTokenForTargetPlayer", tokenType: `Token Creature — ${m[4]}`, power: m[1], toughness: m[2], colors: m[3].toLowerCase() === "colorless" ? [] : [COLOR_NAME_TO_LETTER[m[3].toLowerCase()]].filter(Boolean), name: m[4] }]
+    });
+  }
   socket.on("tap", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
@@ -8058,6 +8096,7 @@ io.on("connection", (socket) => {
       broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
       applyPainlandDamageIfNeeded(lobby, card, socket.id);
+      checkLandTapOpponentTokenTrigger(lobby, card, socket.id);
     } else if (options ? options.length > 1 : (Array.isArray(card.producedMana) && card.producedMana.length > 1)) {
       const finalOptions = (options || card.producedMana).filter((c) => ["W", "U", "B", "R", "G", "C"].includes(c));
       if (finalOptions.length) socket.emit("chooseMana", { cardId: card.id, cardName: card.name, options: finalOptions });
@@ -8113,6 +8152,7 @@ io.on("connection", (socket) => {
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
     applyPainlandDamageIfNeeded(lobby, card, socket.id);
+    checkLandTapOpponentTokenTrigger(lobby, card, socket.id);
     setUndo(lobby, socket.id, `Tap ${card.name || "a card"} for {${color}}`, () => {
       const c = lobby.cards[cardId];
       if (c && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
