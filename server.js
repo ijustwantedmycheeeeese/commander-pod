@@ -378,6 +378,7 @@ const CARD_ABILITIES = {
   "thriving moor": [{ trigger: "etb", label: "Thriving Moor — choose a color other than black", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "B" }] }],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "commercial district": [{ trigger: "etb", label: "Commercial District — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
+  "izzet boilerworks": [{ trigger: "etb", label: "Izzet Boilerworks — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
   // "When this land enters UNTAPPED" -- checked against the card's own real tapped state at ETB
   // time (whatever entersTapped already decided, including its own "unless you control..."
   // simplification for the conditional-tapped clause just above this in Idyllic Grange's real
@@ -5343,6 +5344,14 @@ function resolveChosenTarget(lobby, entry, targetId) {
     const c = lobby.cards[targetId];
     if (!c || c.zoneType !== "creature" || !lobby.combat.attackers[targetId]) return { ok: false, error: "Choose an attacking creature." };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Izzet Boilerworks (the "bounce land" cycle) -- "return A LAND YOU CONTROL to its owner's
+  // hand," self-inclusive (real Magic lets you bounce the source itself if it's your only land),
+  // same shape as ownCreature but for zoneType "mana" instead.
+  if (targetKind === "ownLand") {
+    const c = lobby.cards[targetId];
+    if (!c || c.owner !== entry.controllerId || c.zoneType !== "mana") return { ok: false, error: "Choose a land you control." };
     return { ok: true };
   }
   if (targetKind === "ownPermanent") {
