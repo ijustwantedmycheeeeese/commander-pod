@@ -344,6 +344,7 @@ const CARD_ABILITIES = {
   // (not just flavor) -- without it, a token Dragon this ability itself just created would keep
   // re-triggering it forever. See createTokenCopyOfEnteringCreature's own comment.
   "miirym, sentinel wyrm": [{ trigger: "otherCreatureEtb", typeFilter: ["Dragon"], excludeTokenSources: true, requiresTarget: false, label: "Miirym, Sentinel Wyrm — create a nonlegendary token copy of that Dragon", effects: [{ type: "createTokenCopyOfEnteringCreature" }] }],
+  "lathliss, dragon queen": [{ trigger: "otherCreatureEtb", label: "Lathliss, Dragon Queen — create a 5/5 red Dragon creature token with flying", requiresTarget: false, typeFilter: ["dragon"], excludeTokenSources: true, effects: [{ type: "createToken", amount: 1, name: "Dragon", tokenType: "Token Creature — Dragon", power: "5", toughness: "5", colors: ["R"], keywords: ["Flying"] }] }],
   // "opponentDraws"/"opponentFirstNoncreatureSpell" are handled by fireGlobalOpponentDrawTriggers/
   // fireGlobalOpponentFirstNoncreatureSpellTriggers (drawN/pushToStack hooks) rather than
   // fireTrigger, since the choice here belongs to the OPPONENT, not this card's controller -- see
@@ -1020,6 +1021,7 @@ const ACTIVATED_ABILITIES = {
     return Object.values(nameCounts).some((n) => n >= 3);
   }, conditionError: "You need three or more lands with the same name to activate this.", label: "Endless Atlas — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "battle cry goblin": [{ cost: { mana: "{1}{R}" }, label: "Battle Cry Goblin — Goblins you control get +1/+0 and gain haste until end of turn", effects: [{ type: "grantTemporaryPTAndKeywordsToType", typeFilter: "goblin", power: 1, toughness: 0, keywords: ["Haste"] }] }],
+  "lathliss, dragon queen": [{ cost: { mana: "{1}{R}" }, label: "Lathliss, Dragon Queen — Dragons you control get +1/+0 until end of turn", effects: [{ type: "grantTemporaryPTAndKeywordsToType", typeFilter: "dragon", power: 1, toughness: 0 }] }],
   // "Pay 2 life, Sacrifice ANOTHER creature: Search your library for a card, put it into your hand,
   // then shuffle." cost.excludeSelf -- see the activateAbility handler's own comment -- since
   // "another" (unlike Pashalik Mons's "a Goblin") means this can't fall back to sacrificing itself.
@@ -5856,7 +5858,13 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
         const filter = ability.countTypeFilter || [];
         amount = Object.values(lobby.cards).filter((x) => x.owner === enteringCard.owner && x.zoneType === "creature" && filter.some((t) => (x.type || "").toLowerCase().includes(t.toLowerCase()))).length;
       }
-      const effects = (ability.effects || []).map((e) => ({ ...e, amount, enteringCardId: enteringCard.id }));
+      // Only fill in `amount` when the effect doesn't already specify a FIXED one of its own
+      // (Corpse Knight/Cathars' Crusade/Impact Tremors/Lathliss all want a flat 1 regardless of the
+      // entering creature's power, unlike Terror of the Peaks/Dragon Tempest which genuinely want
+      // this dynamic value) -- a real bug found while testing Lathliss: this used to unconditionally
+      // overwrite ANY already-set amount, silently scaling those cards' fixed effects by the
+      // entering creature's power/count instead of the flat 1 their real text says.
+      const effects = (ability.effects || []).map((e) => ({ ...e, amount: e.amount != null ? e.amount : amount, enteringCardId: enteringCard.id }));
       if (ability.requiresTarget) {
         queueTargetChoice(lobby, { controllerId: c.owner, sourceCard: c, label: ability.label, effects, targetKind: ability.targetKind });
       } else {
