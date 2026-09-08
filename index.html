@@ -3655,6 +3655,12 @@
       }
       return clauses;
     }
+    // Sedge Sliver -- mirrors server.js's grantedConditionalLandPTFromText exactly.
+    function grantedConditionalLandPTFromText(text) {
+      const m = (text || "").match(/all (\w+) creatures have "this creature gets \+(\d+)\/\+(\d+) as long as you control an? (\w+)\.?"/i);
+      if (!m) return null;
+      return { typeWord: m[1].toLowerCase(), powerBonus: parseInt(m[2], 10) || 0, toughnessBonus: parseInt(m[3], 10) || 0, landType: m[4].toLowerCase() };
+    }
     // Mirrors server.js's anthemKeywordsFromText/parseKeywordList exactly, including the
     // keyword-restricted "Other creatures you control WITH FLYING have..." clause (Sephara).
     function anthemKeywordsFromText(text) {
@@ -3703,8 +3709,15 @@
       }
       const cardColors = card.colors || [];
       Object.values(allCards).forEach((c) => {
-        if (c.id === card.id) return;
         if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") return;
+        // Sedge Sliver -- self-inclusive by its own "All Xs have" wording, so this runs even when
+        // c.id === card.id, before the anthem skip just below (server.js mirror, same placement).
+        const grantedPT = grantedConditionalLandPTFromText(c.text);
+        if (grantedPT && (card.type || "").toLowerCase().includes(grantedPT.typeWord)) {
+          const hasLand = Object.values(allCards).some((x) => x.owner === card.owner && x.zoneType === "mana" && (x.type || "").toLowerCase().includes(grantedPT.landType));
+          if (hasLand) { powerBonus += grantedPT.powerBonus; toughnessBonus += grantedPT.toughnessBonus; }
+        }
+        if (c.id === card.id) return;
         anthemEffectsFromText(c.text).forEach((eff) => {
           if (eff.colorFilter && !cardColors.includes(eff.colorFilter)) return;
           powerBonus += eff.powerBonus;
