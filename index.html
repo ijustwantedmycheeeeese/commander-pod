@@ -1093,16 +1093,19 @@
       </div>
     </div>
 
-    <!-- Generic in-app replacement for window.confirm() -- native confirm/alert/prompt dialogs
-         force the browser out of fullscreen the moment they appear (real behavior, not a bug in
-         this app's own code), so anything shown while at the table needs to be a real DOM modal
-         instead. See showConfirmModal(). -->
+    <!-- Generic in-app replacement for window.alert()/confirm()/prompt() -- native dialogs force
+         the browser out of fullscreen the moment they appear (real behavior, not a bug in this
+         app's own code), so anything shown while at the table needs to be a real DOM modal
+         instead. One shared box covers all three shapes (see showAlertModal/showConfirmModal/
+         showPromptModal): Cancel and the text input each hide themselves when not needed, rather
+         than three separate near-identical modals. -->
     <div class="modal-overlay" id="confirm-modal">
       <div class="modal-box" style="max-width:400px;">
         <h2 id="confirm-modal-title">Confirm</h2>
         <p id="confirm-modal-text" style="font-size:13px;color:#ddd;white-space:pre-wrap;"></p>
+        <input type="text" id="confirm-modal-input" style="width:100%;margin-top:2px;display:none;">
         <div class="modal-close-row">
-          <button class="mini-btn secondary" onclick="closeConfirmModal()">Cancel</button>
+          <button class="mini-btn secondary" id="confirm-modal-cancel-btn" onclick="closeConfirmModal()">Cancel</button>
           <button class="mini-btn" id="confirm-modal-ok-btn">OK</button>
         </div>
       </div>
@@ -1403,7 +1406,7 @@
     async function exportAccountData() {
       const token = localStorage.getItem("mtgToken");
       const res = await fetch("/api/export?token=" + encodeURIComponent(token));
-      if (!res.ok) { alert("Export failed — " + (await res.json().catch(() => ({}))).error || "unknown error"); return; }
+      if (!res.ok) { showAlertModal("Export failed — " + (await res.json().catch(() => ({}))).error || "unknown error"); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -1424,21 +1427,13 @@
       document.getElementById("lobby-password-input").value = "";
     }
     function joinLobby(id, locked) {
-      let password = "";
-      if (locked) {
-        password = prompt("This table is password-protected. Enter the password:");
-        if (password === null) return;
-      }
-      socket.emit("joinLobby", { id, password });
+      if (!locked) { socket.emit("joinLobby", { id, password: "" }); return; }
+      showPromptModal("This table is password-protected. Enter the password:", "", (password) => socket.emit("joinLobby", { id, password }));
     }
 
     function spectateLobby(id, locked) {
-      let password = "";
-      if (locked) {
-        password = prompt("This table is password-protected. Enter the password:");
-        if (password === null) return;
-      }
-      socket.emit("spectateLobby", { id, password });
+      if (!locked) { socket.emit("spectateLobby", { id, password: "" }); return; }
+      showPromptModal("This table is password-protected. Enter the password:", "", (password) => socket.emit("spectateLobby", { id, password }));
     }
 
     function showMainMenu() {
@@ -1468,9 +1463,7 @@
         </div>`).join("");
     }
     function deleteLobbyPrompt(id) {
-      if (confirm("Delete this table for everyone? Anyone currently seated will be sent back to the Main Menu. This can't be undone.")) {
-        socket.emit("deleteLobby", id);
-      }
+      showConfirmModal("Delete this table for everyone? Anyone currently seated will be sent back to the Main Menu. This can't be undone.", () => socket.emit("deleteLobby", id));
     }
     socket.on("lobbyDeleted", (data) => {
       leaveVoice();
@@ -1480,7 +1473,7 @@
       document.getElementById("app-root").style.display = "none";
       document.getElementById("main-menu").style.display = "flex";
       startLobbyMusic();
-      alert(`"${data.name}" was deleted by its creator.`);
+      showAlertModal(`"${data.name}" was deleted by its creator.`);
     });
 
     socket.on("authError", (msg) => {
@@ -1884,7 +1877,7 @@
       lastActiveIdForSound = activeId;
     });
     socket.on("combatState", (data) => { currentCombat = data; renderCombatState(currentCombat); });
-    socket.on("actionError", (msg) => { alert(msg); renderVisibleBoard(); });
+    socket.on("actionError", (msg) => { showAlertModal(msg); renderVisibleBoard(); });
 
     socket.on("cardUpdate", (card) => {
       const prev = allCards[card.id];
@@ -2123,8 +2116,9 @@
     }
     // Called from renderCard's onclick -- any card, regardless of owner, same "anyone can Target
     // anything" trust model toggleTarget already uses. If the server rejects it (wrong zone type),
-    // the existing global actionError -> alert() handler surfaces why, and pendingTargetChoiceId
-    // stays set since it's never cleared optimistically -- the prompt just stays up.
+    // the existing global actionError -> showAlertModal() handler surfaces why, and
+    // pendingTargetChoiceId stays set since it's never cleared optimistically -- the prompt just
+    // stays up.
     function chooseTargetFor(cardId) {
       if (!pendingTargetChoiceId) return;
       socket.emit("chooseTargetFor", { id: pendingTargetChoiceId, targetId: cardId });
@@ -2140,8 +2134,8 @@
     // can't actually be satisfied (or one you just don't want to deal with right now).
     function cancelTargetChoice() {
       if (!pendingTargetChoiceId) return;
-      if (!confirm(`Cancel this? "${pendingTargetChoiceLabel}" won't happen.`)) return;
-      socket.emit("cancelTargetChoice", pendingTargetChoiceId);
+      const id = pendingTargetChoiceId;
+      showConfirmModal(`Cancel this? "${pendingTargetChoiceLabel}" won't happen.`, () => socket.emit("cancelTargetChoice", id));
     }
 
     // Only the eliminated player themselves gets the overlay -- everyone else just sees the log
@@ -2409,7 +2403,7 @@
         editBtn.onclick = () => editDeck(name);
         const delBtn = document.createElement("button");
         delBtn.className = "mini-btn"; delBtn.style.background = "#7a1f1f"; delBtn.innerText = "Del";
-        delBtn.onclick = () => { if (confirm(`Delete saved deck "${name}"?`)) socket.emit("deleteDeck", name); };
+        delBtn.onclick = () => showConfirmModal(`Delete saved deck "${name}"?`, () => socket.emit("deleteDeck", name));
         row.appendChild(label); row.appendChild(editBtn); row.appendChild(delBtn);
         el.appendChild(row);
       });
@@ -2520,16 +2514,45 @@
       sel.innerHTML = '<option value="">Load a deck...</option>' + myDeckNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
       if (myDeckNames.includes(current)) sel.value = current;
     }
-    // Real DOM modal standing in for window.confirm() -- a native confirm() dialog forces the
-    // browser to drop out of fullscreen the instant it appears (that's the browser's own
+    // Real DOM modal standing in for window.alert()/confirm()/prompt() -- a native dialog forces
+    // the browser to drop out of fullscreen the instant it appears (that's the browser's own
     // fullscreen-exit-on-any-native-dialog behavior, not something this app's code controls), which
-    // is exactly what made loading a deck while at the table in fullscreen so disruptive. Purely
-    // additive: onConfirm only runs if OK is clicked, same call contract as `if (confirm(...))`.
+    // made using any of them while at the table in fullscreen disruptive. One shared modal box,
+    // three call shapes matching their native equivalents' own call contracts:
+    //   showAlertModal(message) -- OK only, no callback (`alert(...)`)
+    //   showConfirmModal(message, onConfirm) -- Cancel/OK, onConfirm only runs on OK (`if (confirm(...))`)
+    //   showPromptModal(message, defaultValue, onSubmit) -- Cancel/OK + a text field, onSubmit(value) only runs on OK (`const x = prompt(...); if (x) ...`)
     let confirmModalOnConfirm = null;
-    function showConfirmModal(message, onConfirm) {
+    let confirmModalMode = "confirm"; // "alert" | "confirm" | "prompt"
+    function showAlertModal(message) {
+      document.getElementById("confirm-modal-title").innerText = "Notice";
       document.getElementById("confirm-modal-text").innerText = message;
+      document.getElementById("confirm-modal-input").style.display = "none";
+      document.getElementById("confirm-modal-cancel-btn").style.display = "none";
+      confirmModalMode = "alert";
+      confirmModalOnConfirm = null;
+      document.getElementById("confirm-modal").style.display = "flex";
+    }
+    function showConfirmModal(message, onConfirm) {
+      document.getElementById("confirm-modal-title").innerText = "Confirm";
+      document.getElementById("confirm-modal-text").innerText = message;
+      document.getElementById("confirm-modal-input").style.display = "none";
+      document.getElementById("confirm-modal-cancel-btn").style.display = "";
+      confirmModalMode = "confirm";
       confirmModalOnConfirm = onConfirm;
       document.getElementById("confirm-modal").style.display = "flex";
+    }
+    function showPromptModal(message, defaultValue, onSubmit) {
+      document.getElementById("confirm-modal-title").innerText = "Confirm";
+      document.getElementById("confirm-modal-text").innerText = message;
+      const input = document.getElementById("confirm-modal-input");
+      input.style.display = "block";
+      input.value = defaultValue || "";
+      document.getElementById("confirm-modal-cancel-btn").style.display = "";
+      confirmModalMode = "prompt";
+      confirmModalOnConfirm = onSubmit;
+      document.getElementById("confirm-modal").style.display = "flex";
+      setTimeout(() => input.focus(), 0);
     }
     function closeConfirmModal() {
       document.getElementById("confirm-modal").style.display = "none";
@@ -2537,9 +2560,17 @@
     }
     document.getElementById("confirm-modal-ok-btn").onclick = () => {
       const fn = confirmModalOnConfirm;
+      const mode = confirmModalMode;
+      const value = document.getElementById("confirm-modal-input").value;
       closeConfirmModal();
-      if (fn) fn();
+      if (!fn) return;
+      if (mode === "prompt") fn(value);
+      else fn();
     };
+    // Enter submits the same as clicking OK -- matches native prompt()'s own Enter-to-submit feel.
+    document.getElementById("confirm-modal-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("confirm-modal-ok-btn").click();
+    });
 
     function loadSelectedDeck() {
       const name = document.getElementById("load-deck-select").value;
@@ -2724,7 +2755,7 @@
     // find a tiny star button was the actual reason this was hard to discover at all.
     function setBoardMatAsDefaultDirect() {
       const me = players[myId];
-      if (!me || !me.boardMat) { alert("Set a board mat first (the Set button above), then you can save it as your default."); return; }
+      if (!me || !me.boardMat) { showAlertModal("Set a board mat first (the Set button above), then you can save it as your default."); return; }
       const fit = me.boardMatFit || { scale: 1, x: 50, y: 50 };
       socket.emit("setDefaultBoardMat", { url: me.boardMat, ...fit });
     }
@@ -2744,7 +2775,7 @@
     // already prioritizes icon over color -- see renderOneCursor/the own-cursor mousemove handler).
     function setCursorAsDefaultDirect() {
       const me = players[myId];
-      if (!me || (!me.cursorColor && !me.cursorIcon)) { alert("Pick a cursor color or icon first (below), then you can save it as your default."); return; }
+      if (!me || (!me.cursorColor && !me.cursorIcon)) { showAlertModal("Pick a cursor color or icon first (below), then you can save it as your default."); return; }
       if (me.cursorIcon) socket.emit("setDefaultCursorIcon", { url: me.cursorIcon, ...(me.cursorIconFit || { scale: 1, x: 50, y: 50 }) });
       else socket.emit("setDefaultCursorColor", me.cursorColor);
     }
@@ -2928,7 +2959,7 @@
     function saveCropEditor() {
       if (!cropTarget) return;
       const url = document.getElementById("crop-source-url").value.trim();
-      if (!url) { alert("Add an image URL or upload a photo first."); return; }
+      if (!url) { showAlertModal("Add an image URL or upload a photo first."); return; }
       const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || CROP_MIN_ZOOM) / 100;
       const xRaw = parseInt(document.getElementById("crop-x").value, 10);
       const yRaw = parseInt(document.getElementById("crop-y").value, 10);
@@ -2963,14 +2994,14 @@
     function saveNewMat() {
       const url = document.getElementById("new-mat-url").value.trim();
       if (!url) return;
-      const name = prompt("Name this board mat:");
-      if (!name || !name.trim()) return;
-      socket.emit("saveMat", { name: name.trim(), url });
-      document.getElementById("new-mat-url").value = "";
+      showPromptModal("Name this board mat:", "", (name) => {
+        if (!name || !name.trim()) return;
+        socket.emit("saveMat", { name: name.trim(), url });
+        document.getElementById("new-mat-url").value = "";
+      });
     }
     function deleteSavedMat(name) {
-      if (!confirm(`Delete saved mat "${name}"?`)) return;
-      socket.emit("deleteMat", name);
+      showConfirmModal(`Delete saved mat "${name}"?`, () => socket.emit("deleteMat", name));
     }
     function renderSavedMatsList() {
       const el = document.getElementById("saved-mats-list");
@@ -3005,8 +3036,7 @@
 
     // ---------------- saved pile art (account-wide) ----------------
     function deleteSavedPileMat(name) {
-      if (!confirm(`Delete saved pile art "${name}"?`)) return;
-      socket.emit("deletePileMat", name);
+      showConfirmModal(`Delete saved pile art "${name}"?`, () => socket.emit("deletePileMat", name));
     }
     function renderSavedPileMatsList() {
       const el = document.getElementById("saved-pile-mats-list");
@@ -3045,20 +3075,21 @@
     }
     function cropSaveAsPreset() {
       const url = document.getElementById("crop-source-url").value.trim();
-      if (!url) { alert("Add an image URL or upload a photo first."); return; }
-      const name = prompt("Name this pile art:");
-      if (!name || !name.trim()) return;
-      const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || CROP_MIN_ZOOM) / 100;
-      const xRaw = parseInt(document.getElementById("crop-x").value, 10);
-      const yRaw = parseInt(document.getElementById("crop-y").value, 10);
-      socket.emit("savePileMat", { name: name.trim(), url, scale, x: isNaN(xRaw) ? 50 : xRaw, y: isNaN(yRaw) ? 50 : yRaw });
+      if (!url) { showAlertModal("Add an image URL or upload a photo first."); return; }
+      showPromptModal("Name this pile art:", "", (name) => {
+        if (!name || !name.trim()) return;
+        const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || CROP_MIN_ZOOM) / 100;
+        const xRaw = parseInt(document.getElementById("crop-x").value, 10);
+        const yRaw = parseInt(document.getElementById("crop-y").value, 10);
+        socket.emit("savePileMat", { name: name.trim(), url, scale, x: isNaN(xRaw) ? 50 : xRaw, y: isNaN(yRaw) ? 50 : yRaw });
+      });
     }
 
     // ---------------- default board mat / pile art (account-wide, auto-applied to new tables) ----------------
     function setCropAsDefault() {
       if (!cropTarget) return;
       const url = document.getElementById("crop-source-url").value.trim();
-      if (!url) { alert("Add an image URL or upload a photo first."); return; }
+      if (!url) { showAlertModal("Add an image URL or upload a photo first."); return; }
       const scale = (parseInt(document.getElementById("crop-zoom").value, 10) || CROP_MIN_ZOOM) / 100;
       const xRaw = parseInt(document.getElementById("crop-x").value, 10);
       const yRaw = parseInt(document.getElementById("crop-y").value, 10);
@@ -3096,10 +3127,10 @@
           document.getElementById(targetFieldId).value = d.url;
           if (afterCallback) afterCallback();
         } else {
-          alert(d.error || "Upload failed.");
+          showAlertModal(d.error || "Upload failed.");
         }
       } catch (e) {
-        alert("Upload failed.");
+        showAlertModal("Upload failed.");
       }
       fileInput.value = "";
     }
@@ -3398,8 +3429,8 @@
 
     function startGame() { socket.emit("startGame"); }
     function nextPhaseFn() { socket.emit("nextPhase"); }
-    function drawOpeningHand() { if (confirm("Draw a fresh opening hand of 7? This returns any current hand to your library first.")) socket.emit("drawOpeningHand"); }
-    function mulligan() { if (confirm("Mulligan? This returns your hand and draws a fresh 7.")) socket.emit("mulligan"); }
+    function drawOpeningHand() { showConfirmModal("Draw a fresh opening hand of 7? This returns any current hand to your library first.", () => socket.emit("drawOpeningHand")); }
+    function mulligan() { showConfirmModal("Mulligan? This returns your hand and draws a fresh 7.", () => socket.emit("mulligan")); }
     function keepHand() { socket.emit("keepHand"); }
 
     // ---------------- autocomplete ----------------
@@ -3436,7 +3467,7 @@
             socket.emit("spawnCard", { ...data, faceDown });
             document.getElementById("cardSearch").value = "";
           } else {
-            alert("Card lookup failed! Check name spelling.");
+            showAlertModal("Card lookup failed! Check name spelling.");
           }
         });
     }
@@ -4031,7 +4062,7 @@
       const isMine = ownerId === myId;
       let list;
       if (zoneName === "library") {
-        if (!isMine) { alert("Libraries are private — you can only see the card count."); return; }
+        if (!isMine) { showAlertModal("Libraries are private — you can only see the card count."); return; }
         list = p.library || [];
         // Purely informational -- lets everyone else see in the log that you looked, without
         // restricting anything or revealing what you saw. Once per modal-open, not per scroll/click.
@@ -4149,12 +4180,12 @@
         .then((r) => r.json())
         .then((data) => {
           if (data.success) socket.emit("setCommander", { ...data, slot });
-          else alert("Card lookup failed! Check spelling.");
+          else showAlertModal("Card lookup failed! Check spelling.");
         });
     }
     function commanderTax(slot, delta) { socket.emit("commanderTax", { slot, delta }); }
     function castCommander(slot) { socket.emit("castCommander", slot); }
-    function clearCommander(slot) { if (confirm("Clear this commander slot?")) socket.emit("clearCommander", slot); }
+    function clearCommander(slot) { showConfirmModal("Clear this commander slot?", () => socket.emit("clearCommander", slot)); }
 
     // ---------------- deck editor ----------------
 
@@ -4166,7 +4197,7 @@
     // Main Menu (its display:flex did nothing while its hidden ancestor stayed display:none).
     let deckEditorReturnScreen = "main-menu";
     function openDeckEditor(prefillName, prefillData) {
-      if (prefillName && !prefillData) { alert(`Couldn't load "${prefillName}" — it may have been deleted.`); return; }
+      if (prefillName && !prefillData) { showAlertModal(`Couldn't load "${prefillName}" — it may have been deleted.`); return; }
       if (prefillData && typeof prefillData === "object") {
         // structured saved deck — load straight in
         deckEditor = {
@@ -4299,7 +4330,7 @@
         .then((r) => r.json())
         .then((data) => {
           if (data.success) { deckEditor.commanders[slot] = data; deRenderCommanders(); dePreview(data); }
-          else alert("Card lookup failed! Check spelling.");
+          else showAlertModal("Card lookup failed! Check spelling.");
         });
     }
     function deClearCommanderSlot(slot) { deckEditor.commanders[slot] = null; deRenderCommanders(); }
@@ -4382,7 +4413,7 @@
         .then((r) => r.json())
         .then((data) => {
           if (data.success) { deckEditor.library.push(data); deRenderLibrary(); renderCardPoolModal(); }
-          else alert("Card lookup failed! Check spelling.");
+          else showAlertModal("Card lookup failed! Check spelling.");
         });
     }
 
@@ -4407,7 +4438,7 @@
         .then((r) => r.json())
         .then((data) => {
           if (data.success) { socket.emit("toggleCollectionCard", { name: data.name, type: data.type, img: data.img }); input.value = ""; }
-          else alert("Card lookup failed! Check spelling.");
+          else showAlertModal("Card lookup failed! Check spelling.");
         });
     }
     function renderCollectionModal() {
@@ -4436,7 +4467,7 @@
         .then((r) => r.json())
         .then((data) => {
           if (data.success) { deckEditor.library.push(data); deRenderLibrary(); dePreview(data); input.value = ""; }
-          else alert("Card lookup failed! Check spelling.");
+          else showAlertModal("Card lookup failed! Check spelling.");
         });
     }
     function deResolvePaste() {
@@ -4453,16 +4484,17 @@
     }
     function deSaveDeck() {
       const name = document.getElementById("de-name").value.trim();
-      if (!name) { alert("Enter a deck name to save it."); return; }
-      if (!deckEditor.library.length && !deckEditor.commanders.some(Boolean)) { alert("Add at least one card or commander first."); return; }
+      if (!name) { showAlertModal("Enter a deck name to save it."); return; }
+      if (!deckEditor.library.length && !deckEditor.commanders.some(Boolean)) { showAlertModal("Add at least one card or commander first."); return; }
       deckEditor.name = name;
       socket.emit("saveDeck", { name, commanders: deckEditor.commanders, library: deckEditor.library });
     }
     function deLoadIntoGame() {
-      if (!deckEditor.library.length && !deckEditor.commanders.some(Boolean)) { alert("Add at least one card or commander first."); return; }
-      if (!confirm("Load this deck into your current game? This replaces your current library and commander slots.")) return;
-      socket.emit("loadDeckDraft", { commanders: deckEditor.commanders, library: deckEditor.library });
-      closeDeckEditor();
+      if (!deckEditor.library.length && !deckEditor.commanders.some(Boolean)) { showAlertModal("Add at least one card or commander first."); return; }
+      showConfirmModal("Load this deck into your current game? This replaces your current library and commander slots.", () => {
+        socket.emit("loadDeckDraft", { commanders: deckEditor.commanders, library: deckEditor.library });
+        closeDeckEditor();
+      });
     }
 
     function openHelpModal() { document.getElementById("help-modal").style.display = "flex"; }
@@ -4517,11 +4549,11 @@
     }
 
     function triggerClear() {
-      if (confirm("Start a new game? This reshuffles everything back into libraries and resets life, mana, tax, and turn order.")) socket.emit("clearBoard");
+      showConfirmModal("Start a new game? This reshuffles everything back into libraries and resets life, mana, tax, and turn order.", () => socket.emit("clearBoard"));
     }
 
     function concede() {
-      if (confirm("Concede? Your board stays on the table and you can keep watching, but you're out of the turn order for the rest of this game.")) socket.emit("concede");
+      showConfirmModal("Concede? Your board stays on the table and you can keep watching, but you're out of the turn order for the rest of this game.", () => socket.emit("concede"));
     }
 
     // ---------------- log / chat ----------------
@@ -4579,7 +4611,7 @@
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (e) {
-        alert("Could not access microphone: " + e.message);
+        showAlertModal("Could not access microphone: " + e.message);
         return;
       }
       document.getElementById("voice-join-btn").style.display = "none";
@@ -5061,13 +5093,11 @@
 
     function requestPlayCard(id) {
       const card = allCards[id];
-      let x = 0;
       if (card && costHasX(card.manaCost)) {
-        const val = prompt("Choose a value for X:", "0");
-        if (val === null) return;
-        x = parseInt(val) || 0;
+        showPromptModal("Choose a value for X:", "0", (val) => socket.emit("playCard", { id, x: parseInt(val) || 0 }));
+        return;
       }
-      socket.emit("playCard", { id, x });
+      socket.emit("playCard", { id, x: 0 });
     }
 
     // Matches the server's exact declareAttackers check (card.controllerSince === turnNumber,
@@ -5277,9 +5307,14 @@
             if (targetZone === "hand" && cardObj.zoneType !== "hand") return false; // pick-up-to-hand isn't a drag action -- see Return to Hand in the right-click menu
             if (targetZone === cardObj.zoneType) return false;
             if (cardObj.zoneType === "hand" && targetZone !== "hand" && costHasX(cardObj.manaCost)) {
-              const val = prompt(`Choose a value for X (${cardObj.name || "card"}):`, "0");
-              if (val === null) return false;
-              socket.emit("changeZone", { id: cardObj.id, zoneType: targetZone, x: parseInt(val) || 0 });
+              // Unlike every other branch here, this one can't resolve synchronously anymore (the
+              // prompt modal is async, not a blocking native prompt()) -- returns false immediately
+              // so the caller snaps the card back to its pre-drag position right away, same as a
+              // cancelled/no-op drop always has; if the player actually submits a value, the real
+              // changeZone fires afterward and the server's own broadcast moves the card for real,
+              // same as the true-branch below already relies on.
+              showPromptModal(`Choose a value for X (${cardObj.name || "card"}):`, "0", (val) => socket.emit("changeZone", { id: cardObj.id, zoneType: targetZone, x: parseInt(val) || 0 }));
+              return false;
             } else {
               socket.emit("changeZone", { id: cardObj.id, zoneType: targetZone });
             }
