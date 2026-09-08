@@ -724,6 +724,10 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Vault of the Archangel — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{2}{W}{B}", tap: true }, label: "Vault of the Archangel — creatures you control gain deathtouch and lifelink until end of turn", effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Deathtouch", "Lifelink"] }] }
   ],
+  "griffin canyon": [
+    { cost: { tap: true }, manaAbility: true, label: "Griffin Canyon — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, label: "Griffin Canyon — untap target Griffin; if it's a creature, it gets +1/+1 until end of turn", requiresTarget: true, targetKind: "typeList", typeFilter: ["griffin"], effects: [{ type: "untapTarget" }, { type: "grantTemporaryPTAndKeywordsToTarget", power: 1, toughness: 1 }] }
+  ],
   "mistveil plains": [
     { cost: { tap: true }, manaAbility: true, label: "Mistveil Plains — Add {W}", effects: [{ type: "addFixedMana", colors: ["W"] }] },
     {
