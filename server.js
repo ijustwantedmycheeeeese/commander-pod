@@ -6532,6 +6532,9 @@ io.on("connection", (socket) => {
     defaultName: (users[username] && users[username].defaultName) || null,
     defaultBoardMat: (users[username] && users[username].defaultBoardMat) || null,
     defaultPileArt: (users[username] && users[username].defaultPileArt) || null,
+    defaultCursorColor: (users[username] && users[username].defaultCursorColor) || null,
+    defaultCursorIcon: (users[username] && users[username].defaultCursorIcon) || null,
+    defaultCursorIconFit: (users[username] && users[username].defaultCursorIconFit) || null,
     automatedCardNames: getAllAutomatedCardNames(),
     collection: collection[username] || {}
   });
@@ -6599,6 +6602,12 @@ io.on("connection", (socket) => {
     const acctDefaults = users[username] || {};
     const defaultBoardMat = acctDefaults.defaultBoardMat || null;
     const defaultPileArt = acctDefaults.defaultPileArt || {};
+    // A saved default cursor COLOR still has to respect this lobby's own per-table uniqueness rule
+    // (see setCursorColor) -- two players joining fresh with the same saved default would otherwise
+    // silently collide. Falls back to no color (same as never having set one) rather than erroring
+    // on join; the icon has no such uniqueness concept, so it always applies as-is.
+    const defaultCursorColorTaken = acctDefaults.defaultCursorColor &&
+      Object.values(lobby.players).some((other) => other.cursorColor === acctDefaults.defaultCursorColor);
     lobby.players[socket.id] = {
       username,
       name: acctDefaults.defaultName || username,
@@ -6618,7 +6627,13 @@ io.on("connection", (socket) => {
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
       mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0,
-      cursorColor: null, cursorIcon: null, cursorIconFit: null // live cursor tracking's own style -- see setCursorColor/setCursorIcon; null color falls back to the player's own `color` above
+      // Live cursor tracking's own style -- see setCursorColor/setCursorIcon; null color falls back
+      // to the player's own `color` above. Seeded from the account's saved defaults, if any (see
+      // setDefaultCursorColor/setDefaultCursorIcon), same "account-wide preference, applied per new
+      // table" shape as boardMat/pileArt just above.
+      cursorColor: (acctDefaults.defaultCursorColor && !defaultCursorColorTaken) ? acctDefaults.defaultCursorColor : null,
+      cursorIcon: acctDefaults.defaultCursorIcon || null,
+      cursorIconFit: acctDefaults.defaultCursorIcon ? (acctDefaults.defaultCursorIconFit || null) : null
     };
 
     if (lobby.turn.started) {
@@ -6830,6 +6845,27 @@ io.on("connection", (socket) => {
     users[username].defaultPileArt[zone] = clean ? { url: clean, ...sanitizeImgFit({ scale, x, y }) } : null;
     saveUsers();
     socket.emit("defaultArtUpdated", { boardMat: users[username].defaultBoardMat || null, pileArt: users[username].defaultPileArt });
+  });
+
+  // Same account-wide-default shape as setDefaultBoardMat/setDefaultPileArt above, just for the
+  // cursor style -- applied to every FRESH seat at any future table (see joinLobbyInternal), not
+  // retroactively to the CURRENT seat (matches setDefaultBoardMat's own behavior: saving a default
+  // doesn't reach back and change what's already applied at a table you're sitting at right now).
+  socket.on("setDefaultCursorColor", (color) => {
+    if (!users[username]) return;
+    users[username].defaultCursorColor = CURSOR_COLORS.includes(color) ? color : null;
+    saveUsers();
+    socket.emit("defaultCursorUpdated", { color: users[username].defaultCursorColor, icon: users[username].defaultCursorIcon || null, iconFit: users[username].defaultCursorIconFit || null });
+  });
+
+  socket.on("setDefaultCursorIcon", (data) => {
+    if (!users[username]) return;
+    const { url, scale, x, y } = typeof data === "string" ? { url: data } : (data || {});
+    const clean = url ? sanitizeImgUrl(url) : null;
+    users[username].defaultCursorIcon = clean;
+    users[username].defaultCursorIconFit = clean ? sanitizeImgFit({ scale, x, y }) : null;
+    saveUsers();
+    socket.emit("defaultCursorUpdated", { color: users[username].defaultCursorColor || null, icon: users[username].defaultCursorIcon, iconFit: users[username].defaultCursorIconFit });
   });
 
   socket.on("statChange", ({ key, val }) => {
