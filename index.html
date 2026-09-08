@@ -211,6 +211,15 @@
     /* Shared by the floating #preview-panel and the docked #zone-modal-preview-body -- same card
        preview markup (buildCardPreviewHtml) rendered in two different containers. */
     .pv-name { font-size: 12px; text-align: center; margin-top: 6px; color: #ddd; }
+    /* Wraps a preview <img> so the P/T overlay badge (ptOverlayHtml) can sit absolutely-positioned
+       over the card art's own bottom-right corner -- the same spot a real printed P/T box occupies
+       on the card frame, so the overlay reads as "the current number, in place of the stale printed
+       one" rather than a floating unrelated label. */
+    .card-art-wrap { position: relative; display: block; }
+    .pt-overlay { position: absolute; bottom: 8px; right: 8px; padding: 2px 8px; border-radius: 5px; font-size: 13px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,0.6); border: 1px solid rgba(0,0,0,0.5); }
+    .pt-overlay-up { background: #163a20; color: #6ee787; }
+    .pt-overlay-down { background: #3d1616; color: #ff8080; }
+    .pt-overlay-mixed { background: #3d3210; color: #f0d264; }
     .pv-text { font-size: 11px; text-align: left; margin-top: 8px; color: #c9bc98; white-space: pre-wrap; line-height: 1.4; border-top: 1px solid #3a2e18; padding-top: 6px; }
     /* Bounded + independently scrollable, same as #zone-modal-preview-col below -- without this,
        a long library/graveyard/exile list just grows past the modal's own height, making the whole
@@ -611,7 +620,7 @@
       </div>
     </div>
 
-    <div id="preview-panel"><img id="preview-img" src=""><div class="pv-name" id="preview-name"></div></div>
+    <div id="preview-panel"><div class="card-art-wrap"><img id="preview-img" src=""><div id="preview-pt-overlay-slot"></div></div><div class="pv-name" id="preview-name"></div></div>
 
     <div id="target-choice-banner">
       <div id="target-choice-banner-text"></div>
@@ -820,7 +829,7 @@
     <div class="modal-overlay" id="stack-detail-modal">
       <div class="modal-box" style="max-width:380px;text-align:center;">
         <button class="modal-close-x" onclick="closeStackItemDetail()" title="Close">✕</button>
-        <img id="stack-detail-img" src="" style="width:220px;border-radius:8px;margin-bottom:10px;">
+        <div class="card-art-wrap" style="width:220px;margin:0 auto 10px;"><img id="stack-detail-img" src="" style="width:100%;border-radius:8px;display:block;"><div id="stack-detail-pt-overlay-slot"></div></div>
         <div id="stack-detail-name" style="text-align:left;font-size:13px;"></div>
       </div>
     </div>
@@ -3483,16 +3492,41 @@
       return { powerBonus, toughnessBonus };
     }
     // "7/6" -> "9/8" style effective-P/T string, or just the raw P/T if there's no bonus --
-    // shared by every place a card's power/toughness gets shown as text.
+    // shared by every place a card's power/toughness gets shown as text. `card.counters` is a
+    // signed +1/+1 or -1/-1 counter total (server.js applies it to combat/power checks the exact
+    // same way, e.g. resolveCombatDamage's own effToughness calc) -- REAL BUG fixed here: this used
+    // to only fold in equipment/aura/anthem bonuses and silently ignored counters entirely, so a
+    // creature with +1/+1 counters showed its unmodified base P/T everywhere this is used
+    // (attackers/blockers modals, the shared combat view, hover previews).
     function effectivePT(card) {
       const bonus = attachedBonusFor(card);
       const stat = staticBonusFor(card);
-      const totalP = bonus.powerBonus + stat.powerBonus;
-      const totalT = bonus.toughnessBonus + stat.toughnessBonus;
+      const counterBonus = card.counters || 0;
+      const totalP = bonus.powerBonus + stat.powerBonus + counterBonus;
+      const totalT = bonus.toughnessBonus + stat.toughnessBonus + counterBonus;
       if (!totalP && !totalT) return `${card.power || 0}/${card.toughness || 0}`;
       const p = (parseInt(card.power, 10) || 0) + totalP;
       const t = (parseInt(card.toughness, 10) || 0) + totalT;
       return `${p}/${t}`;
+    }
+    // Small color-coded corner badge for a preview image, positioned where a real card's own
+    // printed P/T box sits (bottom-right) -- only rendered when the effective P/T (counters +
+    // equipment/aura/anthem bonuses, same inputs as effectivePT above) actually differs from the
+    // card's own printed/base P/T, so an unmodified creature's preview looks exactly as before.
+    function ptOverlayHtml(card) {
+      if (card.power === undefined || card.power === null || card.toughness === undefined || card.toughness === null) return "";
+      const baseP = parseInt(card.power, 10) || 0;
+      const baseT = parseInt(card.toughness, 10) || 0;
+      const bonus = attachedBonusFor(card);
+      const stat = staticBonusFor(card);
+      const counterBonus = card.counters || 0;
+      const p = baseP + bonus.powerBonus + stat.powerBonus + counterBonus;
+      const t = baseT + bonus.toughnessBonus + stat.toughnessBonus + counterBonus;
+      if (p === baseP && t === baseT) return "";
+      const net = (p - baseP) + (t - baseT);
+      const cls = net > 0 ? "pt-overlay-up" : net < 0 ? "pt-overlay-down" : "pt-overlay-mixed";
+      const icon = net > 0 ? "▲" : net < 0 ? "▼" : "◆";
+      return `<div class="pt-overlay ${cls}" title="Printed ${baseP}/${baseT}">${icon} ${p}/${t}</div>`;
     }
 
     // ---------------- attachments (equipment / auras) ----------------
@@ -4011,7 +4045,7 @@
     function zoneModalPreview(card) {
       if (!card) return;
       document.getElementById("zone-modal-preview-body").innerHTML =
-        `<img src="${escapeHtml(cardArtSrc(card))}"><div class="pv-name">${buildCardPreviewHtml(card)}</div>`;
+        `<div class="card-art-wrap"><img src="${escapeHtml(cardArtSrc(card))}">${ptOverlayHtml(card)}</div><div class="pv-name">${buildCardPreviewHtml(card)}</div>`;
     }
 
     // ---------------- commander zone ----------------
@@ -5533,6 +5567,7 @@
     function showPreviewFor(card) {
       if (!card) return;
       document.getElementById("preview-img").src = cardArtSrc(card);
+      document.getElementById("preview-pt-overlay-slot").innerHTML = ptOverlayHtml(card);
       document.getElementById("preview-name").innerHTML = buildCardPreviewHtml(card);
       previewPanel.style.display = "block";
     }
@@ -5556,6 +5591,7 @@
       const isAbility = item.kind === "ability";
       const card = isAbility ? { name: item.sourceName, img: item.img } : item;
       document.getElementById("stack-detail-img").src = cardArtSrc(card);
+      document.getElementById("stack-detail-pt-overlay-slot").innerHTML = ptOverlayHtml(card);
       document.getElementById("stack-detail-name").innerHTML = buildCardPreviewHtml(card);
       document.getElementById("stack-detail-modal").style.display = "flex";
     }
