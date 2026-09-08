@@ -678,6 +678,10 @@ const ACTIVATED_ABILITIES = {
   // mana-dork half wired up.
   "ignoble hierarch": [{ cost: { tap: true }, manaAbility: true, label: "Ignoble Hierarch — Add B, R, or G", effects: [{ type: "chooseManaFromColors", colors: ["B", "R", "G"], sourceName: "Ignoble Hierarch" }] }],
   "noble hierarch": [{ cost: { tap: true }, manaAbility: true, label: "Noble Hierarch — Add G, W, or U", effects: [{ type: "chooseManaFromColors", colors: ["G", "W", "U"], sourceName: "Noble Hierarch" }] }],
+  "cascading cataracts": [
+    { cost: { tap: true }, manaAbility: true, label: "Cascading Cataracts — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true, mana: "{5}" }, manaAbility: true, label: "Cascading Cataracts — Add five mana in any combination of colors", effects: [{ type: "chooseManaAnyColorRepeated", count: 5, sourceName: "Cascading Cataracts" }] }
+  ],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -2183,6 +2187,17 @@ const EFFECTS = {
     if (!p) return;
     const upgraded = Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /treasures you control have .*add two mana of any one color/i.test(c.text || ""));
     p.pendingFreeManaChoice = { amount: upgraded ? 2 : 1 };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: ["W", "U", "B", "R", "G"] });
+  },
+  // Cascading Cataracts -- "Add five mana in any combination of colors," a real INDEPENDENT choice
+  // per mana (unlike chooseManaAnyColor's own `amount`, which adds several mana of the SAME picked
+  // color in one shot, e.g. an upgraded Treasure). remainingPicks re-prompts resolveManaChoice's
+  // own "__free__" branch instead of clearing pendingFreeManaChoice after the first pick.
+  chooseManaAnyColorRepeated(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.pendingFreeManaChoice = { amount: 1, remainingPicks: params.count || 1 };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: ["W", "U", "B", "R", "G"] });
   },
@@ -7476,10 +7491,20 @@ io.on("connection", (socket) => {
     if (cardId === "__free__") {
       if (!p.pendingFreeManaChoice || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
       const amount = p.pendingFreeManaChoice.amount || 1;
-      p.pendingFreeManaChoice = false;
+      const remaining = (p.pendingFreeManaChoice.remainingPicks || 1) - 1;
       p.mana[color] = (p.mana[color] || 0) + amount;
-      broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} adds {${color}}${amount > 1 ? ` x${amount}` : ""}`);
+      // Cascading Cataracts-style "N independent picks" -- re-prompt for the next one instead of
+      // clearing pendingFreeManaChoice, see chooseManaAnyColorRepeated's own comment.
+      if (remaining > 0) {
+        p.pendingFreeManaChoice = { amount, remainingPicks: remaining };
+        broadcastPlayers(lobby);
+        const sock = io.sockets.sockets.get(socket.id);
+        if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: "Mana source", options: ["W", "U", "B", "R", "G"] });
+        return;
+      }
+      p.pendingFreeManaChoice = false;
+      broadcastPlayers(lobby);
       return;
     }
     // The Thriving cycle's one-time ETB "choose a color" (chooseColorOtherThan) -- STORES the pick
