@@ -416,6 +416,18 @@ const CARD_ABILITIES = {
   // See fireGlobalTrigger's spellTypeFilter comment for how the instant-or-sorcery restriction works.
   "guttersnipe": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], label: "Guttersnipe — deal 2 damage to each opponent", requiresTarget: false, effects: [{ type: "damageEachOpponent", amount: 2 }] }],
   "electrostatic field": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], label: "Electrostatic Field — deal 1 damage to each opponent", requiresTarget: false, effects: [{ type: "damageEachOpponent", amount: 1 }] }],
+  // Chulane, Teller of Tales -- "Whenever you cast a creature spell, draw a card, THEN you may put
+  // a land card from your hand onto the battlefield." Split into two SEPARATE entries under the
+  // same trigger (same shape as Dragon Tempest/Sun Titan's own multi-entry cards) rather than one
+  // combined ability, since the draw must always happen even with zero lands in hand -- bundling
+  // both into one requiresTarget:"handCard" ability would let the existing CR 603.3c no-legal-
+  // target auto-fizzle (built for Warren Instigator) silently skip the draw too whenever there's no
+  // land to drop, which is wrong. The land-drop reuses Warren Instigator's own putHandCardOntoBattlefield
+  // effect verbatim -- {W}'s "another player's choice" mechanic. Vigilance needs no table entry.
+  "chulane, teller of tales": [
+    { trigger: "youCastSpell", spellTypeFilter: ["creature"], requiresTarget: false, label: "Chulane, Teller of Tales — draw a card", effects: [{ type: "drawCards", amount: 1 }] },
+    { trigger: "youCastSpell", spellTypeFilter: ["creature"], requiresTarget: true, targetKind: "handCard", handTypeFilter: ["land"], label: "Chulane, Teller of Tales — you may put a land card from your hand onto the battlefield", effects: [{ type: "putHandCardOntoBattlefield" }] }
+  ],
   // "Whenever Krenko attacks, put a +1/+1 counter on it, then create a number of 1/1 red Goblin
   // creature tokens equal to Krenko's power." Effects resolve strictly in array order, so
   // createTokensEqualToSelfPower correctly sees the counter addCountersToSelf just added -- see its
@@ -1121,7 +1133,8 @@ const ACTIVATED_ABILITIES = {
     label: "Mtenda Griffin — return this creature to hand and return target Griffin card from your graveyard to your hand",
     effects: [{ type: "bounceSelfToHand" }, { type: "returnGraveyardCardToHand" }]
   }],
-  "kyodai, soul of kamigawa": [{ cost: { mana: "{W}{U}{B}{R}{G}" }, label: "Kyodai, Soul of Kamigawa — gets +5/+5 until end of turn", effects: [{ type: "grantTemporaryPTToSelf", power: 5, toughness: 5 }] }]
+  "kyodai, soul of kamigawa": [{ cost: { mana: "{W}{U}{B}{R}{G}" }, label: "Kyodai, Soul of Kamigawa — gets +5/+5 until end of turn", effects: [{ type: "grantTemporaryPTToSelf", power: 5, toughness: 5 }] }],
+  "chulane, teller of tales": [{ cost: { mana: "{3}", tap: true }, requiresTarget: true, targetKind: "ownCreature", label: "Chulane, Teller of Tales — return target creature you control to its owner's hand", effects: [{ type: "bounceTargetToHand" }] }]
 };
 // Generic "[X creatures you control / All Xs / Other creatures you control] have '[ability]'"
 // grant detector -- the Sliver cycle's own defining template (Gemhide Sliver, Clot Sliver, Crypt
