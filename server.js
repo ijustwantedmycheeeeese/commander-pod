@@ -363,6 +363,11 @@ const CARD_ABILITIES = {
     { trigger: "youCastSpell", colorFilter: "W", label: "Balefire Liege — gain 3 life", requiresTarget: false, effects: [{ type: "gainLife", target: "controller", amount: 3 }] }
   ],
   "reya dawnbringer": [{ trigger: "upkeep", label: "Reya Dawnbringer — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
+  // Wave 26 -- same shape as Reya Dawnbringer just above (including its free CR 603.3c empty-
+  // graveyard auto-fizzle, fireTrigger's own targetKind:"ownGraveyardCreature" check), plus a real
+  // land-count condition (same pattern as Temple of the False God's own condition/lobby.cards scan,
+  // just counting Plains specifically instead of any land).
+  "emeria, the sky ruin": [{ trigger: "upkeep", label: "Emeria, the Sky Ruin — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", condition: (card, lobby) => Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes("plains")).length >= 7, effects: [{ type: "reanimateFromGraveyard" }] }],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }],
   // Kardur's "attack each combat if able and attack a player other than you if able" half is
@@ -565,6 +570,7 @@ const CARD_ABILITIES = {
   // Wave 22 -- reuses the pre-existing ownGraveyardTypeList targetKind (built for Argivian Find)
   // plus returnOwnGraveyardEntryToHand (also pre-existing) -- a straight composition, no new code.
   "griffin dreamfinder": [{ trigger: "etb", label: "Griffin Dreamfinder — return target enchantment card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] }],
+  "mortuary mire": [{ trigger: "etb", label: "Mortuary Mire — put target creature card from your graveyard on top of your library", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["creature"], effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
   "sharuum the hegemon": [{ trigger: "etb", label: "Sharuum the Hegemon — return target artifact card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact"], effects: [{ type: "reanimateFromGraveyard" }] }],
   // Wave 24 -- reuses the pre-existing untapUpToNOwnLands effect (built for Frantic Search) as-is.
   "peregrine drake": [{ trigger: "etb", label: "Peregrine Drake — untap up to five lands", requiresTarget: false, effects: [{ type: "untapUpToNOwnLands", amount: 5 }] }],
@@ -916,6 +922,9 @@ const ACTIVATED_ABILITIES = {
   // "another" (unlike Pashalik Mons's "a Goblin") means this can't fall back to sacrificing itself.
   "razaketh, the foulblooded": [{ cost: { life: 2, autoSacrificeFilter: "creature", excludeSelf: true }, label: "Razaketh, the Foulblooded — Pay 2 life, Sacrifice another creature: search for a card", effects: [{ type: "tutorToHand" }] }],
   "tortured existence": [{ cost: { mana: "{B}", autoDiscardFilter: "creature" }, requiresTarget: true, targetKind: "ownGraveyardCreature", label: "Tortured Existence — {B}, Discard a creature card: return target creature card from your graveyard to your hand", effects: [{ type: "returnGraveyardCardToHand" }] }],
+  // Wave 26 -- its plain "{T}: Add {C}" half is untouched by the free-tap-mana shortcut, same
+  // reasoning as Desolate Lighthouse (this second ability isn't a manaAbility).
+  "hall of heliod's generosity": [{ cost: { mana: "{1}{W}", tap: true }, requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], label: "Hall of Heliod's Generosity — {1}{W}, {T}: Put target enchantment card from your graveyard on top of your library", effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
   // The real Treasure token ability -- matches ANY token literally named "Treasure", regardless of
   // which effect created it (createTreasureToken/rollD20CreateTreasures/counterTargetSpellCreateTokenForController
   // all use this exact name). See chooseManaAnyColor's own comment for the sacrificed-source-by-the-
@@ -2360,6 +2369,18 @@ const EFFECTS = {
     if (idx === -1) return;
     const [entry] = owner.graveyard.splice(idx, 1);
     spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, zoneType: "hand" });
+    broadcastPlayers(lobby);
+  },
+  // Mortuary Mire / Hall of Heliod's Generosity -- "Put target [type] card from your graveyard on
+  // top of your library." The top-of-library sibling of returnOwnGraveyardEntryToHand just above,
+  // same chosenTargetId flow, just unshift onto the library instead of spawning into hand.
+  putOwnGraveyardEntryOnTopOfLibrary(lobby, ctx, params) {
+    const owner = lobby.players[ctx.controllerId];
+    if (!owner || !params.chosenTargetId) return;
+    const idx = (owner.graveyard || []).findIndex((e) => e.id === params.chosenTargetId);
+    if (idx === -1) return;
+    const [entry] = owner.graveyard.splice(idx, 1);
+    owner.library.unshift(entry);
     broadcastPlayers(lobby);
   },
   // A specific, pre-chosen card baked in at queue time (see queueDelayedTrigger) -- not a player
@@ -7412,6 +7433,13 @@ io.on("connection", (socket) => {
     if (ability.requiresTarget && ability.targetKind === "ownGraveyardCreature") {
       const hasMatch = (p.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("creature"));
       if (!hasMatch) { socket.emit("actionError", "There's no creature card in your graveyard to target."); return; }
+    }
+    // Hall of Heliod's Generosity-style -- same "reject before paying" reason as
+    // ownGraveyardCreature just above, for the TYPE-FILTERED graveyard targetKind instead.
+    if (ability.requiresTarget && ability.targetKind === "ownGraveyardTypeList") {
+      const filter = ability.typeFilter || [];
+      const hasMatch = (p.graveyard || []).some((e) => filter.some((t) => (e.type || "").toLowerCase().includes(t)));
+      if (!hasMatch) { socket.emit("actionError", `There's no matching card in your graveyard to target.`); return; }
     }
     // Temple of the False God -- "Activate only if you control five or more lands." A real
     // activation-condition gate, checked before anything is paid, same "reject before paying" reason
