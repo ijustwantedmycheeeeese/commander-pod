@@ -5170,6 +5170,17 @@
       socket.emit("playCard", { id, x: 0 });
     }
 
+    // Kessig Wolf Run/Mirror Entity-style X-cost ACTIVATED ability -- same "prompt for X before
+    // emitting" shape as requestPlayCard above, just keyed off the ability's own server-computed
+    // hasX flag (maskCard) instead of re-parsing manaCost client-side.
+    function requestActivateAbility(cardId, ability) {
+      if (ability.hasX) {
+        showPromptModal("Choose a value for X:", "0", (val) => socket.emit("activateAbility", { cardId, abilityIndex: ability.index, x: parseInt(val) || 0 }));
+        return;
+      }
+      socket.emit("activateAbility", { cardId, abilityIndex: ability.index });
+    }
+
     // Matches the server's exact declareAttackers check (card.controllerSince === turnNumber,
     // unless Haste) -- kept as one shared helper so the attackers modal can't drift from what the
     // server actually allows, which is what let a summoning-sick creature show as checkable before.
@@ -5305,7 +5316,7 @@
           const abilities = Array.isArray(card.activatedAbilities) ? card.activatedAbilities : [];
           if (abilities.length === 1) {
             // The one and only real option -- just do it, no need to ask.
-            socket.emit("activateAbility", { cardId: card.id, abilityIndex: abilities[0].index });
+            requestActivateAbility(card.id, abilities[0]);
           } else if (abilities.length > 1) {
             // More than one real option (a land with both a mana ability and a second sacrifice-
             // draw ability, say) -- open the same context menu a right-click would, rather than
@@ -5933,7 +5944,7 @@
       abilitiesEl.innerHTML = abilities.map((a) => `<button>${escapeHtml(a.label)}</button>`).join("");
       Array.from(abilitiesEl.children).forEach((btn, i) => {
         btn.onclick = () => {
-          socket.emit("activateAbility", { cardId: card.id, abilityIndex: abilities[i].index });
+          requestActivateAbility(card.id, abilities[i]);
           contextMenu.style.display = "none";
         };
       });
