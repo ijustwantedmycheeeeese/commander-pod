@@ -378,6 +378,11 @@ const CARD_ABILITIES = {
   "thriving moor": [{ trigger: "etb", label: "Thriving Moor — choose a color other than black", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "B" }] }],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "commercial district": [{ trigger: "etb", label: "Commercial District — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
+  // "When this land enters UNTAPPED" -- checked against the card's own real tapped state at ETB
+  // time (whatever entersTapped already decided, including its own "unless you control..."
+  // simplification for the conditional-tapped clause just above this in Idyllic Grange's real
+  // text), rather than re-deriving the Plains count separately.
+  "idyllic grange": [{ trigger: "etb", label: "Idyllic Grange — put a +1/+1 counter on target creature you control", requiresTarget: true, targetKind: "ownCreature", condition: (card) => !card.tapped, effects: [{ type: "addCountersToTarget" }] }],
   "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }],
   // Kardur's "attack each combat if able and attack a player other than you if able" half is
   // enforced as a declareAttackers validation (see lobby.kardurForcedAttackControllers), not a
@@ -1759,6 +1764,17 @@ const EFFECTS = {
     const bonus = amount > 0 ? bonusCountersFor(lobby, card.owner) : 0;
     // Corpsejack Menace / Branching Evolution's doubling applies AFTER Hardened Scales' additive
     // +1 -- see counterMultiplierFor's own comment.
+    const mult = amount > 0 ? counterMultiplierFor(lobby, card.owner) : 1;
+    card.counters = (card.counters || 0) + (amount + bonus) * mult;
+    broadcastCard(lobby, card);
+  },
+  // Idyllic Grange -- addCountersToSelf's targeted counterpart: "put a +1/+1 counter on TARGET
+  // creature you control" instead of the source itself. Same Hardened Scales/doubling hooks.
+  addCountersToTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const amount = params.amount || 1;
+    const bonus = amount > 0 ? bonusCountersFor(lobby, card.owner) : 0;
     const mult = amount > 0 ? counterMultiplierFor(lobby, card.owner) : 1;
     card.counters = (card.counters || 0) + (amount + bonus) * mult;
     broadcastCard(lobby, card);
