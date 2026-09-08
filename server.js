@@ -4649,6 +4649,16 @@ function anthemEffectsFromText(text) {
   }
   return clauses;
 }
+// Sedge Sliver -- "All Sliver creatures have 'This creature gets +1/+1 as long as you control a
+// Swamp.'" A GRANTED self-referential conditional P/T (the granting permanent hands a whole quoted
+// conditional ability to a type of creature, rather than a flat unconditional anthem bonus like
+// anthemEffectsFromText above) -- narrow to this one real template rather than trying to generalize
+// every possible granted-conditional shape.
+function grantedConditionalLandPTFromText(text) {
+  const m = (text || "").match(/all (\w+) creatures have "this creature gets \+(\d+)\/\+(\d+) as long as you control an? (\w+)\.?"/i);
+  if (!m) return null;
+  return { typeWord: m[1].toLowerCase(), powerBonus: parseInt(m[2], 10) || 0, toughnessBonus: parseInt(m[3], 10) || 0, landType: m[4].toLowerCase() };
+}
 // The keyword-granting counterpart to anthemEffectsFromText -- "Other creatures/permanents you
 // control have X[, Y and Z]." (Avacyn, Angel of Hope) or the self-inclusive "Creatures you control
 // have X." (Whip of Erebos -- no "other", so it also grants to itself if the source is itself a
@@ -4825,6 +4835,18 @@ function staticBonusFor(lobby, card) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    // Sedge Sliver -- "All Sliver creatures have 'This creature gets +1/+1 as long as you control a
+    // Swamp.'" A GRANTED self-referential conditional (unlike Serra Ascendant's own printed-on-
+    // itself version above) -- inherently self-inclusive by its own "All Xs have" wording (no
+    // "other" qualifier), so this runs unconditionally for every permanent `c` including `card`
+    // itself, before the self/other anthem branching below even applies. "You control a [land
+    // type]" always means the GRANTED creature's own controller, i.e. card.owner, same as any other
+    // "you control" in a granted ability.
+    const grantedPT = grantedConditionalLandPTFromText(c.text);
+    if (grantedPT && (card.type || "").toLowerCase().includes(grantedPT.typeWord)) {
+      const hasLand = Object.values(lobby.cards).some((x) => x.owner === card.owner && x.zoneType === "mana" && (x.type || "").toLowerCase().includes(grantedPT.landType));
+      if (hasLand) { powerBonus += grantedPT.powerBonus; toughnessBonus += grantedPT.toughnessBonus; }
+    }
     // "Other creatures..." is enforced structurally by skipping card.id -- but a self-inclusive
     // anthem (Rising of the Day's own "Legendary creatures you control get +1/+0", no "other")
     // needs its OWN text checked against itself too, so the id===card.id skip only applies to
