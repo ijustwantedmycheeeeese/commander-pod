@@ -374,6 +374,8 @@ const CARD_ABILITIES = {
   "thriving bluff": [{ trigger: "etb", label: "Thriving Bluff — choose a color other than red", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "R" }] }],
   "thriving grove": [{ trigger: "etb", label: "Thriving Grove — choose a color other than green", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "G" }] }],
   "thriving heath": [{ trigger: "etb", label: "Thriving Heath — choose a color other than white", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "W" }] }],
+  "thriving isle": [{ trigger: "etb", label: "Thriving Isle — choose a color other than blue", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "U" }] }],
+  "thriving moor": [{ trigger: "etb", label: "Thriving Moor — choose a color other than black", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "B" }] }],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }],
   // Kardur's "attack each combat if able and attack a player other than you if able" half is
@@ -661,6 +663,8 @@ const ACTIVATED_ABILITIES = {
   "thriving bluff": [{ cost: { tap: true }, manaAbility: true, label: "Thriving Bluff — Add R or the chosen color", effects: [{ type: "chooseManaOwnOrChosenColor", ownColor: "R" }] }],
   "thriving grove": [{ cost: { tap: true }, manaAbility: true, label: "Thriving Grove — Add G or the chosen color", effects: [{ type: "chooseManaOwnOrChosenColor", ownColor: "G" }] }],
   "thriving heath": [{ cost: { tap: true }, manaAbility: true, label: "Thriving Heath — Add W or the chosen color", effects: [{ type: "chooseManaOwnOrChosenColor", ownColor: "W" }] }],
+  "thriving isle": [{ cost: { tap: true }, manaAbility: true, label: "Thriving Isle — Add U or the chosen color", effects: [{ type: "chooseManaOwnOrChosenColor", ownColor: "U" }] }],
+  "thriving moor": [{ cost: { tap: true }, manaAbility: true, label: "Thriving Moor — Add B or the chosen color", effects: [{ type: "chooseManaOwnOrChosenColor", ownColor: "B" }] }],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
