@@ -673,6 +673,11 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Tocasia's Dig Site — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { tap: true, mana: "{3}" }, label: "Tocasia's Dig Site — Surveil 1", effects: [{ type: "surveilN", amount: 1 }] }
   ],
+  // Exalted itself (see applyExalted in declareAttackers) needs no table entry at all -- it's
+  // detected generically off any permanent's own text -- so these two only need their unrelated
+  // mana-dork half wired up.
+  "ignoble hierarch": [{ cost: { tap: true }, manaAbility: true, label: "Ignoble Hierarch — Add B, R, or G", effects: [{ type: "chooseManaFromColors", colors: ["B", "R", "G"], sourceName: "Ignoble Hierarch" }] }],
+  "noble hierarch": [{ cost: { tap: true }, manaAbility: true, label: "Noble Hierarch — Add G, W, or U", effects: [{ type: "chooseManaFromColors", colors: ["G", "W", "U"], sourceName: "Noble Hierarch" }] }],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -4010,6 +4015,20 @@ function applySelfAttackTypeCountPump(lobby, attackerIds) {
     const count = attackers.filter((other) => other.id !== atk.id && (other.type || "").toLowerCase().includes(type)).length;
     if (count > 0) grantTemporaryPT(lobby, atk, perAmount * count, 0);
   });
+}
+// Exalted (a real named keyword, CR 702.83) -- "Whenever a creature you control attacks alone,
+// that creature gets +1/+1 until end of turn," once per Exalted source the ATTACKING PLAYER
+// controls (not just the lone attacker's own text, unlike battle cry/piledriver-style pumps above
+// which scale off OTHER attackers -- Exalted scales off other non-attacking permanents entirely,
+// so it's checked once against the whole attack, not per-attacker). Only ever relevant when
+// exactly one attacker was declared, matching the "alone" condition literally rather than trying
+// to model "would still count if blocked" nuance no other part of this engine tracks either.
+function applyExalted(lobby, attackerIds, controllerId) {
+  if (attackerIds.length !== 1) return;
+  const atk = lobby.cards[attackerIds[0]];
+  if (!atk) return;
+  const count = Object.values(lobby.cards).filter((c) => c.owner === controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /\bexalted\b/i.test(c.text || "")).length;
+  if (count > 0) grantTemporaryPT(lobby, atk, count, count);
 }
 // Called once per real new turn (the End Step -> next Untap wraparound in advanceOnePhase) --
 // every temporary keyword granted at any point during the turn that just ended is now expired,
@@ -8866,6 +8885,7 @@ io.on("connection", (socket) => {
     applySharedAnimosity(lobby, Object.keys(validAttackers));
     applyBattleCry(lobby, Object.keys(validAttackers));
     applySelfAttackTypeCountPump(lobby, Object.keys(validAttackers));
+    applyExalted(lobby, Object.keys(validAttackers), socket.id);
     // Skip declareBlockers for a defender with no untapped creature to block with — otherwise
     // combat just sits waiting on a no-op "No Blocks" confirmation they may not realize to give.
     const pendingWithBlockers = Array.from(defendersSet).filter((defId) =>
