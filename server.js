@@ -724,6 +724,16 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Vault of the Archangel — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{2}{W}{B}", tap: true }, label: "Vault of the Archangel — creatures you control gain deathtouch and lifelink until end of turn", effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Deathtouch", "Lifelink"] }] }
   ],
+  "mistveil plains": [
+    { cost: { tap: true }, manaAbility: true, label: "Mistveil Plains — Add {W}", effects: [{ type: "addFixedMana", colors: ["W"] }] },
+    {
+      cost: { mana: "{W}", tap: true }, label: "Mistveil Plains — put target card from your graveyard on the bottom of your library",
+      requiresTarget: true, targetKind: "ownGraveyard",
+      condition: (card, lobby) => Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && (c.colors || []).includes("W")).length >= 2,
+      conditionError: "You need to control two or more white permanents to activate this.",
+      effects: [{ type: "putOwnGraveyardEntryOnBottomOfLibrary" }]
+    }
+  ],
   "kessig wolf run": [
     { cost: { tap: true }, manaAbility: true, label: "Kessig Wolf Run — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{X}{R}{G}", tap: true }, label: "Kessig Wolf Run — target creature gets +X/+0 and gains trample until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", keywords: ["Trample"] }] }
@@ -2605,6 +2615,16 @@ const EFFECTS = {
     if (idx === -1) return;
     const [entry] = owner.graveyard.splice(idx, 1);
     owner.library.unshift(entry);
+    broadcastPlayers(lobby);
+  },
+  // Mistveil Plains -- the bottom-of-library sibling of the above (push instead of unshift).
+  putOwnGraveyardEntryOnBottomOfLibrary(lobby, ctx, params) {
+    const owner = lobby.players[ctx.controllerId];
+    if (!owner || !params.chosenTargetId) return;
+    const idx = (owner.graveyard || []).findIndex((e) => e.id === params.chosenTargetId);
+    if (idx === -1) return;
+    const [entry] = owner.graveyard.splice(idx, 1);
+    owner.library.push(entry);
     broadcastPlayers(lobby);
   },
   // A specific, pre-chosen card baked in at queue time (see queueDelayedTrigger) -- not a player
@@ -5474,6 +5494,15 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!found) return { ok: false, error: "Choose a creature card from your own graveyard." };
     return { ok: true };
   }
+  // Mistveil Plains -- "target card from your graveyard," genuinely unrestricted (unlike
+  // ownGraveyardCreature/ownGraveyardTypeList/ownGraveyardMvFilter, all of which narrow to some
+  // subset) -- any card of any type qualifies.
+  if (targetKind === "ownGraveyard") {
+    const p = lobby.players[entry.controllerId];
+    const found = p && (p.graveyard || []).some((e) => e.id === targetId);
+    if (!found) return { ok: false, error: "Choose a card from your own graveyard." };
+    return { ok: true };
+  }
   // Sun Titan -- "target PERMANENT card with mana value 3 or less" (any permanent type, unlike
   // ownGraveyardCreature's creature-only or ownGraveyardTypeList's fixed type list) -- same
   // ownGraveyard* shape, filtered on cmc instead of type, and excluding instants/sorceries the way
@@ -5583,6 +5612,11 @@ function fireTrigger(lobby, card, ability, xValue) {
       const p = lobby.players[card.owner];
       const hasMatch = p && (p.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("creature"));
       if (!hasMatch) return;
+    }
+    // Mistveil Plains -- same CR 603.3c auto-fizzle, unrestricted graveyard kind.
+    if (ability.targetKind === "ownGraveyard") {
+      const p = lobby.players[card.owner];
+      if (!p || !(p.graveyard || []).length) return;
     }
     // Griffin Dreamfinder/Sharuum the Hegemon-style "target artifact/enchantment card in your
     // graveyard" -- same CR 603.3c auto-fizzle as ownGraveyardCreature just above (this one was
@@ -7843,6 +7877,10 @@ io.on("connection", (socket) => {
     if (ability.requiresTarget && ability.targetKind === "ownGraveyardCreature") {
       const hasMatch = (p.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("creature"));
       if (!hasMatch) { socket.emit("actionError", "There's no creature card in your graveyard to target."); return; }
+    }
+    // Mistveil Plains -- same "reject before paying" reason, for the unrestricted graveyard kind.
+    if (ability.requiresTarget && ability.targetKind === "ownGraveyard") {
+      if (!(p.graveyard || []).length) { socket.emit("actionError", "There's no card in your graveyard to target."); return; }
     }
     // Hall of Heliod's Generosity-style -- same "reject before paying" reason as
     // ownGraveyardCreature just above, for the TYPE-FILTERED graveyard targetKind instead.
