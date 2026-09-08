@@ -596,6 +596,10 @@ const CARD_ABILITIES = {
   // plus returnOwnGraveyardEntryToHand (also pre-existing) -- a straight composition, no new code.
   "griffin dreamfinder": [{ trigger: "etb", label: "Griffin Dreamfinder — return target enchantment card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] }],
   "mortuary mire": [{ trigger: "etb", label: "Mortuary Mire — put target creature card from your graveyard on top of your library", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["creature"], effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
+  "sun titan": [
+    { trigger: "etb", label: "Sun Titan — return target permanent card with mana value 3 or less from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardMvFilter", maxCmc: 3, effects: [{ type: "reanimateFromGraveyard" }] },
+    { trigger: "attack", label: "Sun Titan — return target permanent card with mana value 3 or less from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardMvFilter", maxCmc: 3, effects: [{ type: "reanimateFromGraveyard" }] }
+  ],
   "sharuum the hegemon": [{ trigger: "etb", label: "Sharuum the Hegemon — return target artifact card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact"], effects: [{ type: "reanimateFromGraveyard" }] }],
   // Wave 24 -- reuses the pre-existing untapUpToNOwnLands effect (built for Frantic Search) as-is.
   "peregrine drake": [{ trigger: "etb", label: "Peregrine Drake — untap up to five lands", requiresTarget: false, effects: [{ type: "untapUpToNOwnLands", amount: 5 }] }],
@@ -5429,6 +5433,16 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!found) return { ok: false, error: "Choose a creature card from your own graveyard." };
     return { ok: true };
   }
+  // Sun Titan -- "target PERMANENT card with mana value 3 or less" (any permanent type, unlike
+  // ownGraveyardCreature's creature-only or ownGraveyardTypeList's fixed type list) -- same
+  // ownGraveyard* shape, filtered on cmc instead of type, and excluding instants/sorceries the way
+  // "permanent card" always does.
+  if (targetKind === "ownGraveyardMvFilter") {
+    const p = lobby.players[entry.controllerId];
+    const found = p && (p.graveyard || []).find((e) => e.id === targetId && !isInstantOrSorcery(e.type) && (e.cmc || 0) <= (entry.maxCmc != null ? entry.maxCmc : Infinity));
+    if (!found) return { ok: false, error: `Choose a permanent card with mana value ${entry.maxCmc} or less from your own graveyard.` };
+    return { ok: true };
+  }
   // Argivian Find ("artifact or enchantment card from your graveyard") -- same shape as
   // ownGraveyardCreature just above, generalized with a typeFilter list instead of a hardcoded
   // "creature" substring check, mirroring the battlefield-side typeList kind.
@@ -5540,6 +5554,14 @@ function fireTrigger(lobby, card, ability, xValue) {
       const hasMatch = p && (p.graveyard || []).some((e) => filter.some((t) => (e.type || "").toLowerCase().includes(t)));
       if (!hasMatch) return;
     }
+    // Sun Titan: same CR 603.3c auto-fizzle as ownGraveyardTypeList just above, for the MV-filtered
+    // graveyard kind instead -- otherwise this would nag on every single attack/ETB once the
+    // graveyard has nothing cheap enough left.
+    if (ability.targetKind === "ownGraveyardMvFilter") {
+      const p = lobby.players[card.owner];
+      const hasMatch = p && (p.graveyard || []).some((e) => !isInstantOrSorcery(e.type) && (e.cmc || 0) <= (ability.maxCmc != null ? ability.maxCmc : Infinity));
+      if (!hasMatch) return;
+    }
     // Hellkite Courser: "put a commander you own from the command zone onto the battlefield" --
     // there are only ever 1-2 real choices, so the eligible commanders (in the zone, not currently
     // on the battlefield) are computed here and sent as commanderChoices (slot + name) for the
@@ -5562,7 +5584,7 @@ function fireTrigger(lobby, card, ability, xValue) {
       const hasMatch = Object.values(lobby.cards).some((c) => (c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana") && filter.some((t) => (c.type || "").toLowerCase().includes(t)));
       if (!hasMatch) return;
     }
-    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, commanderChoices });
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, maxCmc: ability.maxCmc, commanderChoices });
   } else {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   }
