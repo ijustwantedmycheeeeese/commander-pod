@@ -4706,6 +4706,17 @@ function spellCostReductionFor(lobby, ownerId, card) {
     const m = (c.text || "").match(/(\w+) spells you cast cost \{(\d+)\} less to cast/i);
     if (m && typeLower.includes(m[1].toLowerCase())) reduction += parseInt(m[2], 10) || 0;
   }
+  // Ghalta, Primal Hunger -- "This spell costs {X} less to cast, where X is the total power of
+  // creatures you control." Self-referential (checked on the CARD BEING CAST's own text, not a
+  // grant from another permanent) -- Ghalta itself hasn't entered yet while it's being cast, so
+  // "creatures you control" only ever counts what's already on the battlefield, matching real
+  // Magic's own timing. Uses each creature's real effective power (base + counters + equipment/
+  // aura/anthem bonuses), same computation Bonders' Enclave's own condition already uses.
+  if (/this spell costs \{x\} less to cast, where x is the total power of creatures you control/i.test(card.text || "")) {
+    reduction += Object.values(lobby.cards)
+      .filter((c) => c.owner === ownerId && c.zoneType === "creature")
+      .reduce((sum, c) => sum + parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus, 0);
+  }
   return reduction;
 }
 // Rhythm of the Wild-style "Creature spells you control can't be countered" -- pure text scan, same
