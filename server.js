@@ -601,6 +601,11 @@ const CARD_ABILITIES = {
   // Archfiend of Ifnir itself has already left the battlefield (moved out of lobby.cards), so it
   // can't scan its own battlefield copy to fire off its own discard anyway.
   "archfiend of ifnir": [{ trigger: "youDiscard", label: "Archfiend of Ifnir — put a -1/-1 counter on each creature your opponents control", requiresTarget: false, effects: [{ type: "addNegativeCounterToEachOpponentCreature", amount: 1 }] }],
+  // New "secondSpellCastByAPlayer" event -- fires for EVERY Ledger Shredder on the table regardless
+  // of who cast the spell or who controls the Shredder (see fireGlobalTriggerAllPlayers' own
+  // comment). Connive resolves through the existing pendingDiscard pipeline; see EFFECTS.connive
+  // and resolveDiscard's own connive follow-up for the "nonland discard -> +1/+1 counter" half.
+  "ledger shredder": [{ trigger: "secondSpellCastByAPlayer", label: "Ledger Shredder — connives", requiresTarget: false, effects: [{ type: "connive" }] }],
   // "of their choice" isn't a real per-opponent picker -- reuses eachOpponentSacrifices' existing
   // auto-pick (built for Pick Your Poison), same disclosed simplification as everywhere else.
   "grave pact": [{ trigger: "deathYouControl", label: "Grave Pact — each other player sacrifices a creature", requiresTarget: false, effects: [{ type: "eachOpponentSacrifices", zoneTypeFilter: "creature" }] }],
@@ -2890,6 +2895,23 @@ const EFFECTS = {
     lobby.turn.pendingDiscard = { playerId, count };
     broadcastTurn(lobby);
     pushLog(lobby, `${p.name} must discard ${count} card${count === 1 ? "" : "s"}`);
+  },
+  // Connive (Ledger Shredder and any future connive card) -- "Draw a card, then discard a card. If
+  // you discarded a nonland card this way, put a +1/+1 counter on this creature." The draw half is
+  // immediate; the discard half reuses the exact same pendingDiscard/resolveDiscard pipeline as
+  // targetPlayerDiscards just above, tagged with a `connive` marker resolveDiscard checks for its
+  // own follow-up (adding the counter based on what was ACTUALLY discarded) -- see resolveDiscard's
+  // own comment for why that check has to live there rather than here (this function returns long
+  // before the player has picked a card).
+  connive(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p || !ctx.sourceCard) return;
+    drawN(lobby, ctx.controllerId, 1);
+    const handCount = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "hand").length;
+    if (handCount <= 0) return;
+    lobby.turn.pendingDiscard = { playerId: ctx.controllerId, count: 1, connive: { sourceCardId: ctx.sourceCard.id } };
+    broadcastTurn(lobby);
+    pushLog(lobby, `${p.name} connives (${ctx.sourceCard.name || "a creature"})`);
   },
   // Fetchlands ("Search your library for a Mountain or Plains card...") -- WHICH card to fetch is a
   // real choice among however many matches are in a 99-card library, not something automatable the
@@ -5334,6 +5356,15 @@ function pushToStack(lobby, card, casterId) {
   fireGlobalTrigger(lobby, "youCastSpell", casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
   fireGlobalOpponentCastsSpellTriggers(lobby, casterId);
+  // Ledger Shredder -- "whenever A PLAYER casts their second spell each turn" watches every
+  // player's cast count, not just the caster's own permanents (unlike every other fireGlobalTrigger
+  // event, which only ever scans the acting player's own battlefield) -- see
+  // fireGlobalTriggerAllPlayers' own comment for why this needed a separate function.
+  const casterP = lobby.players[casterId];
+  if (casterP) {
+    casterP.spellsCastThisTurn = (casterP.spellsCastThisTurn || 0) + 1;
+    if (casterP.spellsCastThisTurn === 2) fireGlobalTriggerAllPlayers(lobby, "secondSpellCastByAPlayer", card);
+  }
 }
 // Esper Sentinel: "Whenever an opponent casts their FIRST noncreature spell each turn, draw a card
 // unless that player pays {X}." Once-per-opponent-per-turn, tracked on the CASTING player (not the
@@ -6179,6 +6210,20 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
     });
   }
 }
+// Ledger Shredder-style "whenever A PLAYER casts their second spell each turn" -- unlike every
+// fireGlobalTrigger event above (all scoped to "you"/"you control", i.e. only the acting player's
+// own battlefield), this reacts regardless of WHO cast the spell, so every permanent on the whole
+// table needs checking, not just one player's. Kept as its own small function rather than adding
+// yet another flag to fireGlobalTrigger, since "scan everyone, not just forPlayerId" is a
+// fundamentally different scope, not a narrowing filter on the same scan.
+function fireGlobalTriggerAllPlayers(lobby, eventType, eventCard) {
+  if (!lobby.turn.started) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, eventType).forEach((ability) => fireTrigger(lobby, c, ability));
+  }
+}
 
 // The one hook point for any positive life change, so selfGainsLife triggers fire regardless of
 // source (an EFFECTS.gainLife resolution, or the manual +life button in statChange) instead of two
@@ -6695,6 +6740,11 @@ function advanceOnePhase(lobby) {
     turn.activeIndex = (turn.activeIndex + 1) % turn.order.length;
     turn.turnNumber++;
     turn.extraCombatsPending = 0;
+    // Ledger Shredder -- "whenever a player casts THEIR second spell EACH TURN" counts against one
+    // shared game turn (any player's spells, incl. instants cast on someone else's turn), so this
+    // resets for EVERY player here at the one real turn-wraparound point, not just the newly active
+    // player -- a per-player-own-turn reset would silently undercount instants cast off-turn.
+    Object.values(lobby.players).forEach((p) => { p.spellsCastThisTurn = 0; });
     cleanupTemporaryKeywords(lobby);
     // Kardur, Doomscourge -- "until your next turn" ends exactly when the new active player IS
     // that Kardur's own controller (their next turn has now begun).
@@ -9272,7 +9322,33 @@ io.on("connection", (socket) => {
     // this hand-size/pendingDiscard path and any spell/ability-driven discard (they all route
     // through the same targetPlayerDiscards -> pendingDiscard -> resolveDiscard pipeline).
     discardedCards.forEach((card) => fireGlobalTrigger(lobby, "youDiscard", socket.id, card));
+    // Connive's own "if you discarded a NONLAND card this way, put a +1/+1 counter on this
+    // creature" -- the one piece EFFECTS.connive itself couldn't resolve (it returns long before
+    // the player has actually picked a card), so it's tagged onto pendingDiscard and checked here,
+    // against what was REALLY discarded, not assumed. sourceCardId may no longer be on the
+    // battlefield by now (the connived creature could have died in response) -- a missing lookup is
+    // a silent no-op, same as every other "source left before this resolved" case in this file.
+    if (pd.connive) {
+      const discardedNonland = discardedCards.some((card) => !(card.type || "").toLowerCase().includes("land"));
+      if (discardedNonland) {
+        const source = lobby.cards[pd.connive.sourceCardId];
+        if (source) {
+          const bonus = bonusCountersFor(lobby, source.owner);
+          const mult = counterMultiplierFor(lobby, source.owner);
+          source.counters = (source.counters || 0) + (1 + bonus) * mult;
+          broadcastCard(lobby, source);
+        }
+      }
+    }
     lobby.turn.pendingDiscard = null;
+    // Real pre-existing bug, caught while building connive (Wave 64): a MID-TURN discard
+    // (advanceAfter false -- Mind Rot, Faithless Looting, connive, ...) never told clients
+    // pendingDiscard had cleared, since advancePhase's own broadcastTurn only runs for the
+    // End-Step-hand-size case below. Every client's discard prompt stayed stuck open (using stale
+    // cached turn state) until some UNRELATED broadcastTurn happened to fire later. Broadcasting
+    // here unconditionally fixes both paths; advancePhase's own broadcastTurn just redundantly
+    // re-sends the (by-then-further-advanced) turn state right after, which is harmless.
+    broadcastTurn(lobby);
     // Only the End Step hand-size cleanup (nextPhase's own check, flagged via advanceAfter) should
     // actually move the turn forward once resolved -- a mid-turn discard from a spell effect
     // (Faithless Looting's own "discard two cards," Mind Rot targeting an opponent, etc.) has
