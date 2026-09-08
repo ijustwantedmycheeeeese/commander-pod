@@ -383,6 +383,12 @@ const CARD_ABILITIES = {
   // simplification for the conditional-tapped clause just above this in Idyllic Grange's real
   // text), rather than re-deriving the Plains count separately.
   "idyllic grange": [{ trigger: "etb", label: "Idyllic Grange — put a +1/+1 counter on target creature you control", requiresTarget: true, targetKind: "ownCreature", condition: (card) => !card.tapped, effects: [{ type: "addCountersToTarget" }] }],
+  // A "death" trigger works on a LAND exactly like any other permanent -- fireDeathTriggers is
+  // called unconditionally at every real sacrifice/destroy site regardless of card type (confirmed
+  // via activateAbility's own cost.sacrifice handling), so this needs no new plumbing, just the
+  // table entry. Reuses searchLandTypes verbatim, the same "may search, put onto the battlefield
+  // tapped, then shuffle" fetchland effect already covering the whole fetchland cycle.
+  "flagstones of trokair": [{ trigger: "death", label: "Flagstones of Trokair — search for a Plains", requiresTarget: false, effects: [{ type: "searchLandTypes", types: ["Plains"], entersTapped: true }] }],
   "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }],
   // Kardur's "attack each combat if able and attack a player other than you if able" half is
   // enforced as a declareAttackers validation (see lobby.kardurForcedAttackControllers), not a
