@@ -436,6 +436,19 @@ const CARD_ABILITIES = {
   "field of the dead": [{ trigger: "landfall", requiresTarget: false,
     condition: (c, lobby) => new Set(Object.values(lobby.cards).filter((x) => x.owner === c.owner && x.zoneType === "mana").map((x) => archiveKey(x.name))).size >= 7,
     label: "Field of the Dead — create a 2/2 black Zombie", effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] }],
+  // Valakut, the Molten Pinnacle -- narrowed to Mountains only via landfall's own typeFilter (a
+  // plain string here, matched against the entering land's own type line, same convention as
+  // Pashalik Mons' deathYouControl typeFilter). "At least five OTHER Mountains" -- the Mountain
+  // that just triggered this is already sitting on the battlefield by the time the condition runs
+  // (fireGlobalTrigger fires after the land has already entered), so "5 others" is really "6
+  // Mountains total including this one," not a count that needs to exclude anything. "You may" has
+  // no real downside here, so it auto-resolves to a real target choice like every other undisclosed
+  // "may" in this file -- a player who wants to decline can still use the existing cancelTargetChoice
+  // escape hatch. Enters-tapped and its own plain {T}: Add {R} both need no table entry (already
+  // generic).
+  "valakut, the molten pinnacle": [{ trigger: "landfall", typeFilter: "mountain", requiresTarget: true, targetKind: "any",
+    condition: (card, lobby) => Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes("mountain")).length >= 6,
+    label: "Valakut, the Molten Pinnacle — deal 3 damage to any target", effects: [{ type: "damageTarget", amount: 3 }] }],
   // Wave 28 -- City of Traitors: "When you play ANOTHER land, sacrifice this land." The mirror
   // image of Field of the Dead just above -- this one WANTS the exclusion landfall doesn't apply by
   // default, via the new excludeSelf flag on fireGlobalTrigger.
