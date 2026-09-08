@@ -588,6 +588,13 @@ const CARD_ABILITIES = {
   // anthemKeywordsFromText's own self-inclusive "creatures you control have [X]" branch -- no table
   // entry needed for it at all, only this ETB draw trigger.
   "temur ascendancy": [{ trigger: "otherCreatureEtb", label: "Temur Ascendancy — draw a card (entering creature has power 4 or greater)", requiresTarget: false, effects: [{ type: "drawCardIfEnteringPowerAtLeast", threshold: 4 }] }],
+  // "One or more" needs no special handling -- each qualifying creature's own ETB independently
+  // reaches this same check, and oncePerTurn's turn-number gate already collapses any of them past
+  // the first into a no-op, which is exactly "only once each turn" regardless of how many
+  // power-2-or-less creatures enter that turn. effects' own explicit amount:1 is required here --
+  // without it the shared amount-merge in fireGlobalOtherCreatureEtbTriggers would silently scale
+  // this to the entering creature's power instead of always drawing exactly 1 (the Wave 52 bug).
+  "welcoming vampire": [{ trigger: "otherCreatureEtb", maxPower: 2, oncePerTurn: true, label: "Welcoming Vampire — draw a card", requiresTarget: false, effects: [{ type: "drawCards", amount: 1 }] }],
   // "of their choice" isn't a real per-opponent picker -- reuses eachOpponentSacrifices' existing
   // auto-pick (built for Pick Your Poison), same disclosed simplification as everywhere else.
   "grave pact": [{ trigger: "deathYouControl", label: "Grave Pact — each other player sacrifices a creature", requiresTarget: false, effects: [{ type: "eachOpponentSacrifices", zoneTypeFilter: "creature" }] }],
@@ -5939,7 +5946,18 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
       if (ability.excludeTokenSources && enteringType.includes("token")) return;
       if (ability.typeFilter && !ability.typeFilter.some((t) => enteringType.includes(t.toLowerCase()))) return;
       if (ability.keywordFilter && !ability.keywordFilter.some((k) => enteringKeywords.includes(k.toLowerCase()))) return;
+      // Welcoming Vampire -- "with power 2 or less."
+      if (ability.maxPower != null && power > ability.maxPower) return;
       if (ability.condition && !ability.condition(c, lobby)) return;
+      // Welcoming Vampire -- "This ability triggers only once each turn." A single per-card slot
+      // (not a whole map) is enough for now, same narrow-to-what's-needed precedent as everywhere
+      // else in this file -- no card yet has TWO different once-per-turn otherCreatureEtb abilities
+      // at once. Compared against the turn NUMBER (not a boolean flag swept at cleanup), same
+      // pattern Esper Sentinel's own once-per-opponent-per-turn tracking already uses.
+      if (ability.oncePerTurn) {
+        if (c._otherCreatureEtbOncePerTurnFiredTurn === lobby.turn.turnNumber) return;
+        c._otherCreatureEtbOncePerTurnFiredTurn = lobby.turn.turnNumber;
+      }
       let amount = power;
       if (ability.amountSource === "count") {
         const filter = ability.countTypeFilter || [];
