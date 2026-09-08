@@ -130,14 +130,14 @@
     .cursor-swatch.taken { cursor: not-allowed; opacity: 0.35; }
     .remote-cursor-label { font-size: 10px; padding: 1px 5px; border-radius: 4px; color: #100c08; white-space: nowrap; font-weight: 600; }
     /* Replaces the native OS pointer everywhere on the page with #my-cursor below -- restored to
-       normal over anything text-editable (typing a table name, chat, deck list, etc.) since a
-       custom pointer glyph is actively unhelpful for placing a text caret, and this app has no
-       custom I-beam of its own to substitute. Buttons/links intentionally do NOT get their native
-       pointer back -- #my-cursor's own board-vs-elsewhere marker (see renderMyCursor) is the only
-       affordance everywhere else, matching "replace the cursor," not "replace it except where it's
-       inconvenient." */
+       normal only for genuine TEXT ENTRY (a table name, password, chat box, deck list textarea)
+       since a custom pointer glyph is actively unhelpful for placing a text caret, and this app has
+       no custom I-beam of its own to substitute. A <select> dropdown has no caret to place -- it's
+       just a clickable control like a button, so it deliberately does NOT get the exception (a
+       fixed bug: it originally did, which is exactly why the custom cursor seemed to inconsistently
+       "turn back to normal" over things like the Load Deck dropdown but not most other controls). */
     * { cursor: none !important; }
-    input, textarea, select, [contenteditable="true"] { cursor: auto !important; }
+    input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"] { cursor: auto !important; }
     /* Fixed to the viewport (raw clientX/clientY), unlike .remote-cursor above which is percentage-
        positioned inside the (possibly zoomed/panned) playmat -- this needs to track the real mouse
        everywhere on the page, board or not. No position transition (unlike remote cursors, which
@@ -967,6 +967,11 @@
             <button class="mini-btn secondary" onclick="openCropEditor('cursor')" title="Crop, zoom, and pan the cursor icon">Crop...</button>
             <button class="mini-btn secondary" onclick="clearCursorIcon()">Clear Icon</button>
           </div>
+          <div class="flex-row" style="margin-bottom:2px;">
+            <button class="mini-btn secondary" onclick="setCursorAsDefaultDirect()" title="Auto-applies your CURRENT cursor color/icon to every new table you join">★ Set as My Default</button>
+            <button class="mini-btn secondary" onclick="clearCursorDefault()">Clear My Default</button>
+          </div>
+          <div id="cursor-default-status" style="font-size:11px;color:#8a7a55;margin-bottom:12px;"></div>
 
           <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-size:12px;">
             <span title="How solid the creature/artifact/mana/hand zone fills look -- turn this up if a busy board mat makes them hard to see (piles aren't affected)">Zone Opacity</span>
@@ -1165,12 +1170,32 @@
           <button class="mini-btn" onclick="saveNewMat()">Save As...</button>
         </div>
         <div id="saved-mats-list"></div>
+        <div class="mm-hint" style="margin-top:8px;margin-bottom:2px;">Default for new tables (set from any table's Settings -> Board Mat -> "★ Set as My Default"):</div>
+        <div class="flex-row" style="align-items:center;">
+          <div id="account-boardmat-default-status" style="font-size:11px;color:#8a7a55;flex:1;"></div>
+          <button class="mini-btn secondary" onclick="clearBoardMatDefault()">Clear</button>
+        </div>
       </div>
 
       <div class="mm-section">
         <div class="mm-label" style="margin-top:0;">Saved Pile Art</div>
         <div class="mm-hint" style="margin-top:-6px;margin-bottom:6px;">Save a photo (with its crop) from the pile art editor's "Save As..." button, then load it onto any pile on any table.</div>
         <div id="saved-pile-mats-list"></div>
+      </div>
+
+      <div class="mm-section">
+        <div class="mm-label" style="margin-top:0;">Default Cursor</div>
+        <div class="mm-hint" style="margin-top:-6px;margin-bottom:6px;">Auto-applied to every new table you join -- pick a color, or set a custom icon (GIF ok).</div>
+        <div id="account-cursor-color-swatches" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+        <div class="flex-row" style="margin-bottom:6px;">
+          <input type="text" id="account-cursor-icon-url" placeholder="Custom cursor image URL (optional, GIF ok)..." style="flex:1;">
+          <input type="file" id="account-cursor-icon-file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="uploadImageFile(this, 'account-cursor-icon-url', setAccountDefaultCursorIcon)">
+        </div>
+        <div class="flex-row" style="align-items:center;">
+          <button class="mini-btn" onclick="setAccountDefaultCursorIcon()">Set Icon</button>
+          <button class="mini-btn secondary" onclick="document.getElementById('account-cursor-icon-file').click()">Upload...</button>
+          <button class="mini-btn secondary" onclick="clearCursorDefault()">Clear Default</button>
+        </div>
       </div>
 
       <div class="mm-section">
@@ -1683,6 +1708,9 @@
     let mySavedPileMats = {}; // name -> {url,scale,x,y}, account-wide (distinct from the per-table active pileArt)
     let myDefaultBoardMat = null; // {url,scale,x,y}|null -- auto-applied to every NEW table, distinct from mySavedMats (a named library you apply by hand)
     let myDefaultPileArt = { library: null, graveyard: null, exile: null }; // same idea, one slot per zone
+    let myDefaultCursorColor = null; // same idea, for the live cursor's color
+    let myDefaultCursorIcon = null;
+    let myDefaultCursorIconFit = null;
     let automatedCardNames = new Set(); // lowercase card names with some automation, sent once at auth time -- see deckAutomationCoverage
     let myCollection = {}; // archiveKey(name) -> {name,type,img} -- the "I own this" list, independent of any deck
     function ckey(name) { return (name || "").toLowerCase().trim(); }
@@ -1703,6 +1731,9 @@
       myAccountDefaultName = data.defaultName || null;
       myDefaultBoardMat = data.defaultBoardMat || null;
       myDefaultPileArt = data.defaultPileArt || { library: null, graveyard: null, exile: null };
+      myDefaultCursorColor = data.defaultCursorColor || null;
+      myDefaultCursorIcon = data.defaultCursorIcon || null;
+      myDefaultCursorIconFit = data.defaultCursorIconFit || null;
       mySavedMats = data.mats || {};
       mySavedPileMats = data.pileMats || {};
       automatedCardNames = new Set(data.automatedCardNames || []);
@@ -2141,6 +2172,14 @@
       myDefaultPileArt = d.pileArt || { library: null, graveyard: null, exile: null };
       if (document.getElementById("crop-modal").style.display === "flex") renderCropDefaultStatus();
       if (document.getElementById("settings-modal").style.display === "flex") renderBoardMatDefaultStatus();
+      if (document.getElementById("account-modal").style.display === "flex") renderAccountBoardMatDefaultStatus();
+    });
+    socket.on("defaultCursorUpdated", (d) => {
+      myDefaultCursorColor = d.color || null;
+      myDefaultCursorIcon = d.icon || null;
+      myDefaultCursorIconFit = d.iconFit || null;
+      if (document.getElementById("settings-modal").style.display === "flex") renderCursorDefaultStatus();
+      if (document.getElementById("account-modal").style.display === "flex") renderAccountCursorDefaultUI();
     });
 
     socket.on("deckSaved", () => { document.getElementById("deck-status").innerText = "Deck saved!"; });
@@ -2699,6 +2738,29 @@
       el.innerText = matches ? "✓ This is your default for new tables." : "You have a default set, but it's a different photo than your current mat.";
     }
 
+    // Same "direct set as default from what's currently active" shape as the board mat's own
+    // setBoardMatAsDefaultDirect -- saves whichever of color/icon you currently have live at this
+    // table (icon takes priority if both happen to be set, matching how the live cursor itself
+    // already prioritizes icon over color -- see renderOneCursor/the own-cursor mousemove handler).
+    function setCursorAsDefaultDirect() {
+      const me = players[myId];
+      if (!me || (!me.cursorColor && !me.cursorIcon)) { alert("Pick a cursor color or icon first (below), then you can save it as your default."); return; }
+      if (me.cursorIcon) socket.emit("setDefaultCursorIcon", { url: me.cursorIcon, ...(me.cursorIconFit || { scale: 1, x: 50, y: 50 }) });
+      else socket.emit("setDefaultCursorColor", me.cursorColor);
+    }
+    function clearCursorDefault() {
+      socket.emit("setDefaultCursorColor", null);
+      socket.emit("setDefaultCursorIcon", "");
+    }
+    function renderCursorDefaultStatus() {
+      const el = document.getElementById("cursor-default-status");
+      if (!el) return;
+      const me = players[myId];
+      if (!myDefaultCursorColor && !myDefaultCursorIcon) { el.innerText = "No default set for new tables yet."; return; }
+      const matches = me && ((myDefaultCursorIcon && me.cursorIcon === myDefaultCursorIcon) || (!myDefaultCursorIcon && myDefaultCursorColor && me.cursorColor === myDefaultCursorColor));
+      el.innerText = matches ? "✓ This is your default for new tables." : "You have a default set, but it's different from what you're using right now.";
+    }
+
     // ---------------- crop/zoom editor (board mat + pile art + cursor icon) ----------------
     // One shared modal for all three targets -- cropTarget tracks which one Apply/Clear should act on.
     let cropTarget = null; // { kind: "boardMat" } or { kind: "pile", zone: "library"|"graveyard"|"exile" } or { kind: "cursor" }
@@ -3047,6 +3109,11 @@
       const img = document.getElementById("account-avatar-preview");
       if (url) { img.src = url; img.style.display = ""; } else { img.style.display = "none"; }
     }
+    function renderAccountBoardMatDefaultStatus() {
+      const el = document.getElementById("account-boardmat-default-status");
+      if (!el) return;
+      el.innerText = myDefaultBoardMat ? "✓ A default board mat is set." : "No default set for new tables yet.";
+    }
     function openAccountModal() {
       document.getElementById("account-avatar-url").value = myAccountAvatar || "";
       document.getElementById("account-default-name").value = myAccountDefaultName || "";
@@ -3056,6 +3123,8 @@
       document.getElementById("account-new-password").value = "";
       document.getElementById("account-confirm-password").value = "";
       document.getElementById("account-password-status").innerText = "";
+      renderAccountBoardMatDefaultStatus();
+      renderAccountCursorDefaultUI();
       document.getElementById("account-modal").style.display = "flex";
     }
     function closeAccountModal() { document.getElementById("account-modal").style.display = "none"; }
@@ -4403,6 +4472,7 @@
       document.getElementById("settings-modal").style.display = "flex";
       renderBoardMatDefaultStatus();
       renderCursorColorSwatches();
+      renderCursorDefaultStatus();
       document.getElementById("cursor-icon-url").value = (players[myId] && players[myId].cursorIcon) || "";
     }
     function closeSettingsModal() { document.getElementById("settings-modal").style.display = "none"; }
@@ -4610,6 +4680,25 @@
       document.getElementById("cursor-icon-url").value = "";
       socket.emit("setCursorIcon", { url: "" });
     }
+    // Account modal's own cursor-default swatches -- deliberately separate from
+    // renderCursorColorSwatches above, since a default isn't tied to any one lobby and has no
+    // "taken by someone else at this table" concept to check against.
+    function renderAccountCursorDefaultUI() {
+      const el = document.getElementById("account-cursor-color-swatches");
+      if (!el) return;
+      el.innerHTML = CURSOR_COLORS.map((color) => {
+        const isMine = color === myDefaultCursorColor;
+        return `<div class="cursor-swatch${isMine ? " selected" : ""}" style="background:${color};" title="${isMine ? "Your default cursor color (click to clear)" : "Use this as your default color"}" onclick="pickAccountDefaultCursorColor('${color}')"></div>`;
+      }).join("");
+      document.getElementById("account-cursor-icon-url").value = myDefaultCursorIcon || "";
+    }
+    function pickAccountDefaultCursorColor(color) {
+      socket.emit("setDefaultCursorColor", myDefaultCursorColor === color ? null : color);
+    }
+    function setAccountDefaultCursorIcon() {
+      const url = document.getElementById("account-cursor-icon-url").value.trim();
+      socket.emit("setDefaultCursorIcon", { url });
+    }
 
     // Shared by cursor tracking and pinging below -- both need "where on #playmat, as a percentage,
     // did this mouse event happen," and both need to discard events that land on the wrapper but
@@ -4654,10 +4743,16 @@
       <defs><linearGradient id="my-cursor-default-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f3e2a0"/><stop offset="100%" stop-color="#b8860b"/></linearGradient></defs>
       <polygon points="1,1 1,16.5 5.2,12.9 7.9,19.3 10.3,18.2 7.6,12 13.4,12" fill="url(#my-cursor-default-grad)" stroke="#1a1409" stroke-width="1.3" stroke-linejoin="round"/>
     </svg>`;
+    const NON_TEXT_INPUT_TYPES = new Set(["button", "submit", "checkbox", "radio", "range", "color", "file", "image", "reset"]);
+    // Matches the CSS exception exactly -- a <select> or a non-text <input> (checkbox, range, file
+    // picker, etc.) is a clickable control, not a text-entry field, so it stays under the custom
+    // cursor same as a button. Only genuine typing surfaces (text-shaped inputs, textareas,
+    // contenteditable) get the native OS cursor/caret back.
     function isEditableCursorTarget(el) {
       while (el) {
         const tag = el.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable) return true;
+        if (tag === "TEXTAREA" || el.isContentEditable) return true;
+        if (tag === "INPUT" && !NON_TEXT_INPUT_TYPES.has((el.type || "text").toLowerCase())) return true;
         el = el.parentElement;
       }
       return false;
