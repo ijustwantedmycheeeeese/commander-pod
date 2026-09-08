@@ -418,6 +418,10 @@ const CARD_ABILITIES = {
   "field of the dead": [{ trigger: "landfall", requiresTarget: false,
     condition: (c, lobby) => new Set(Object.values(lobby.cards).filter((x) => x.owner === c.owner && x.zoneType === "mana").map((x) => archiveKey(x.name))).size >= 7,
     label: "Field of the Dead — create a 2/2 black Zombie", effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] }],
+  // Wave 28 -- City of Traitors: "When you play ANOTHER land, sacrifice this land." The mirror
+  // image of Field of the Dead just above -- this one WANTS the exclusion landfall doesn't apply by
+  // default, via the new excludeSelf flag on fireGlobalTrigger.
+  "city of traitors": [{ trigger: "landfall", excludeSelf: true, requiresTarget: false, label: "City of Traitors — sacrifice this land", effects: [{ type: "sacrificeSelf" }] }],
   // See EFFECTS.attachSelfToTarget for the attach itself; the indestructible grant is already
   // generic (equipEffectsFromText) once attached.
   "mithril coat": [{ trigger: "etb", label: "Mithril Coat — attach to target legendary creature you control", requiresTarget: true, targetKind: "ownCreature", effects: [{ type: "attachSelfToTarget" }] }],
@@ -1088,6 +1092,10 @@ const ATTACK_ALONE_CARDS = ["master of cruelties"];
 // planeswalker), or "spell" (anything currently on the stack, for counters).
 const SPELL_ABILITIES = {
   "armageddon": { label: "Armageddon — destroy all lands", effects: [{ type: "destroyAllLands" }] },
+  // Wave 28 -- "Exile up to two target artifacts and/or enchantments," same disclosed one-target
+  // narrowing as Angel of the Ruins' identical "up to two" clause (this app's target-choice queue
+  // takes one target per queued choice). Basic landcycling needs no entry -- cyclingCostFromText.
+  "sylvan reclamation": { label: "Sylvan Reclamation — exile target artifact or enchantment", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"] },
   // Batch-generated from data/oracle-catalog.json via tools/scan-spell-candidates.js -- same
   // real-Scryfall-text verification as the CARD_ABILITIES/ACTIVATED_ABILITIES batches. Every entry's
   // whole oracle text (not just one line -- a spell resolves atomically) matched one of a small set
@@ -1709,6 +1717,15 @@ const EFFECTS = {
   // many PLUS ONE are put on it instead" (an additive +1, not a doubling -- 1 becomes 2, 3 becomes
   // 4). See bonusCountersFor for the text-pattern detection; only applied when actually adding a
   // positive amount, matching the real card's "one or more... would be put" trigger condition.
+  // City of Traitors -- "sacrifice this land." Reads the source card back live (not the possibly-
+  // stale ctx.sourceCard reference) same "must re-look-up before removal" precedent every other
+  // sacrifice/death path in this app already follows.
+  sacrificeSelf(lobby, ctx) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    fireDeathTriggers(lobby, card);
+    sendToGraveyardInternal(lobby, card);
+  },
   addCountersToSelf(lobby, ctx, params) {
     const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
     if (!card) return;
@@ -5619,6 +5636,12 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       // whole battlefield (itself included, since it's removed from lobby.cards AFTER this fires),
       // so no separate "selfInclusive" flag is needed the way otherCreatureEtb's is.
       if (ability.typeFilter && !(eventCard && (eventCard.type || "").toLowerCase().includes(ability.typeFilter))) return;
+      // City of Traitors-style "when you play ANOTHER land" -- unlike landfall's own default
+      // self-inclusive firing (Field of the Dead counts itself among "seven or more lands," no
+      // exclusion wanted there), this permanent reacting needs to skip the case where IT is the one
+      // that just entered. c/eventCard are the same object here (the entering land triggering its
+      // own landfall against its controller's whole battlefield), so id equality is the right check.
+      if (ability.excludeSelf && eventCard && c.id === eventCard.id) return;
       // The Scarab God-style "X, where X is the number of [Type] you control" -- same
       // amountSource:"count" shape fireGlobalOtherCreatureEtbTriggers already uses, baked into
       // every effect in the array so both halves of "each opponent loses X life and you scry X"
