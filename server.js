@@ -582,6 +582,10 @@ const CARD_ABILITIES = {
   // entry either -- see applySelfAttackTypeCountPump/applyBattleCry, called from declareAttackers.
   "goblin instigator": [{ trigger: "etb", label: "Goblin Instigator — create a Goblin token", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
   "impact tremors": [{ trigger: "otherCreatureEtb", label: "Impact Tremors — deal 1 damage to each opponent", requiresTarget: false, effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] }],
+  // The static "Creatures you control have haste" half is already covered generically by
+  // anthemKeywordsFromText's own self-inclusive "creatures you control have [X]" branch -- no table
+  // entry needed for it at all, only this ETB draw trigger.
+  "temur ascendancy": [{ trigger: "otherCreatureEtb", label: "Temur Ascendancy — draw a card (entering creature has power 4 or greater)", requiresTarget: false, effects: [{ type: "drawCardIfEnteringPowerAtLeast", threshold: 4 }] }],
   // "of their choice" isn't a real per-opponent picker -- reuses eachOpponentSacrifices' existing
   // auto-pick (built for Pick Your Poison), same disclosed simplification as everywhere else.
   "grave pact": [{ trigger: "deathYouControl", label: "Grave Pact — each other player sacrifices a creature", requiresTarget: false, effects: [{ type: "eachOpponentSacrifices", zoneTypeFilter: "creature" }] }],
@@ -1610,6 +1614,15 @@ function effectTargets(lobby, controllerId, target) {
 }
 const EFFECTS = {
   drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
+  // Temur Ascendancy -- "Whenever a creature you control with power 4 or greater enters, you may
+  // draw a card." The auto-merged `amount` from fireGlobalOtherCreatureEtbTriggers (the entering
+  // creature's own power) is read here purely as a THRESHOLD gate, never as the draw count itself
+  // -- always draws exactly 1, same "amount means two different things to two different effects"
+  // situation the amount-merge fix's own comment describes.
+  drawCardIfEnteringPowerAtLeast(lobby, ctx, params) {
+    if ((params.amount || 0) < (params.threshold || 0)) return;
+    drawN(lobby, ctx.controllerId, 1);
+  },
   eachPlayerDrawsCards(lobby, ctx, params) {
     Object.keys(lobby.players).forEach((id) => drawN(lobby, id, params.amount || 1));
   },
