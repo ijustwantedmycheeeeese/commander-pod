@@ -1046,7 +1046,12 @@ const ACTIVATED_ABILITIES = {
   "icon of ancestry": [{ cost: { mana: "{3}", tap: true }, label: "Icon of Ancestry — look at the top three, take creature(s) of the chosen type to hand", effects: [{ type: "lookTopNRevealTypesToHand", amount: 3, typeFromChosenCreatureType: true }] }],
   // Wave 17 gap-analysis batch.
   "goblin bombardment": [{ cost: { autoSacrificeFilter: "creature" }, requiresTarget: true, targetKind: "any", label: "Goblin Bombardment — Sacrifice a creature: deal 1 damage to any target", effects: [{ type: "damageTarget", amount: 1 }] }],
-  "goblin trashmaster": [{ cost: { autoSacrificeFilter: "goblin" }, requiresTarget: true, targetKind: "artifact", label: "Goblin Trashmaster — Sacrifice a Goblin: destroy target artifact", effects: [{ type: "destroyTarget" }] }]
+  "goblin trashmaster": [{ cost: { autoSacrificeFilter: "goblin" }, requiresTarget: true, targetKind: "artifact", label: "Goblin Trashmaster — Sacrifice a Goblin: destroy target artifact", effects: [{ type: "destroyTarget" }] }],
+  // Shadowspear's equipped-creature bonus (+1/+1, trample, lifelink) is already covered generically
+  // by the equipment text-scan machinery -- only this second, unattached activated ability needed a
+  // real table entry. No target: it hits every opponent permanent at once (see
+  // removeHexproofIndestructibleFromOpponents).
+  "shadowspear": [{ cost: { mana: "{1}" }, label: "Shadowspear — Permanents your opponents control lose hexproof and indestructible until end of turn", effects: [{ type: "removeHexproofIndestructibleFromOpponents" }] }]
 };
 // Generic "[X creatures you control / All Xs / Other creatures you control] have '[ability]'"
 // grant detector -- the Sliver cycle's own defining template (Gemhide Sliver, Clot Sliver, Crypt
@@ -2006,6 +2011,18 @@ const EFFECTS = {
     if (!card) return;
     card.preventCombatDamageUntilEndOfTurn = true;
     broadcastCard(lobby, card);
+  },
+  // Shadowspear -- "Permanents your opponents control lose hexproof and indestructible until end of
+  // turn." Same per-card temporary-flag shape as preventCombatDamageFromTarget just above (set here,
+  // read in effectiveKeywords, swept in cleanupTemporaryKeywords), applied table-wide to every
+  // opponent permanent instead of one chosen target -- this ability has no target of its own.
+  removeHexproofIndestructibleFromOpponents(lobby, ctx) {
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner !== ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack") {
+        c.loseHexproofIndestructibleUntilEndOfTurn = true;
+        broadcastCard(lobby, c);
+      }
+    });
   },
   // Chameleon Colossus's own activated ability ("{2}{G}{G}: This creature gets +X/+X until end of
   // turn, where X is its power") -- reads its OWN current power (including any equipment/anthem/
@@ -4253,7 +4270,9 @@ function cleanupTemporaryKeywords(lobby) {
     const hasCopy = !!c._copyOriginal;
     // Kor Haven -- "this turn" combat damage prevention, same sweep as everything else here.
     const hasDamagePrevention = !!c.preventCombatDamageUntilEndOfTurn;
-    if (hasTempKw || hasGrantedProt || hasTempPT || hasCopy || hasDamagePrevention) {
+    // Shadowspear -- "until end of turn" hexproof/indestructible loss, same sweep.
+    const hasHexproofIndestructibleLoss = !!c.loseHexproofIndestructibleUntilEndOfTurn;
+    if (hasTempKw || hasGrantedProt || hasTempPT || hasCopy || hasDamagePrevention || hasHexproofIndestructibleLoss) {
       c.temporaryKeywords = [];
       c.grantedProtections = [];
       c.temporaryPT = null;
@@ -4262,6 +4281,7 @@ function cleanupTemporaryKeywords(lobby) {
         c._copyOriginal = null;
       }
       if (hasDamagePrevention) c.preventCombatDamageUntilEndOfTurn = false;
+      if (hasHexproofIndestructibleLoss) c.loseHexproofIndestructibleUntilEndOfTurn = false;
       broadcastCard(lobby, c);
     }
   }
@@ -4305,6 +4325,13 @@ function effectiveKeywords(lobby, card) {
       if (anthem.typeFilter && !(card.type || "").toLowerCase().includes(anthem.typeFilter)) continue;
       extra = extra.concat(anthem.keywords);
     }
+  }
+  // Shadowspear -- "Permanents your opponents control lose hexproof and indestructible until end of
+  // turn." Filtering here (rather than at the grant site) means every existing hexproof/indestructible
+  // check (targetIsUntargetableBy, dealtLethal, destroyTarget's own guard, etc.) respects the loss for
+  // free, since they all already read through this one function.
+  if (card.loseHexproofIndestructibleUntilEndOfTurn) {
+    extra = extra.filter((k) => !["hexproof", "indestructible"].includes((k || "").toLowerCase()));
   }
   return [...new Set(extra)];
 }
