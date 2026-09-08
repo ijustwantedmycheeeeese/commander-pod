@@ -713,6 +713,7 @@ const ACTIVATED_ABILITIES = {
   // land is handled generically by getGrantedActivatedAbilities/grantedAbilityGrantMatches, no
   // table entry needed for that half at all.
   "chromatic lantern": [{ cost: { tap: true }, manaAbility: true, label: "Chromatic Lantern — Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }],
+  "torch courier": [{ cost: { sacrifice: true }, label: "Torch Courier — another target creature gains haste until end of turn", requiresTarget: true, targetKind: "otherCreature", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Haste" }] }],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -5354,6 +5355,15 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (entry.sourceCard && c.id === entry.sourceCard.id) return { ok: false, error: "Choose ANOTHER creature you control, not this one." };
     return { ok: true };
   }
+  // Torch Courier -- "ANOTHER target creature," any controller's (unlike otherOwnCreature's
+  // own-only restriction), excluding the source itself the same way.
+  if (targetKind === "otherCreature") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "creature") return { ok: false, error: "Choose another creature." };
+    if (entry.sourceCard && c.id === entry.sourceCard.id) return { ok: false, error: "Choose ANOTHER creature, not this one." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
   if (targetKind === "ownGraveyardCreature") {
     const p = lobby.players[entry.controllerId];
     const found = p && (p.graveyard || []).find((e) => e.id === targetId && (e.type || "").toLowerCase().includes("creature"));
@@ -7710,6 +7720,12 @@ io.on("connection", (socket) => {
     if (ability.requiresTarget && ability.targetKind === "attackingCreature") {
       const hasMatch = Object.keys(lobby.combat.attackers || {}).length > 0;
       if (!hasMatch) { socket.emit("actionError", "There's no attacking creature to target."); return; }
+    }
+    // Torch Courier -- same "reject before paying" reason, for when there's no OTHER creature on
+    // the battlefield to target (checked before this creature sacrifices itself as part of the cost).
+    if (ability.requiresTarget && ability.targetKind === "otherCreature") {
+      const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && c.id !== card.id);
+      if (!hasMatch) { socket.emit("actionError", "There's no other creature to target."); return; }
     }
     // Temple of the False God -- "Activate only if you control five or more lands." A real
     // activation-condition gate, checked before anything is paid, same "reject before paying" reason
