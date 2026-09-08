@@ -6394,9 +6394,26 @@ function applyLifeGain(lobby, playerId, amount) {
 // Returns true if `playerId` actually lost the life (the normal case -- callers that also track
 // something ELSE alongside a life loss, like commander damage, should gate that on this return
 // value too, since a locked/redirected hit means THIS player never really took the damage).
+// Bloodletter of Aclazotz -- "If an opponent would lose life during YOUR turn, they lose twice
+// that much life instead." A real CR 614 replacement effect on the single applyLifeLoss choke
+// point everything (damage-derived loss included, per the card's own reminder text) already funnels
+// through -- scoped to whoever's turn it currently is (the controller's), and only ever doubles an
+// OPPONENT's loss, never the controller's own.
+function bloodletterMultiplierFor(lobby, victimId) {
+  if (!lobby.turn.started) return 1;
+  const activeId = lobby.turn.order[lobby.turn.activeIndex];
+  if (!activeId || victimId === activeId) return 1;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== activeId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (/if an opponent would lose life during your turn, they lose twice that much life instead/i.test(c.text || "")) return 2;
+  }
+  return 1;
+}
 function applyLifeLoss(lobby, playerId, amount, sourceCardId) {
   const p = lobby.players[playerId];
   if (!p || amount <= 0) return false;
+  amount *= bloodletterMultiplierFor(lobby, playerId);
   if (p.lifeLocked) return false; // Teferi's Protection -- "your life total can't change"
   // Deflecting Palm -- "the next time a source of your choice would deal damage to you this turn,
   // prevent it; that source's controller takes that much instead." One-shot: consumed the first
