@@ -322,6 +322,7 @@ const CARD_ABILITIES = {
   "balefire dragon": [{ trigger: "combatDamageToPlayer", label: "Balefire Dragon — damage each creature they control", effects: [{ type: "damageAllCreaturesOfPlayer" }] }],
   "demon of loathing": [{ trigger: "combatDamageToPlayer", label: "Demon of Loathing — they sacrifice a creature", effects: [{ type: "sacrificeACreatureOfPlayer" }] }],
   "ancient copper dragon": [{ trigger: "combatDamageToPlayer", label: "Ancient Copper Dragon — roll a d20, create that many Treasures", effects: [{ type: "rollD20CreateTreasures" }] }],
+  "warren instigator": [{ trigger: "combatDamageToPlayer", label: "Warren Instigator — put a Goblin creature card from your hand onto the battlefield", requiresTarget: true, targetKind: "handCard", handTypeFilter: ["goblin"], effects: [{ type: "putHandCardOntoBattlefield" }] }],
   // Wave 25 -- "a creature you control" (not "this creature") needs the new global variant
   // (fireGlobalCombatDamageToPlayerTrigger/"anyCreatureCombatDamageToPlayer"), not the self-only
   // "combatDamageToPlayer" trigger the entries just above use.
@@ -2975,6 +2976,20 @@ const EFFECTS = {
   // counts as "this creature attacks" for its own triggers), and skips it entirely if Kaalia
   // somehow isn't attacking anymore (removed from combat by a response) rather than stranding a
   // creature attacking nothing.
+  // Warren Instigator -- putFromHandAttacking's plain counterpart: onto the battlefield normally,
+  // not forced into the current combat.
+  putHandCardOntoBattlefield(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card || card.zoneType !== "hand") return;
+    card.zoneType = classifyType(card.type);
+    card.faceDown = false;
+    card.controllerSince = lobby.turn.turnNumber;
+    if (entersTapped(card, lobby)) card.tapped = true;
+    broadcastCard(lobby, card);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "?"} put ${card.name || "a card"} onto the battlefield`);
+    fireEtbTriggers(lobby, card);
+  },
   putFromHandAttacking(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (!card || card.zoneType !== "hand") return;
@@ -6146,7 +6161,22 @@ function fireCombatDamageToPlayerTriggers(lobby, card, defenderId, amount) {
   getAutomatedAbilities(card.name, "combatDamageToPlayer").forEach((ability) => {
     if (ability.condition && !ability.condition(card)) return;
     const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId, dealtToPlayerAmount: amount }));
-    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
+    // Warren Instigator -- "you may put a Goblin creature card from your hand onto the battlefield"
+    // needs a real target choice, unlike every other self-only combatDamageToPlayer entry so far
+    // (all of which go straight to the stack) -- purely additive, existing non-target entries are
+    // completely unaffected since ability.requiresTarget is falsy for all of them.
+    if (ability.requiresTarget) {
+      // Same CR 603.3c auto-fizzle as fireTrigger's own handCard guard -- without this, dealing
+      // combat damage with no matching card in hand would still queue an unanswerable prompt.
+      if (ability.targetKind === "handCard") {
+        const filter = ability.handTypeFilter || [];
+        const hasMatch = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "hand" && filter.some((t) => (c.type || "").toLowerCase().includes(t.toLowerCase())));
+        if (!hasMatch) return;
+      }
+      queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter });
+    } else {
+      pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
+    }
   });
 }
 // Old Gnawbone / Zeriam, Golden Wind and similar -- "Whenever A CREATURE YOU CONTROL (optionally
