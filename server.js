@@ -647,7 +647,12 @@ const CARD_ABILITIES = {
   // Wave 24 -- reuses the pre-existing untapUpToNOwnLands effect (built for Frantic Search) as-is.
   "peregrine drake": [{ trigger: "etb", label: "Peregrine Drake — untap up to five lands", requiresTarget: false, effects: [{ type: "untapUpToNOwnLands", amount: 5 }] }],
   "mistmoon griffin": [{ trigger: "death", label: "Mistmoon Griffin — exile it, then return the top creature card of your graveyard to the battlefield", requiresTarget: false, effects: [{ type: "exileSelfAndReanimateTopGraveyardCreature" }] }],
-  "child of alara": [{ trigger: "death", label: "Child of Alara — destroy all nonland permanents, they can't be regenerated", requiresTarget: false, effects: [{ type: "destroyAllNonlandPermanents", noRegen: true }] }]
+  "child of alara": [{ trigger: "death", label: "Child of Alara — destroy all nonland permanents, they can't be regenerated", requiresTarget: false, effects: [{ type: "destroyAllNonlandPermanents", noRegen: true }] }],
+  // Kyodai, Soul of Kamigawa -- excludeSelf enforces the real "ANOTHER target permanent" wording
+  // (see resolveChosenTarget's own comment). The activated {W}{U}{B}{R}{G} pump is a separate
+  // ACTIVATED_ABILITIES entry below (grantTemporaryPTAndKeywordsToTarget targeting itself is the
+  // creature-buff shape Kessig Wolf Run already established, just self-targeted here).
+  "kyodai, soul of kamigawa": [{ trigger: "etb", label: "Kyodai, Soul of Kamigawa — another target permanent gains indestructible for as long as you control Kyodai", requiresTarget: true, targetKind: "permanent", excludeSelf: true, effects: [{ type: "grantIndestructibleWhileSourceControlled" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
   const all = CARD_ABILITIES[archiveKey(cardName)] || [];
@@ -1115,7 +1120,8 @@ const ACTIVATED_ABILITIES = {
     conditionError: "You can only activate this during your own upkeep.",
     label: "Mtenda Griffin — return this creature to hand and return target Griffin card from your graveyard to your hand",
     effects: [{ type: "bounceSelfToHand" }, { type: "returnGraveyardCardToHand" }]
-  }]
+  }],
+  "kyodai, soul of kamigawa": [{ cost: { mana: "{W}{U}{B}{R}{G}" }, label: "Kyodai, Soul of Kamigawa — gets +5/+5 until end of turn", effects: [{ type: "grantTemporaryPTToSelf", power: 5, toughness: 5 }] }]
 };
 // Generic "[X creatures you control / All Xs / Other creatures you control] have '[ability]'"
 // grant detector -- the Sliver cycle's own defining template (Gemhide Sliver, Clot Sliver, Crypt
@@ -2093,6 +2099,15 @@ const EFFECTS = {
     const card = lobby.cards[params.chosenTargetId];
     if (card) grantTemporaryKeyword(lobby, card, params.keyword);
   },
+  // Kyodai, Soul of Kamigawa -- "another target permanent gains indestructible for as long as you
+  // control Kyodai." Stores the SOURCE's own id (Kyodai, via ctx.sourceCard) on the target; see
+  // effectiveKeywords' own comment for how this gets read back live, with no cleanup needed.
+  grantIndestructibleWhileSourceControlled(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card || !ctx.sourceCard) return;
+    card.grantedIndestructibleWhileSourceId = ctx.sourceCard.id;
+    broadcastCard(lobby, card);
+  },
   // Kor Haven -- "Prevent all combat damage that would be dealt by target attacking creature this
   // turn." See resolveCombatDamage's own dealingPower helper for where this is actually enforced.
   preventCombatDamageFromTarget(lobby, ctx, params) {
@@ -2524,6 +2539,13 @@ const EFFECTS = {
     const toughness = (params.toughness || 0) + (params.xToughness ? (params.xAmount || 0) : 0);
     if (power || toughness) grantTemporaryPT(lobby, card, power, toughness);
     (params.keywords || []).forEach((k) => grantTemporaryKeyword(lobby, card, k));
+  },
+  // Kyodai, Soul of Kamigawa -- "{W}{U}{B}{R}{G}: Kyodai gets +5/+5 until end of turn." A pure self
+  // buff with no targeting at all, unlike grantTemporaryPTAndKeywordsToTarget just above -- reuses
+  // the same shared grantTemporaryPT helper directly on ctx.sourceCard.
+  grantTemporaryPTToSelf(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (card) grantTemporaryPT(lobby, card, params.power || 0, params.toughness || 0);
   },
   // Icon of Ancestry / Cavern of Souls -- "As this permanent enters, choose a creature type." Free
   // text (targetKind:"creatureType"), not validated against a real creature-type list -- same
@@ -4506,6 +4528,16 @@ function effectiveKeywords(lobby, card) {
     const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === lifeKwMatch[2].toLowerCase());
     if (p && kw && p.life >= parseInt(lifeKwMatch[1], 10)) extra.push(kw);
   }
+  // Kyodai, Soul of Kamigawa -- "target permanent gains indestructible for as long as you control
+  // Kyodai." A LINKED-duration grant (not "until end of turn," tied to a specific OTHER permanent's
+  // continued presence) -- stored as a source id on the card itself, checked LIVE here rather than
+  // swept by cleanupTemporaryKeywords, so it naturally keeps applying across turns and just as
+  // naturally stops the moment that source is gone, with zero cleanup code needed. Applies to any
+  // permanent type (not gated by the creature-only anthem loop below), matching this function's own
+  // non-creature callers (destroyAllNonlandPermanents, etc.).
+  if (card.grantedIndestructibleWhileSourceId && lobby.cards[card.grantedIndestructibleWhileSourceId]) {
+    extra.push("Indestructible");
+  }
   if (card.zoneType === "creature") {
     for (const id in lobby.cards) {
       const c = lobby.cards[id];
@@ -5749,6 +5781,10 @@ function resolveChosenTarget(lobby, entry, targetId) {
   if (targetKind === "permanent") {
     const c = lobby.cards[targetId];
     if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent." };
+    // Kyodai, Soul of Kamigawa -- "ANOTHER target permanent." Reuses the same excludeSelf naming
+    // convention fireGlobalTrigger's own excludeSelf flag already established, just applied to a
+    // real target choice instead of a global-trigger scan.
+    if (entry.excludeSelf && entry.sourceCard && c.id === entry.sourceCard.id) return { ok: false, error: "Choose another permanent." };
     if (entry.minCmc && (c.cmc || 0) < entry.minCmc) return { ok: false, error: `${c.name || "That permanent"}'s mana value is too low to target with this.` };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
@@ -6007,7 +6043,7 @@ function fireTrigger(lobby, card, ability, xValue) {
       const hasMatch = Object.values(lobby.cards).some((c) => (c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana") && filter.some((t) => (c.type || "").toLowerCase().includes(t)));
       if (!hasMatch) return;
     }
-    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, maxCmc: ability.maxCmc, commanderChoices });
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, maxCmc: ability.maxCmc, excludeSelf: ability.excludeSelf, commanderChoices });
   } else {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   }
