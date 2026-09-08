@@ -4371,6 +4371,16 @@ function checkEquipmentCombatDamageTreasure(lobby, dealingCard, amount) {
     pushLog(lobby, `${(lobby.players[dealingCard.owner] || {}).name || "Someone"} creates ${amount} Treasure token${amount === 1 ? "" : "s"} (${c.name || "Equipment"} — dealt combat damage to a player)`);
   }
 }
+// Sting, the Glinting Dagger -- "At the beginning of each combat, untap equipped creature." A plain
+// text-scan sweep (see advanceOnePhase's own call site comment for why this isn't a CARD_ABILITIES
+// dispatch), checked once per real Combat-phase entry regardless of whose turn it is.
+function checkStingUntapEquippedCreature(lobby) {
+  Object.values(lobby.cards).forEach((c) => {
+    if (!c.attachedTo || !/at the beginning of each combat, untap equipped creature/i.test(c.text || "")) return;
+    const host = lobby.cards[c.attachedTo];
+    if (host && host.tapped) { host.tapped = false; broadcastCard(lobby, host); }
+  });
+}
 // Tarrian's Soulcleaver -- "Whenever another artifact or creature is put into a graveyard from the
 // battlefield, put a +1/+1 counter on equipped creature." A genuinely GLOBAL death watch for an
 // equipment (unlike the rest of this "reacts to its own held creature" family above, which only
@@ -4585,6 +4595,23 @@ function effectiveKeywords(lobby, card) {
   // non-creature callers (destroyAllNonlandPermanents, etc.).
   if (card.grantedIndestructibleWhileSourceId && lobby.cards[card.grantedIndestructibleWhileSourceId]) {
     extra.push("Indestructible");
+  }
+  // Sting, the Glinting Dagger -- "Equipped creature has first strike as long as it's blocking or
+  // blocked by a Goblin or Orc." A combat-state-dependent granted keyword, checked LIVE against
+  // lobby.combat's own attacker/blocks maps (attackerId -> defenderId, attackerId -> [blockerIds])
+  // rather than anything stored on the card -- "blocking" means this card's id appears in some
+  // attacker's blocks list; "blocked" means this card is itself an attacker with a Goblin/Orc among
+  // ITS OWN blockers.
+  if (card.zoneType === "creature" && lobby.combat) {
+    const isGoblinOrOrc = (id) => { const c = lobby.cards[id]; return c && /goblin|orc/i.test(c.type || ""); };
+    for (const id in lobby.cards) {
+      const c = lobby.cards[id];
+      if (c.attachedTo !== card.id || !/equipped creature has first strike as long as it'?s blocking or blocked by a goblin or orc/i.test(c.text || "")) continue;
+      const isBlocking = Object.entries(lobby.combat.blocks || {}).some(([atkId, blockerIds]) => (blockerIds || []).includes(card.id) && isGoblinOrOrc(atkId));
+      const isBlockedByGoblinOrOrc = (lobby.combat.blocks[card.id] || []).some(isGoblinOrOrc);
+      if (isBlocking || isBlockedByGoblinOrOrc) extra.push("First Strike");
+      break;
+    }
   }
   if (card.zoneType === "creature") {
     for (const id in lobby.cards) {
@@ -7073,6 +7100,12 @@ function advanceOnePhase(lobby) {
   // "At the beginning of combat on your turn" triggers (Howlsquad Heavy) -- same reuse of
   // fireGlobalTrigger as Upkeep/End Step below, just keyed to the Combat phase itself.
   if (activePlayer && turn.phase === "Combat") fireGlobalTrigger(lobby, "beginningOfCombat", activeId);
+  // Sting, the Glinting Dagger -- "At the beginning of EACH combat, untap equipped creature." Unlike
+  // Howlsquad Heavy just above (scoped to the active player's own turn via fireGlobalTrigger), this
+  // fires regardless of whose turn it is, and isn't a real target-choosing/stack-pushing trigger at
+  // all -- a direct text-scan sweep is simpler than inventing a whole new "any player's combat"
+  // CARD_ABILITIES trigger scope for one card.
+  if (turn.phase === "Combat") checkStingUntapEquippedCreature(lobby);
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
