@@ -1078,6 +1078,10 @@ const ACTIVATED_ABILITIES = {
   "icon of ancestry": [{ cost: { mana: "{3}", tap: true }, label: "Icon of Ancestry — look at the top three, take creature(s) of the chosen type to hand", effects: [{ type: "lookTopNRevealTypesToHand", amount: 3, typeFromChosenCreatureType: true }] }],
   // Wave 17 gap-analysis batch.
   "goblin bombardment": [{ cost: { autoSacrificeFilter: "creature" }, requiresTarget: true, targetKind: "any", label: "Goblin Bombardment — Sacrifice a creature: deal 1 damage to any target", effects: [{ type: "damageTarget", amount: 1 }] }],
+  // "Other Goblins you control get +1/+1" needs no table entry -- already generic (anthemEffectsFromText's
+  // self-inclusive-typed-anthem branch). The dynamic damage amount is computed fresh at activation
+  // time (see damageEqualToGoblinsEnteredThisTurn's own comment).
+  "hobgoblin bandit lord": [{ cost: { mana: "{R}", tap: true }, requiresTarget: true, targetKind: "any", label: "Hobgoblin Bandit Lord — deal damage equal to Goblins that entered this turn to any target", effects: [{ type: "damageEqualToGoblinsEnteredThisTurn" }] }],
   "goblin trashmaster": [{ cost: { autoSacrificeFilter: "goblin" }, requiresTarget: true, targetKind: "artifact", label: "Goblin Trashmaster — Sacrifice a Goblin: destroy target artifact", effects: [{ type: "destroyTarget" }] }],
   // Shadowspear's equipped-creature bonus (+1/+1, trample, lifelink) is already covered generically
   // by the equipment text-scan machinery -- only this second, unattached activated ability needed a
@@ -2852,6 +2856,18 @@ const EFFECTS = {
   // Sub-lethal damage to a creature has no persistent effect: this app never marks/tracks damage
   // between separate actions (combat damage is likewise computed fresh and instantaneous each time,
   // never stored on the card), so there's nothing to represent short of destroying it outright.
+  // Hobgoblin Bandit Lord -- "damage equal to the number of Goblins that entered the battlefield
+  // under your control THIS TURN." No separate per-turn counter needed: every permanent already
+  // gets stamped with controllerSince = the turn number it entered (spawnBattlefieldCard, used for
+  // summoning sickness) -- comparing that against the CURRENT turn number is exactly "entered this
+  // turn," and it already covers tokens (Krenko/Hordeling Outburst, etc.) the same as real cards
+  // since they go through the same spawn path. Delegates to damageTarget itself (not a separate
+  // damage-application copy) so Twinflame Tyrant-style doubling and everything else damageTarget
+  // already handles keeps working here for free.
+  damageEqualToGoblinsEnteredThisTurn(lobby, ctx, params) {
+    const amount = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && c.controllerSince === lobby.turn.turnNumber && (c.type || "").toLowerCase().includes("goblin")).length;
+    EFFECTS.damageTarget(lobby, ctx, { ...params, amount });
+  },
   damageTarget(lobby, ctx, params) {
     let amount = params.amount || 0;
     const sourceCardId = ctx.sourceCard && ctx.sourceCard.id;
