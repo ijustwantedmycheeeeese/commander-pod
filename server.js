@@ -682,6 +682,10 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Cascading Cataracts — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { tap: true, mana: "{5}" }, manaAbility: true, label: "Cascading Cataracts — Add five mana in any combination of colors", effects: [{ type: "chooseManaAnyColorRepeated", count: 5, sourceName: "Cascading Cataracts" }] }
   ],
+  "emergence zone": [
+    { cost: { tap: true }, manaAbility: true, label: "Emergence Zone — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Emergence Zone — you may cast spells this turn as though they had flash", effects: [{ type: "grantFlashUntilEndOfTurn" }] }
+  ],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -2021,6 +2025,15 @@ const EFFECTS = {
     p.cantCastSpells = true;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} can't cast spells this turn`);
+  },
+  // Emergence Zone -- "you may cast spells this turn as though they had flash." cantCastSpells's own
+  // exact mirror (checkTiming's own isInstantSpeed check, cleared at the same end-of-turn cleanup).
+  grantFlashUntilEndOfTurn(lobby, ctx) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.hasFlashUntilEndOfTurn = true;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} may cast spells this turn as though they had flash`);
   },
   // Orim's Chant, kicked -- "creatures can't attack this turn." Table-wide (the real wording has
   // no "you control"), enforced in declareAttackers, cleared at the same cleanup.
@@ -4077,6 +4090,8 @@ function cleanupTemporaryKeywords(lobby) {
   for (const pid in lobby.players) {
     const p = lobby.players[pid];
     if (p.cantCastSpells) { p.cantCastSpells = false; restrictionsChanged = true; }
+    // Emergence Zone -- "this turn," the exact mirror of cantCastSpells just above.
+    if (p.hasFlashUntilEndOfTurn) { p.hasFlashUntilEndOfTurn = false; restrictionsChanged = true; }
     // Deflecting Palm -- "this turn," swept here if the chosen source never actually dealt damage.
     if (p.deflectingPalmSource) { p.deflectingPalmSource = null; restrictionsChanged = true; }
   }
@@ -4913,7 +4928,11 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
 // started there's no turn structure yet, so pregame setup stays unrestricted.
 function checkTiming(lobby, socketId, card) {
   const text = (card.type || "").toLowerCase();
-  const isInstantSpeed = text.includes("instant") || (Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash"));
+  // Emergence Zone -- "you may cast SPELLS this turn as though they had flash" never applies to a
+  // land drop (playing a land is never "casting a spell" in real Magic), same exemption
+  // canCastSpells's own cantCastSpells check already makes below.
+  const isInstantSpeed = text.includes("instant") || (Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash"))
+    || (!text.includes("land") && lobby.players[socketId] && lobby.players[socketId].hasFlashUntilEndOfTurn);
   if (lobby.stack.length > 0) {
     // A priority round is active: only the current holder may act, and only with an
     // instant-speed spell (which includes land drops? no -- lands are never instant-speed, so
