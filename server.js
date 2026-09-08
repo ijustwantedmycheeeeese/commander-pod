@@ -5389,13 +5389,27 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
 // Instants (and anything with Flash) can be played anytime; everything else is sorcery-speed —
 // only on your own turn, during a main phase, with the stack empty. Before the game is actually
 // started there's no turn structure yet, so pregame setup stays unrestricted.
+// Quick Sliver -- "Any player may cast Sliver spells as though they had flash." A table-wide,
+// ALL-players grant (unlike Emergence Zone's own hasFlashUntilEndOfTurn, which is per-player and
+// temporary) -- scanning the whole battlefield for this exact template, same name-independent
+// text-scan precedent as everywhere else in this file. Scoped to whatever type word the card names
+// (e.g. "Sliver"), matched against the CAST card's own type line.
+function anyPlayerFlashGrantAppliesTo(lobby, card) {
+  const cardType = (card.type || "").toLowerCase();
+  return Object.values(lobby.cards).some((c) => {
+    if (c.zoneType === "hand" || c.zoneType === "stack") return false;
+    const m = (c.text || "").match(/any player may cast (\w+) spells as though they had flash/i);
+    return m && cardType.includes(m[1].toLowerCase());
+  });
+}
 function checkTiming(lobby, socketId, card) {
   const text = (card.type || "").toLowerCase();
   // Emergence Zone -- "you may cast SPELLS this turn as though they had flash" never applies to a
   // land drop (playing a land is never "casting a spell" in real Magic), same exemption
   // canCastSpells's own cantCastSpells check already makes below.
   const isInstantSpeed = text.includes("instant") || (Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash"))
-    || (!text.includes("land") && lobby.players[socketId] && lobby.players[socketId].hasFlashUntilEndOfTurn);
+    || (!text.includes("land") && lobby.players[socketId] && lobby.players[socketId].hasFlashUntilEndOfTurn)
+    || anyPlayerFlashGrantAppliesTo(lobby, card);
   if (lobby.stack.length > 0) {
     // A priority round is active: only the current holder may act, and only with an
     // instant-speed spell (which includes land drops? no -- lands are never instant-speed, so
