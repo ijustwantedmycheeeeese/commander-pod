@@ -697,6 +697,10 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Emergence Zone — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Emergence Zone — you may cast spells this turn as though they had flash", effects: [{ type: "grantFlashUntilEndOfTurn" }] }
   ],
+  "witch's clinic": [
+    { cost: { tap: true }, manaAbility: true, label: "Witch's Clinic — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{2}", tap: true }, label: "Witch's Clinic — target commander gains lifelink until end of turn", requiresTarget: true, targetKind: "commander", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Lifelink" }] }
+  ],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -5258,6 +5262,14 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
+  // Witch's Clinic -- "target commander," any player's, not restricted to your own the way
+  // ownCreature is. isCommander is already stamped on the card at cast/battlefield time.
+  if (targetKind === "commander") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "creature" || !c.isCommander) return { ok: false, error: "Choose a commander." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That commander"} can't be targeted by this.` };
+    return { ok: true };
+  }
   if (targetKind === "ownPermanent") {
     const c = lobby.cards[targetId];
     if (!c || c.owner !== entry.controllerId || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent you control." };
@@ -7632,6 +7644,12 @@ io.on("connection", (socket) => {
       const filter = ability.typeFilter || [];
       const hasMatch = (p.graveyard || []).some((e) => filter.some((t) => (e.type || "").toLowerCase().includes(t)));
       if (!hasMatch) { socket.emit("actionError", `There's no matching card in your graveyard to target.`); return; }
+    }
+    // Witch's Clinic -- same "reject before paying" reason, for when no commander is on the
+    // battlefield at all (any player's, not just yours).
+    if (ability.requiresTarget && ability.targetKind === "commander") {
+      const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && c.isCommander);
+      if (!hasMatch) { socket.emit("actionError", "There's no commander on the battlefield to target."); return; }
     }
     // Temple of the False God -- "Activate only if you control five or more lands." A real
     // activation-condition gate, checked before anything is paid, same "reject before paying" reason
