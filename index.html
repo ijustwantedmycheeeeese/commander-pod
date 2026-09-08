@@ -380,6 +380,13 @@
 </head>
 <body>
 
+  <!-- Sibling of every top-level screen (auth/main-menu/deck-editor/app-root), not nested inside
+       any one of them -- those are mutually-exclusive display:none blocks, and anything nested
+       inside one is invisible while another is showing (the same class of bug PR #146's My
+       Collection/card-pool modals hit). The cursor needs to work on ALL of them, login screen
+       included, so it lives here instead. -->
+  <div id="my-cursor"></div>
+
   <div id="auth-screen">
     <div id="auth-box">
       <h2 class="mtg-title" style="margin-top:0;">Archon</h2>
@@ -636,7 +643,6 @@
     </div>
 
     <div id="preview-panel"><div class="card-art-wrap"><img id="preview-img" src=""><div id="preview-pt-overlay-slot"></div></div><div class="pv-name" id="preview-name"></div></div>
-    <div id="my-cursor"></div>
 
     <div id="target-choice-banner">
       <div id="target-choice-banner-text"></div>
@@ -4634,12 +4640,20 @@
 
     // ---------------- your own cursor (replaces the native OS pointer everywhere) ----------------
     // Purely local -- unlike otherCursors above, there's no reason to round-trip your own mouse
-    // position through the server just to draw it back on your own screen. Over the board it
-    // mirrors EXACTLY what other players see of you (same color/icon logic as renderOneCursor), so
-    // this doubles as a live "this is what your cursor looks like to the table" preview. Anywhere
-    // else on the page it falls back to a plain gold dot -- the site's own default replacement for
-    // the native pointer this app hides everywhere (see the `* { cursor: none }` CSS rule).
+    // position through the server just to draw it back on your own screen. ONE consistent cursor
+    // for the whole page, board or not -- deliberately NOT board-dependent the way earlier drafts
+    // of this feature were, since switching appearance depending on what's under the mouse read as
+    // inconsistent rather than helpful. Uses your explicit cursor customization (Settings -> cursor
+    // color/icon) if you've ever set one, same as what other players already see of you on the
+    // board; otherwise shows the site's own default MTG-styled arrow until you do.
     const myCursorEl = document.getElementById("my-cursor");
+    // A small gold-gradient arrow, shaped like a traditional pointer (not just a dot) so it still
+    // reads clearly as "a cursor" at a glance -- the site's default look for anyone who hasn't
+    // picked their own cursor color/icon.
+    const DEFAULT_CURSOR_SVG = `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg" style="display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.7));">
+      <defs><linearGradient id="my-cursor-default-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f3e2a0"/><stop offset="100%" stop-color="#b8860b"/></linearGradient></defs>
+      <polygon points="1,1 1,16.5 5.2,12.9 7.9,19.3 10.3,18.2 7.6,12 13.4,12" fill="url(#my-cursor-default-grad)" stroke="#1a1409" stroke-width="1.3" stroke-linejoin="round"/>
+    </svg>`;
     function isEditableCursorTarget(el) {
       while (el) {
         const tag = el.tagName;
@@ -4657,18 +4671,20 @@
       if (isEditableCursorTarget(e.target)) { myCursorEl.style.display = "none"; return; }
       myCursorEl.style.display = "block";
       const me = players[myId];
-      const overBoard = !!playmatRelativePosition(e);
+      // Only your OWN explicit cursor customization opts you out of the default arrow -- NOT the
+      // auto-assigned per-seat `p.color` every player already has for name tags/tab underlines,
+      // which would otherwise mean nobody ever actually saw the new default look.
       let fingerprint, markerHtml;
-      if (overBoard && me) {
-        const color = me.cursorColor || me.color || "#f0e6c8";
+      if (me && me.cursorIcon) {
         const fit = me.cursorIconFit || { scale: 1, x: 50, y: 50 };
-        fingerprint = `board|${color}|${me.cursorIcon || ""}|${fit.scale}|${fit.x}|${fit.y}`;
-        markerHtml = me.cursorIcon
-          ? `<div class="remote-cursor-icon-wrap"><img class="remote-cursor-icon" src="${escapeHtml(me.cursorIcon)}" style="object-position:${fit.x}% ${fit.y}%;transform:scale(${fit.scale});"></div>`
-          : `<div class="remote-cursor-dot" style="background:${color};"></div>`;
+        fingerprint = `icon|${me.cursorIcon}|${fit.scale}|${fit.x}|${fit.y}`;
+        markerHtml = `<div class="remote-cursor-icon-wrap"><img class="remote-cursor-icon" src="${escapeHtml(me.cursorIcon)}" style="object-position:${fit.x}% ${fit.y}%;transform:scale(${fit.scale});"></div>`;
+      } else if (me && me.cursorColor) {
+        fingerprint = `color|${me.cursorColor}`;
+        markerHtml = `<div class="remote-cursor-dot" style="background:${me.cursorColor};"></div>`;
       } else {
         fingerprint = "default";
-        markerHtml = `<div class="remote-cursor-dot" style="background:#d4af37;"></div>`;
+        markerHtml = DEFAULT_CURSOR_SVG;
       }
       // Same rebuild-only-when-changed guard as renderOneCursor -- rebuilding an <img> icon on every
       // single mousemove would restart a GIF's animation from frame 1 every time.
