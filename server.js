@@ -987,6 +987,7 @@ const ACTIVATED_ABILITIES = {
   // Wave 14 gap-analysis batch.
   // "{T}: Add {C}." needs no table entry (free single-color tap shortcut).
   "bloom tender": [{ cost: { tap: true }, manaAbility: true, label: "Bloom Tender — Add one mana of each color among permanents you control", effects: [{ type: "addManaForEachColorControlled" }] }],
+  "faeburrow elder": [{ cost: { tap: true }, manaAbility: true, label: "Faeburrow Elder — Add one mana of each color among permanents you control", effects: [{ type: "addManaForEachColorControlled" }] }],
   "aggravated assault": [{ cost: { mana: "{3}{R}{R}" }, label: "Aggravated Assault — untap all creatures you control, take an extra combat phase", effects: [{ type: "untapAllCreaturesAndExtraCombat" }] }],
   // "Activate only if you control a creature with power 4 or greater" -- a real activation-condition
   // gate (same (card, lobby) convention as Temple of the False God's own condition), checked against
@@ -4497,12 +4498,31 @@ function parseKeywordList(raw) {
 // (source can be a creature "lord", artifact, or enchantment; classifyType buckets all three under
 // zoneType "artifact" except creatures, so this only excludes hand/stack, not by type) for an anthem
 // on its own text. "Other" is enforced structurally by skipping card.id, not by parsing the word.
+// Faeburrow Elder -- "This creature gets +1/+1 for each color among permanents you control." A
+// live-computed count of DISTINCT colors (each permanent's own printed color, not color identity --
+// most lands/artifacts are colorless unless color-indicated) across everything the owner controls.
+function colorsAmongPermanentsFor(lobby, ownerId) {
+  const colors = new Set();
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    (c.colors || []).forEach((col) => colors.add(col));
+  }
+  return colors.size;
+}
 function staticBonusFor(lobby, card) {
   let powerBonus = 0, toughnessBonus = 0;
   if (card.zoneType !== "creature") return { powerBonus, toughnessBonus };
   // grantTemporaryPT's own grant, read here (rather than at every P/T call site) since this
   // function is already the shared "how much extra P/T does this card have" aggregator.
   if (card.temporaryPT) { powerBonus += card.temporaryPT.power || 0; toughnessBonus += card.temporaryPT.toughness || 0; }
+  // Faeburrow Elder's own self-referential dynamic P/T -- checked against the card's OWN text, same
+  // "self, not other creatures" shape as the includesSelf anthem branch below, just name-independent
+  // (no per-card table entry) like every other generic text-scan mechanism in this file.
+  if (/gets \+1\/\+1 for each color among permanents you control/i.test(card.text || "")) {
+    const n = colorsAmongPermanentsFor(lobby, card.owner);
+    powerBonus += n; toughnessBonus += n;
+  }
   const cardColors = card.colors || [];
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
