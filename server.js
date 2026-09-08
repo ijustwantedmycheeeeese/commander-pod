@@ -9168,7 +9168,11 @@ io.on("connection", (socket) => {
       const card = lobby.cards[cardId];
       validAttackers[cardId] = defenderId;
       defendersSet.add(defenderId);
-      card.tapped = true;
+      // Vigilance (CR 702.21b): attacking doesn't cause this creature to tap. A real, previously
+      // unenforced keyword -- effectiveKeywords was already the right shared check (equipment/
+      // aura/anthem-granted Vigilance all included for free), it just was never consulted here.
+      const hasVigilance = effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "vigilance");
+      if (!hasVigilance) card.tapped = true;
       broadcastCard(lobby, card);
     }
     lobby.combat.attackers = validAttackers;
