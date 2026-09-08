@@ -3668,9 +3668,23 @@
         .map((r) => KNOWN_KEYWORDS.find((k) => k.toLowerCase() === r.toLowerCase()))
         .filter(Boolean);
     }
+    // Faeburrow Elder's own self-referential dynamic P/T -- server-side mirror in staticBonusFor's
+    // own comment (server.js). Distinct colors among everything the owner controls, not just this card.
+    function colorsAmongPermanentsFor(ownerId) {
+      const colors = new Set();
+      Object.values(allCards).forEach((c) => {
+        if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") return;
+        (c.colors || []).forEach((col) => colors.add(col));
+      });
+      return colors.size;
+    }
     function staticBonusFor(card) {
       let powerBonus = 0, toughnessBonus = 0;
       if (card.zoneType !== "creature") return { powerBonus, toughnessBonus };
+      if (/gets \+1\/\+1 for each color among permanents you control/i.test(card.text || "")) {
+        const n = colorsAmongPermanentsFor(card.owner);
+        powerBonus += n; toughnessBonus += n;
+      }
       const cardColors = card.colors || [];
       Object.values(allCards).forEach((c) => {
         if (c.id === card.id) return;
