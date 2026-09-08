@@ -561,6 +561,8 @@ const CARD_ABILITIES = {
   // plus returnOwnGraveyardEntryToHand (also pre-existing) -- a straight composition, no new code.
   "griffin dreamfinder": [{ trigger: "etb", label: "Griffin Dreamfinder — return target enchantment card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] }],
   "sharuum the hegemon": [{ trigger: "etb", label: "Sharuum the Hegemon — return target artifact card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact"], effects: [{ type: "reanimateFromGraveyard" }] }],
+  // Wave 24 -- reuses the pre-existing untapUpToNOwnLands effect (built for Frantic Search) as-is.
+  "peregrine drake": [{ trigger: "etb", label: "Peregrine Drake — untap up to five lands", requiresTarget: false, effects: [{ type: "untapUpToNOwnLands", amount: 5 }] }],
   "mistmoon griffin": [{ trigger: "death", label: "Mistmoon Griffin — exile it, then return the top creature card of your graveyard to the battlefield", requiresTarget: false, effects: [{ type: "exileSelfAndReanimateTopGraveyardCreature" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
@@ -637,6 +639,11 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Spire of Industry — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { tap: true, life: 1 }, manaAbility: true, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && (c.type || "").toLowerCase().includes("artifact")), conditionError: "You need to control an artifact to activate this.", label: "Spire of Industry — Pay 1 life: Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }
   ],
+  // Wave 24 -- not a mana ability, so the plain "{T}: Add {C}" half stays covered by the free-tap
+  // shortcut as-is (only a manaAbility-flagged entry disqualifies it -- see the "tap" handler's own
+  // comment). targetPlayerDiscards with self:true is the exact same real discard-choice prompt
+  // Frantic Search's own draw-then-discard already uses, just for a single card instead of two.
+  "desolate lighthouse": [{ cost: { mana: "{1}{U}{R}", tap: true }, label: "Desolate Lighthouse — Draw a card, then discard a card", effects: [{ type: "drawCards", amount: 1 }, { type: "targetPlayerDiscards", self: true, amount: 1 }] }],
   "boompile": [{ cost: { tap: true }, label: "Boompile — {T}: Flip a coin. If you win, destroy all nonland permanents", effects: [{ type: "flipCoinDestroyAllNonland" }] }],
   "alchemist's apprentice": [{ cost: { sacrifice: true }, label: "Alchemist's Apprentice — Sacrifice: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "carnivorous moss-beast": [{ cost: { mana: "{5}{G}{G}" }, label: "Carnivorous Moss-Beast — {5}{G}{G}: +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
@@ -3702,7 +3709,7 @@ function equipEffectsFromText(text) {
 // existing "gets X/Y" pattern -- confirmed it already handles a negative toughness value.
 const NUMBER_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
 function equipDeathDrawFromText(text) {
-  const m = (text || "").match(/whenever equipped creature dies, draw (a|an|\d+|one|two|three|four|five|six) cards?/i);
+  const m = (text || "").match(/when(?:ever)? equipped creature dies, draw (a|an|\d+|one|two|three|four|five|six) cards?/i);
   if (!m) return null;
   const raw = m[1].toLowerCase();
   return NUMBER_WORDS[raw] || parseInt(raw, 10) || 0;
@@ -3722,6 +3729,35 @@ function checkEquipmentDeathDraw(lobby, dyingCard) {
   }
 }
 
+const COLOR_NAME_TO_LETTER = { white: "W", blue: "U", black: "B", red: "R", green: "G" };
+// Griffin Guide and its functional cousins -- "Whenever equipped/enchanted creature dies, create a
+// P/T COLOR TYPE creature token [with KEYWORDS]." A third variant of the same equipment/aura
+// "reacts to its held creature dying" family as equipDeathDrawFromText just above, this one
+// producing a token instead of cards, via the existing generic `createToken` effect.
+function equipDeathTokenFromText(text) {
+  const m = (text || "").match(/when(?:ever)? (?:equipped|enchanted) creature dies, create an? (\d+)\/(\d+) (\w+) (\w+) creature tokens?(?: with ([a-z, ]+?))?\.?$/im);
+  if (!m) return null;
+  const keywords = (m[5] || "").split(/,| and /i).map((s) => s.trim()).map((raw) => KNOWN_KEYWORDS.find((k) => k.toLowerCase() === raw.toLowerCase())).filter(Boolean);
+  return { power: m[1], toughness: m[2], color: m[3].toLowerCase(), creatureType: m[4], keywords };
+}
+// Same "must run before removal, scans attachedTo" contract as checkEquipmentDeathDraw.
+function checkEquipmentDeathToken(lobby, dyingCard) {
+  if (dyingCard.zoneType !== "creature") return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.attachedTo !== dyingCard.id) continue;
+    const parsed = equipDeathTokenFromText(c.text);
+    if (!parsed) continue;
+    EFFECTS.createToken(lobby, { controllerId: c.owner, sourceCard: c }, {
+      name: parsed.creatureType, tokenType: `Token Creature — ${parsed.creatureType}`,
+      power: parsed.power, toughness: parsed.toughness,
+      colors: COLOR_NAME_TO_LETTER[parsed.color] ? [COLOR_NAME_TO_LETTER[parsed.color]] : [],
+      keywords: parsed.keywords
+    });
+    pushLog(lobby, `${(lobby.players[c.owner] || {}).name || "Someone"} creates a token (${c.name || "Aura"} — enchanted creature died)`);
+  }
+}
+
 // Rogue's Gloves / Curiosity / Ophidian Eye and their functional cousins -- "Whenever equipped/
 // enchanted creature deals [combat] damage to a[n] player/opponent, you may draw a card." Same
 // generic, name-independent, oracle-text-detected precedent as equipDeathDrawFromText just above
@@ -3729,7 +3765,7 @@ function checkEquipmentDeathDraw(lobby, dyingCard) {
 // anywhere else either -- same disclosed simplification as every other "you may" ETB/trigger this
 // app auto-resolves as always-yes, since the upside is one-sided and no real decision exists).
 function equipCombatDamageDrawFromText(text) {
-  return /whenever (?:equipped|enchanted) creature deals (?:combat )?damage to (?:a player|an opponent|opponents), you may draw a card\.?/i.test(text || "");
+  return /when(?:ever)? (?:equipped|enchanted) creature deals (?:combat )?damage to (?:a player|an opponent|opponents), you may draw a card\.?/i.test(text || "");
 }
 // Called from resolveCombatDamage right alongside fireCombatDamageToPlayerTriggers/
 // fireBreathOfFuryTrigger (its two call sites, unblocked damage and trample overflow) -- same
@@ -5423,6 +5459,7 @@ function fireDeathTriggers(lobby, card) {
   fireLiesaReturnToHandTrigger(lobby, card);
   fireKardurDoomscourgeDeathTrigger(lobby, card);
   checkEquipmentDeathDraw(lobby, card);
+  checkEquipmentDeathToken(lobby, card);
 }
 // Kardur, Doomscourge -- "whenever an attacking creature dies, each opponent loses 1 life and you
 // gain 1 life." Unlike deathYouControl (Zulaport Cutthroat, Venerated Stormsinger), this cares
