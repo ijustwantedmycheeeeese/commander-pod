@@ -1070,7 +1070,19 @@ const ACTIVATED_ABILITIES = {
   // by the equipment text-scan machinery -- only this second, unattached activated ability needed a
   // real table entry. No target: it hits every opponent permanent at once (see
   // removeHexproofIndestructibleFromOpponents).
-  "shadowspear": [{ cost: { mana: "{1}" }, label: "Shadowspear — Permanents your opponents control lose hexproof and indestructible until end of turn", effects: [{ type: "removeHexproofIndestructibleFromOpponents" }] }]
+  "shadowspear": [{ cost: { mana: "{1}" }, label: "Shadowspear — Permanents your opponents control lose hexproof and indestructible until end of turn", effects: [{ type: "removeHexproofIndestructibleFromOpponents" }] }],
+  // Cephalid Coliseum -- its plain "{T}: Add {U}. This land deals 1 damage to you." half needs no
+  // table entry (the free single-color tap shortcut plus the new applyPainlandDamageIfNeeded check
+  // in the "tap"/"resolveManaChoice" handlers already covers it). Threshold's "seven or more cards
+  // in your graveyard" is a real activation-condition gate, same (card, lobby) convention as
+  // Bonders' Enclave/Endless Atlas.
+  "cephalid coliseum": [{
+    cost: { mana: "{U}", tap: true, sacrifice: true }, requiresTarget: true, targetKind: "player",
+    condition: (card, lobby) => (lobby.players[card.owner] && (lobby.players[card.owner].graveyard || []).length >= 7),
+    conditionError: "You need seven or more cards in your graveyard to activate this.",
+    label: "Cephalid Coliseum — target player draws three cards, then discards three cards",
+    effects: [{ type: "targetPlayerDraws", amount: 3 }, { type: "targetPlayerDiscards", amount: 3 }]
+  }]
 };
 // Generic "[X creatures you control / All Xs / Other creatures you control] have '[ability]'"
 // grant detector -- the Sliver cycle's own defining template (Gemhide Sliver, Clot Sliver, Crypt
@@ -1644,6 +1656,15 @@ function effectTargets(lobby, controllerId, target) {
 }
 const EFFECTS = {
   drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
+  // Cephalid Coliseum -- "Target player draws three cards, then discards three cards." The
+  // target-player counterpart to drawCards (which always draws for the controller), same
+  // self/chosenTargetId convention targetPlayerDiscards already uses -- chosenTargetId is merged
+  // into every effect in the array when a real target is chosen, so this and a following
+  // targetPlayerDiscards entry naturally act on the same player.
+  targetPlayerDraws(lobby, ctx, params) {
+    const playerId = params.self ? ctx.controllerId : params.chosenTargetId;
+    drawN(lobby, playerId, params.amount || 1);
+  },
   // Temur Ascendancy -- "Whenever a creature you control with power 4 or greater enters, you may
   // draw a card." The auto-merged `amount` from fireGlobalOtherCreatureEtbTriggers (the entering
   // creature's own power) is read here purely as a THRESHOLD gate, never as the draw count itself
@@ -7951,6 +7972,18 @@ io.on("connection", (socket) => {
     castSpell(lobby, card, socket.id, " using its alternative cost");
   });
 
+  // Painlands ("{T}: Add X [or Y]. This land deals 1 damage to you.") -- Adarkar Wastes, Cephalid
+  // Coliseum, and the whole real cycle. A pure text-scan on the land's own printed text, no per-card
+  // table entry needed, checked at both real "tapped for mana and it actually resolved" choke
+  // points below (the free single-color shortcut in "tap", and the real multi-color choice in
+  // "resolveManaChoice") -- same precedent as everywhere else in this file reading a land's own
+  // text directly rather than keying off its name.
+  function applyPainlandDamageIfNeeded(lobby, card, playerId) {
+    if (!/this land deals 1 damage to you/i.test(card.text || "")) return;
+    applyLifeLoss(lobby, playerId, 1);
+    checkEliminations(lobby); // a real way to die, checked immediately -- same as any other life-loss cost
+    broadcastPlayers(lobby);
+  }
   socket.on("tap", (id) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[id];
@@ -8012,6 +8045,7 @@ io.on("connection", (socket) => {
       manaAdded.color = color;
       broadcastPlayers(lobby);
       pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
+      applyPainlandDamageIfNeeded(lobby, card, socket.id);
     } else if (options ? options.length > 1 : (Array.isArray(card.producedMana) && card.producedMana.length > 1)) {
       const finalOptions = (options || card.producedMana).filter((c) => ["W", "U", "B", "R", "G", "C"].includes(c));
       if (finalOptions.length) socket.emit("chooseMana", { cardId: card.id, cardName: card.name, options: finalOptions });
@@ -8066,6 +8100,7 @@ io.on("connection", (socket) => {
     p.mana[color] = (p.mana[color] || 0) + 1;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
+    applyPainlandDamageIfNeeded(lobby, card, socket.id);
     setUndo(lobby, socket.id, `Tap ${card.name || "a card"} for {${color}}`, () => {
       const c = lobby.cards[cardId];
       if (c && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
