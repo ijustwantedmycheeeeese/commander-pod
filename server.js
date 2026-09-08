@@ -714,6 +714,10 @@ const ACTIVATED_ABILITIES = {
   // table entry needed for that half at all.
   "chromatic lantern": [{ cost: { tap: true }, manaAbility: true, label: "Chromatic Lantern — Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }],
   "torch courier": [{ cost: { sacrifice: true }, label: "Torch Courier — another target creature gains haste until end of turn", requiresTarget: true, targetKind: "otherCreature", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Haste" }] }],
+  "ominous cemetery": [
+    { cost: { tap: true }, manaAbility: true, label: "Ominous Cemetery — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{5}", tap: true, exile: true }, label: "Ominous Cemetery — target creature's owner shuffles it into their library", requiresTarget: true, targetKind: "creature", effects: [{ type: "shuffleTargetIntoLibrary" }] }
+  ],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -2079,6 +2083,28 @@ const EFFECTS = {
   bounceTargetToHand(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (card) bounceCardToHandInternal(lobby, card);
+  },
+  // Ominous Cemetery -- "target creature's owner shuffles it into their library." Same Command
+  // Zone replacement (CR 903.9a) sendToGraveyardInternal/exileCardInternal already apply, just
+  // shuffled into the library instead when it's not a commander.
+  shuffleTargetIntoLibrary(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const owner = lobby.players[card.originalOwner || card.owner];
+    if (!owner) return;
+    delete lobby.cards[card.id];
+    if (lobby.targets[card.id]) delete lobby.targets[card.id];
+    io.to(lobby.id).emit("cardRemove", card.id);
+    clearCommanderRef(lobby, card);
+    detachDependents(lobby, card);
+    if (card.isCommander) {
+      pushLog(lobby, `${owner.name}'s ${card.name || "commander"} returned to the Command Zone`);
+    } else {
+      owner.library.push(toEntry(card));
+      shuffle(owner.library);
+      pushLog(lobby, `${card.name || "A creature"} was shuffled into ${owner.name}'s library`);
+    }
+    broadcastPlayers(lobby);
   },
   // Orim's Chant -- "target player can't cast spells this turn." Cleared at the same end-of-turn
   // cleanup as temporaryKeywords (see cleanupTemporaryKeywords); enforced in playCard/freeCastCard
@@ -7807,6 +7833,10 @@ io.on("connection", (socket) => {
       fireDeathTriggers(lobby, card);
       sendToGraveyardInternal(lobby, card);
     }
+    // Ominous Cemetery-style "Exile this land" as a cost -- same "paid immediately, card object
+    // stays valid" reasoning as cost.sacrifice, just a different destination (no death triggers,
+    // exiling isn't dying).
+    if (cost.exile) { exileCardInternal(lobby, card); }
     if (autoSacrificeCard) {
       pushLog(lobby, `${p.name} sacrifices ${autoSacrificeCard.name || "a creature"} to pay the cost`);
       fireDeathTriggers(lobby, autoSacrificeCard);
