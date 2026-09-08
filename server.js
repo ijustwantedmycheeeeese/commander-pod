@@ -4225,6 +4225,16 @@ function cleanupTemporaryKeywords(lobby) {
 function effectiveKeywords(lobby, card) {
   const bonus = attachedBonusFor(lobby, card);
   let extra = [...(card.keywords || []), ...bonus.keywords, ...(card.temporaryKeywords || []).map((tk) => tk.keyword)];
+  // Serra Ascendant -- "As long as you have N or more life, this creature ... has [keyword]." A
+  // self-referential CONDITIONAL grant (unlike the anthem loop below, which reacts to OTHER
+  // permanents) -- narrowly scoped to this exact template, same precedent as every other
+  // name-independent text-scan mechanism in this file.
+  const lifeKwMatch = (card.text || "").match(/as long as you have (\d+) or more life,.*\bhas ([a-z]+)\b/i);
+  if (lifeKwMatch) {
+    const p = lobby.players[card.owner];
+    const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === lifeKwMatch[2].toLowerCase());
+    if (p && kw && p.life >= parseInt(lifeKwMatch[1], 10)) extra.push(kw);
+  }
   if (card.zoneType === "creature") {
     for (const id in lobby.cards) {
       const c = lobby.cards[id];
@@ -4522,6 +4532,16 @@ function staticBonusFor(lobby, card) {
   if (/gets \+1\/\+1 for each color among permanents you control/i.test(card.text || "")) {
     const n = colorsAmongPermanentsFor(lobby, card.owner);
     powerBonus += n; toughnessBonus += n;
+  }
+  // Serra Ascendant -- the P/T half of the same "as long as you have N or more life" self-
+  // referential conditional (see effectiveKeywords' own comment for the keyword half).
+  const lifePTMatch = (card.text || "").match(/as long as you have (\d+) or more life, this creature gets \+(\d+)\/\+(\d+)/i);
+  if (lifePTMatch) {
+    const p = lobby.players[card.owner];
+    if (p && p.life >= parseInt(lifePTMatch[1], 10)) {
+      powerBonus += parseInt(lifePTMatch[2], 10) || 0;
+      toughnessBonus += parseInt(lifePTMatch[3], 10) || 0;
+    }
   }
   const cardColors = card.colors || [];
   for (const id in lobby.cards) {

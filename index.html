@@ -3622,6 +3622,13 @@
     function effectiveKeywords(card) {
       const bonus = attachedBonusFor(card);
       let extra = [...(card.keywords || []), ...bonus.keywords, ...(card.temporaryKeywords || []).map((tk) => tk.keyword)];
+      // Serra Ascendant -- server-side mirror in effectiveKeywords' own comment (server.js).
+      const lifeKwMatch = (card.text || "").match(/as long as you have (\d+) or more life,.*\bhas ([a-z]+)\b/i);
+      if (lifeKwMatch) {
+        const owner = players[card.owner];
+        const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === lifeKwMatch[2].toLowerCase());
+        if (owner && kw && owner.life >= parseInt(lifeKwMatch[1], 10)) extra.push(kw);
+      }
       if (card.zoneType === "creature") {
         Object.values(allCards).forEach((c) => {
           if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") return;
@@ -3684,6 +3691,15 @@
       if (/gets \+1\/\+1 for each color among permanents you control/i.test(card.text || "")) {
         const n = colorsAmongPermanentsFor(card.owner);
         powerBonus += n; toughnessBonus += n;
+      }
+      // Serra Ascendant -- P/T half, server-side mirror in staticBonusFor's own comment (server.js).
+      const lifePTMatch = (card.text || "").match(/as long as you have (\d+) or more life, this creature gets \+(\d+)\/\+(\d+)/i);
+      if (lifePTMatch) {
+        const owner = players[card.owner];
+        if (owner && owner.life >= parseInt(lifePTMatch[1], 10)) {
+          powerBonus += parseInt(lifePTMatch[2], 10) || 0;
+          toughnessBonus += parseInt(lifePTMatch[3], 10) || 0;
+        }
       }
       const cardColors = card.colors || [];
       Object.values(allCards).forEach((c) => {
