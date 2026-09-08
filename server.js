@@ -701,6 +701,10 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Witch's Clinic — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{2}", tap: true }, label: "Witch's Clinic — target commander gains lifelink until end of turn", requiresTarget: true, targetKind: "commander", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Lifelink" }] }
   ],
+  "kor haven": [
+    { cost: { tap: true }, manaAbility: true, label: "Kor Haven — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{1}{W}", tap: true }, label: "Kor Haven — prevent all combat damage from target attacking creature this turn", requiresTarget: true, targetKind: "attackingCreature", effects: [{ type: "preventCombatDamageFromTarget" }] }
+  ],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -1914,6 +1918,14 @@ const EFFECTS = {
   grantTemporaryKeywordToTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (card) grantTemporaryKeyword(lobby, card, params.keyword);
+  },
+  // Kor Haven -- "Prevent all combat damage that would be dealt by target attacking creature this
+  // turn." See resolveCombatDamage's own dealingPower helper for where this is actually enforced.
+  preventCombatDamageFromTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    card.preventCombatDamageUntilEndOfTurn = true;
+    broadcastCard(lobby, card);
   },
   // Chameleon Colossus's own activated ability ("{2}{G}{G}: This creature gets +X/+X until end of
   // turn, where X is its power") -- reads its OWN current power (including any equipment/anthem/
@@ -4101,7 +4113,9 @@ function cleanupTemporaryKeywords(lobby) {
     // Cursed Mirror -- "until end of turn" copy revert. Restores every field
     // EFFECTS.becomeCopyUntilEOT overwrote, using the snapshot it took before copying.
     const hasCopy = !!c._copyOriginal;
-    if (hasTempKw || hasGrantedProt || hasTempPT || hasCopy) {
+    // Kor Haven -- "this turn" combat damage prevention, same sweep as everything else here.
+    const hasDamagePrevention = !!c.preventCombatDamageUntilEndOfTurn;
+    if (hasTempKw || hasGrantedProt || hasTempPT || hasCopy || hasDamagePrevention) {
       c.temporaryKeywords = [];
       c.grantedProtections = [];
       c.temporaryPT = null;
@@ -4109,6 +4123,7 @@ function cleanupTemporaryKeywords(lobby) {
         Object.assign(c, c._copyOriginal);
         c._copyOriginal = null;
       }
+      if (hasDamagePrevention) c.preventCombatDamageUntilEndOfTurn = false;
       broadcastCard(lobby, c);
     }
   }
@@ -5270,6 +5285,14 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That commander"} can't be targeted by this.` };
     return { ok: true };
   }
+  // Kor Haven -- "target attacking creature," checked against the real live combat state (any
+  // controller's, matching the real card's own unrestricted wording) rather than just "creature".
+  if (targetKind === "attackingCreature") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "creature" || !lobby.combat.attackers[targetId]) return { ok: false, error: "Choose an attacking creature." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
   if (targetKind === "ownPermanent") {
     const c = lobby.cards[targetId];
     if (!c || c.owner !== entry.controllerId || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent you control." };
@@ -6373,6 +6396,13 @@ function resolveCombatDamage(lobby) {
   function hasKw(card, kw) {
     return effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === kw);
   }
+  // Kor Haven -- "Prevent all combat damage that would be dealt by target attacking creature this
+  // turn." Only zeroes the damage THIS creature deals (not damage dealt TO it, and not other
+  // creatures it's paired with), so it's checked at each of the three points a creature's own power
+  // actually turns into dealt damage below, rather than as a global combat-wide flag.
+  function dealingPower(card) {
+    return card.preventCombatDamageUntilEndOfTurn ? 0 : effPT(card).power;
+  }
   function effPT(card) {
     const bonus = attachedBonusFor(lobby, card);
     const stat = staticBonusFor(lobby, card);
@@ -6436,7 +6466,7 @@ function resolveCombatDamage(lobby) {
 
       if (blockers.length > 0) {
         if (attackerActs) {
-          const { power: atkPower } = effPT(attacker);
+          const atkPower = dealingPower(attacker);
           const atkDeathtouch = hasKw(attacker, "deathtouch");
           const atkTrample = hasKw(attacker, "trample");
           if (atkPower > 0) {
@@ -6486,7 +6516,7 @@ function resolveCombatDamage(lobby) {
           const blockerActs = isFirstStrikeStep ? (blkFS || blkDS) : (!blkFS || blkDS);
           if (blockerActs && lobby.cards[blocker.id]) {
             anyBlockerActed = true;
-            const { power: defPower } = effPT(blocker);
+            const defPower = dealingPower(blocker);
             markDamage(attacker, defPower, hasKw(blocker, "deathtouch"));
             if (defPower > 0 && hasKw(blocker, "lifelink")) applyLifeGain(lobby, blocker.owner, defPower);
           }
@@ -6507,7 +6537,7 @@ function resolveCombatDamage(lobby) {
           pushLog(lobby, `${attacker.name} sets ${defender.name}'s life total to 1`);
         }
       } else if (attackerActs) {
-        const { power: atkPower } = effPT(attacker);
+        const atkPower = dealingPower(attacker);
         const defender = lobby.players[defenderId];
         // Teferi's Protection -- "protection from everything" means no source can deal this player
         // damage at all (CR 702.16e), not just that their life total happens not to move -- skip the
@@ -7650,6 +7680,11 @@ io.on("connection", (socket) => {
     if (ability.requiresTarget && ability.targetKind === "commander") {
       const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && c.isCommander);
       if (!hasMatch) { socket.emit("actionError", "There's no commander on the battlefield to target."); return; }
+    }
+    // Kor Haven -- same "reject before paying" reason, for when nothing is currently attacking.
+    if (ability.requiresTarget && ability.targetKind === "attackingCreature") {
+      const hasMatch = Object.keys(lobby.combat.attackers || {}).length > 0;
+      if (!hasMatch) { socket.emit("actionError", "There's no attacking creature to target."); return; }
     }
     // Temple of the False God -- "Activate only if you control five or more lands." A real
     // activation-condition gate, checked before anything is paid, same "reject before paying" reason
