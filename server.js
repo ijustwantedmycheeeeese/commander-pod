@@ -719,6 +719,10 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Vault of the Archangel — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{2}{W}{B}", tap: true }, label: "Vault of the Archangel — creatures you control gain deathtouch and lifelink until end of turn", effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Deathtouch", "Lifelink"] }] }
   ],
+  "kessig wolf run": [
+    { cost: { tap: true }, manaAbility: true, label: "Kessig Wolf Run — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{X}{R}{G}", tap: true }, label: "Kessig Wolf Run — target creature gets +X/+0 and gains trample until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", keywords: ["Trample"] }] }
+  ],
   "ominous cemetery": [
     { cost: { tap: true }, manaAbility: true, label: "Ominous Cemetery — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{5}", tap: true, exile: true }, label: "Ominous Cemetery — target creature's owner shuffles it into their library", requiresTarget: true, targetKind: "creature", effects: [{ type: "shuffleTargetIntoLibrary" }] }
@@ -2361,6 +2365,18 @@ const EFFECTS = {
       if (params.power || params.toughness) grantTemporaryPT(lobby, c, params.power || 0, params.toughness || 0);
       (params.keywords || []).forEach((k) => grantTemporaryKeyword(lobby, c, k));
     });
+  },
+  // Kessig Wolf Run -- "Target creature gets +X/+0 and gains trample until end of turn," X being
+  // the amount paid for the ability's own {X} cost (params.xAmount, baked in by fireTrigger/
+  // activateAbility's own manaAbility branch). power/toughness stay fixed bonuses on TOP of X, so a
+  // future card needing "+X/+0 and +1/+1" isn't boxed out.
+  grantTemporaryPTAndKeywordsToTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const power = (params.power || 0) + (params.xAmount || 0);
+    const toughness = (params.toughness || 0) + (params.xToughness ? (params.xAmount || 0) : 0);
+    if (power || toughness) grantTemporaryPT(lobby, card, power, toughness);
+    (params.keywords || []).forEach((k) => grantTemporaryKeyword(lobby, card, k));
   },
   // Icon of Ancestry / Cavern of Souls -- "As this permanent enters, choose a creature type." Free
   // text (targetKind:"creatureType"), not validated against a real creature-type list -- same
@@ -4761,7 +4777,11 @@ function maskCard(card, viewerId, lobby) {
   // is just one mana ability (Sol Ring, signets, Temple of the False God) -- these are deliberately
   // excluded from the free single-tap-for-mana shortcut (see the tap handler's own comment), so
   // double-click previously did nothing at all for them, which reads exactly like "doesn't add mana".
-  return { ...card, activatedAbilities: visible.map(({ a, index }) => ({ index, label: a.label, manaAbility: !!a.manaAbility })) };
+  // hasX -- Kessig Wolf Run/Mirror Entity-style X-cost activated abilities need the client to
+  // prompt for a value BEFORE emitting activateAbility, the same way it already does for casting an
+  // X-cost SPELL (costHasX/requestPlayCard) -- computed from the ability's own real cost.mana text
+  // rather than parsing it again client-side.
+  return { ...card, activatedAbilities: visible.map(({ a, index }) => ({ index, label: a.label, manaAbility: !!a.manaAbility, hasX: !!(a.cost && typeof a.cost.mana === "string" && /\{x\}/i.test(a.cost.mana)) })) };
 }
 
 function broadcastCard(lobby, card) {
@@ -5481,8 +5501,14 @@ function finishStackTail(lobby) {
 // `condition(card)` gates on the SOURCE card's own runtime state (e.g. "only if this permanent's
 // controller chose mode X") -- distinct from targeting or from fireGlobalTrigger's forPlayerId
 // scoping, which are both about who the event happened to, not what state the source card is in.
-function fireTrigger(lobby, card, ability) {
+// xValue (optional, 4th arg) -- Kessig Wolf Run/Mirror Entity-style X-cost ACTIVATED abilities
+// only (never set for a real trigger, which has no player-chosen cost). Baked into a fresh copy of
+// ability.effects as xAmount on each effect object, the same "clone effects with a dynamic field
+// merged in" pattern fireGlobalOtherCreatureEtbTriggers already uses for `amount`/`enteringCardId` --
+// never mutates the shared ability.effects template itself.
+function fireTrigger(lobby, card, ability, xValue) {
   if (ability.condition && !ability.condition(card, lobby)) return;
+  const effects = xValue ? (ability.effects || []).map((e) => ({ ...e, xAmount: xValue })) : ability.effects;
   if (ability.requiresTarget) {
     // "handCard" targets (Kaalia's own signature ability -- put a card of the given types from
     // hand onto the battlefield attacking) have no legal-targets check anywhere else in this
@@ -5536,9 +5562,9 @@ function fireTrigger(lobby, card, ability) {
       const hasMatch = Object.values(lobby.cards).some((c) => (c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana") && filter.some((t) => (c.type || "").toLowerCase().includes(t)));
       if (!hasMatch) return;
     }
-    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects: ability.effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, commanderChoices });
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, commanderChoices });
   } else {
-    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects: ability.effects });
+    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   }
 }
 
@@ -7720,7 +7746,7 @@ io.on("connection", (socket) => {
   // check partway through. Once costs are validated, pays them, then hands off to fireTrigger --
   // the exact same requiresTarget-or-straight-to-stack branch CARD_ABILITIES entries already use,
   // so resolveStackTop needs zero changes regardless of how an item reached the stack.
-  socket.on("activateAbility", ({ cardId, abilityIndex }) => {
+  socket.on("activateAbility", ({ cardId, abilityIndex, x }) => {
     const lobby = currentLobby(); if (!lobby) return;
     const card = lobby.cards[cardId];
     const p = lobby.players[socket.id];
@@ -7819,9 +7845,15 @@ io.on("connection", (socket) => {
         }
       }
     }
+    // Kessig Wolf Run/Mirror Entity-style X-cost ability -- only meaningful when the ability's own
+    // real cost actually contains {X} (parseManaCost's own cost.x flag), so a plain non-X ability
+    // ignores whatever x the client happens to send rather than demanding phantom extra mana.
     let remainingMana = null;
+    let xVal = 0;
     if (cost.mana) {
-      remainingMana = canAffordAndPay(p.mana, parseManaCost(cost.mana), 0);
+      const parsedCost = parseManaCost(cost.mana);
+      xVal = parsedCost.x ? Math.max(0, parseInt(x, 10) || 0) : 0;
+      remainingMana = canAffordAndPay(p.mana, parsedCost, xVal);
       if (!remainingMana) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s ability.`); return; }
     }
     // cost.sacrifice has nothing to validate -- you already own it and it's on the battlefield.
@@ -7865,9 +7897,10 @@ io.on("connection", (socket) => {
       // pay for whatever prompted tapping this in the first place. Every other activated ability
       // still goes through fireTrigger/the stack below.
       const ctx = { controllerId: socket.id, sourceCard: { id: card.id } };
-      (ability.effects || []).forEach((params) => { const fn = EFFECTS[params.type]; if (fn) fn(lobby, ctx, params); });
+      const effects = xVal ? (ability.effects || []).map((e) => ({ ...e, xAmount: xVal })) : ability.effects;
+      (effects || []).forEach((params) => { const fn = EFFECTS[params.type]; if (fn) fn(lobby, ctx, params); });
     } else {
-      fireTrigger(lobby, card, ability);
+      fireTrigger(lobby, card, ability, xVal);
     }
   });
 
