@@ -322,6 +322,11 @@ const CARD_ABILITIES = {
   "balefire dragon": [{ trigger: "combatDamageToPlayer", label: "Balefire Dragon — damage each creature they control", effects: [{ type: "damageAllCreaturesOfPlayer" }] }],
   "demon of loathing": [{ trigger: "combatDamageToPlayer", label: "Demon of Loathing — they sacrifice a creature", effects: [{ type: "sacrificeACreatureOfPlayer" }] }],
   "ancient copper dragon": [{ trigger: "combatDamageToPlayer", label: "Ancient Copper Dragon — roll a d20, create that many Treasures", effects: [{ type: "rollD20CreateTreasures" }] }],
+  // Wave 25 -- "a creature you control" (not "this creature") needs the new global variant
+  // (fireGlobalCombatDamageToPlayerTrigger/"anyCreatureCombatDamageToPlayer"), not the self-only
+  // "combatDamageToPlayer" trigger the entries just above use.
+  "old gnawbone": [{ trigger: "anyCreatureCombatDamageToPlayer", label: "Old Gnawbone — create that many Treasure tokens", requiresTarget: false, effects: [{ type: "createTokensEqualToDealtDamage", name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg" }] }],
+  "zeriam, golden wind": [{ trigger: "anyCreatureCombatDamageToPlayer", typeFilter: ["griffin"], label: "Zeriam, Golden Wind — create a 2/2 white Griffin token with flying", requiresTarget: false, effects: [{ type: "createToken", name: "Griffin", tokenType: "Token Creature — Griffin", power: "2", toughness: "2", colors: ["W"], keywords: ["Flying"] }] }],
   "kaalia, zenith seeker": [{ trigger: "etb", label: "Kaalia, Zenith Seeker — look at top 6, take Angels/Demons/Dragons", effects: [{ type: "lookTopNRevealTypesToHand", amount: 6, types: ["Angel", "Demon", "Dragon"] }] }],
   "utvara hellkite": [{ trigger: "otherAttacks", typeFilter: ["Dragon"], label: "Utvara Hellkite — create a 6/6 flying Dragon token, tapped and attacking",
     effects: [{ type: "createAttackingToken", name: "Dragon", tokenType: "Token Creature — Dragon", power: "6", toughness: "6", colors: ["R"], keywords: ["Flying"], img: "https://cards.scryfall.io/normal/front/1/1/11335886-a422-42ff-be14-226602202603.jpg" }] }],
@@ -1636,6 +1641,19 @@ const EFFECTS = {
   createTokensEqualToTypeCountControlled(lobby, ctx, params) {
     const filter = params.typeFilter || [];
     const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && filter.some((t) => (c.type || "").toLowerCase().includes(t))).length * tokenMultiplierFor(lobby, ctx.controllerId);
+    for (let i = 0; i < n; i++) {
+      spawnBattlefieldCard(lobby, {
+        name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
+        power: params.power, toughness: params.toughness, colors: params.colors || [],
+        keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature")
+      });
+    }
+  },
+  // Old Gnawbone -- "create that many Treasure tokens" (that many = the just-dealt combat damage
+  // amount, baked in as params.dealtToPlayerAmount by fireGlobalCombatDamageToPlayerTrigger/
+  // fireCombatDamageToPlayerTriggers). The dynamic-amount sibling of createToken just above.
+  createTokensEqualToDealtDamage(lobby, ctx, params) {
+    const n = (params.dealtToPlayerAmount || 0) * tokenMultiplierFor(lobby, ctx.controllerId);
     for (let i = 0; i < n; i++) {
       spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
@@ -5669,6 +5687,27 @@ function fireCombatDamageToPlayerTriggers(lobby, card, defenderId, amount) {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   });
 }
+// Old Gnawbone / Zeriam, Golden Wind and similar -- "Whenever A CREATURE YOU CONTROL (optionally
+// of a specific type) deals combat damage to a player, ..." Unlike fireCombatDamageToPlayerTriggers
+// just above (which only ever checks the DEALING card's own name), the effect's real SOURCE here is
+// a different, standing permanent reacting to ANY of its controller's creatures -- same "a standing
+// permanent reacts to a different creature's event" shape fireGlobalOtherCreatureEtbTriggers already
+// established for Terror of the Peaks/Dragon Tempest, just for combat damage instead of ETB. A new
+// "anyCreatureCombatDamageToPlayer" trigger type (distinct from the self-only "combatDamageToPlayer"
+// above) so existing self-only entries are never accidentally treated as global.
+function fireGlobalCombatDamageToPlayerTrigger(lobby, dealingCard, defenderId, amount) {
+  if (!lobby.turn.started) return;
+  const dealingType = (dealingCard.type || "").toLowerCase();
+  Object.values(lobby.cards).forEach((source) => {
+    if (source.owner !== dealingCard.owner || source.zoneType === "hand" || source.zoneType === "stack") return;
+    getAutomatedAbilities(source.name, "anyCreatureCombatDamageToPlayer").forEach((ability) => {
+      if (ability.typeFilter && !ability.typeFilter.some((t) => dealingType.includes(t))) return;
+      if (ability.condition && !ability.condition(source, lobby)) return;
+      const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId, dealtToPlayerAmount: amount }));
+      pushAbilityToStack(lobby, { sourceCard: source, controllerId: source.owner, label: ability.label, effects });
+    });
+  });
+}
 // Breath of Fury -- "When enchanted creature deals combat damage to a player, sacrifice it and
 // attach this Aura to a creature you control. If you do, untap all creatures you control and
 // after this phase, there is an additional combat phase." Not a CARD_ABILITIES entry keyed by the
@@ -6229,6 +6268,7 @@ function resolveCombatDamage(lobby) {
                   dmgEvents.push({ targetId: defenderId, amount: toPlayer });
                   pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
                   fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
+                  fireGlobalCombatDamageToPlayerTrigger(lobby, attacker, defenderId, toPlayer);
                   fireBreathOfFuryTrigger(lobby, attacker, defenderId, toPlayer);
                   checkEquipmentCombatDamageDraw(lobby, attacker);
                 }
@@ -6291,6 +6331,7 @@ function resolveCombatDamage(lobby) {
             dmgEvents.push({ targetId: defenderId, amount: dealt });
             if (hasKw(attacker, "lifelink")) applyLifeGain(lobby, attacker.owner, dealt);
             fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, dealt);
+            fireGlobalCombatDamageToPlayerTrigger(lobby, attacker, defenderId, dealt);
             fireBreathOfFuryTrigger(lobby, attacker, defenderId, dealt);
             checkEquipmentCombatDamageDraw(lobby, attacker);
           }
