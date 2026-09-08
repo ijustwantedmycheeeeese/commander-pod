@@ -129,6 +129,21 @@
     .cursor-swatch.selected { border-color: #f0e6c8; box-shadow: 0 0 0 2px #100c08, 0 0 0 4px #f0e6c8; }
     .cursor-swatch.taken { cursor: not-allowed; opacity: 0.35; }
     .remote-cursor-label { font-size: 10px; padding: 1px 5px; border-radius: 4px; color: #100c08; white-space: nowrap; font-weight: 600; }
+    /* Replaces the native OS pointer everywhere on the page with #my-cursor below -- restored to
+       normal over anything text-editable (typing a table name, chat, deck list, etc.) since a
+       custom pointer glyph is actively unhelpful for placing a text caret, and this app has no
+       custom I-beam of its own to substitute. Buttons/links intentionally do NOT get their native
+       pointer back -- #my-cursor's own board-vs-elsewhere marker (see renderMyCursor) is the only
+       affordance everywhere else, matching "replace the cursor," not "replace it except where it's
+       inconvenient." */
+    * { cursor: none !important; }
+    input, textarea, select, [contenteditable="true"] { cursor: auto !important; }
+    /* Fixed to the viewport (raw clientX/clientY), unlike .remote-cursor above which is percentage-
+       positioned inside the (possibly zoomed/panned) playmat -- this needs to track the real mouse
+       everywhere on the page, board or not. No position transition (unlike remote cursors, which
+       interpolate between ~15/sec network updates) -- this one gets a real mousemove event on every
+       actual pixel of movement, so a transition would only add lag against your own hand. */
+    #my-cursor { position: fixed; top: 0; left: 0; pointer-events: none; z-index: 99999; transform: translate(-2px, -2px); display: none; }
     .board-ping { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 4px; }
     .board-ping-ring { position: absolute; top: 50%; left: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border: 3px solid; border-radius: 50%; opacity: 0; animation: board-ping-pulse 1.5s ease-out forwards; }
     .board-ping-ring-2 { animation-delay: 0.3s; }
@@ -621,6 +636,7 @@
     </div>
 
     <div id="preview-panel"><div class="card-art-wrap"><img id="preview-img" src=""><div id="preview-pt-overlay-slot"></div></div><div class="pv-name" id="preview-name"></div></div>
+    <div id="my-cursor"></div>
 
     <div id="target-choice-banner">
       <div id="target-choice-banner-text"></div>
@@ -4615,6 +4631,53 @@
       Object.assign(otherCursors[playerId], { x, y, boardOwner, lastSeen: Date.now() });
       renderOneCursor(playerId);
     });
+
+    // ---------------- your own cursor (replaces the native OS pointer everywhere) ----------------
+    // Purely local -- unlike otherCursors above, there's no reason to round-trip your own mouse
+    // position through the server just to draw it back on your own screen. Over the board it
+    // mirrors EXACTLY what other players see of you (same color/icon logic as renderOneCursor), so
+    // this doubles as a live "this is what your cursor looks like to the table" preview. Anywhere
+    // else on the page it falls back to a plain gold dot -- the site's own default replacement for
+    // the native pointer this app hides everywhere (see the `* { cursor: none }` CSS rule).
+    const myCursorEl = document.getElementById("my-cursor");
+    function isEditableCursorTarget(el) {
+      while (el) {
+        const tag = el.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable) return true;
+        el = el.parentElement;
+      }
+      return false;
+    }
+    document.addEventListener("mousemove", (e) => {
+      myCursorEl.style.left = e.clientX + "px";
+      myCursorEl.style.top = e.clientY + "px";
+      // Editable fields keep the real OS text-caret (see the CSS exception) -- this app has no
+      // custom I-beam of its own, and a colored dot/icon over a text field would only get in the
+      // way of placing a caret, so the whole custom cursor just steps aside there instead.
+      if (isEditableCursorTarget(e.target)) { myCursorEl.style.display = "none"; return; }
+      myCursorEl.style.display = "block";
+      const me = players[myId];
+      const overBoard = !!playmatRelativePosition(e);
+      let fingerprint, markerHtml;
+      if (overBoard && me) {
+        const color = me.cursorColor || me.color || "#f0e6c8";
+        const fit = me.cursorIconFit || { scale: 1, x: 50, y: 50 };
+        fingerprint = `board|${color}|${me.cursorIcon || ""}|${fit.scale}|${fit.x}|${fit.y}`;
+        markerHtml = me.cursorIcon
+          ? `<div class="remote-cursor-icon-wrap"><img class="remote-cursor-icon" src="${escapeHtml(me.cursorIcon)}" style="object-position:${fit.x}% ${fit.y}%;transform:scale(${fit.scale});"></div>`
+          : `<div class="remote-cursor-dot" style="background:${color};"></div>`;
+      } else {
+        fingerprint = "default";
+        markerHtml = `<div class="remote-cursor-dot" style="background:#d4af37;"></div>`;
+      }
+      // Same rebuild-only-when-changed guard as renderOneCursor -- rebuilding an <img> icon on every
+      // single mousemove would restart a GIF's animation from frame 1 every time.
+      if (myCursorEl.dataset.fingerprint !== fingerprint) {
+        myCursorEl.dataset.fingerprint = fingerprint;
+        myCursorEl.innerHTML = markerHtml;
+      }
+    });
+    document.documentElement.addEventListener("mouseleave", () => { myCursorEl.style.display = "none"; });
 
     // ---------------- ping (draw the table's attention to a spot) ----------------
     // Middle-click anywhere on the table, including directly on top of a card -- right-click is
