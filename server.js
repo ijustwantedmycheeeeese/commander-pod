@@ -1542,6 +1542,10 @@ const SPELL_ABILITIES = {
   // Wave 15 gap-analysis batch.
   "day of judgment": { label: "Day of Judgment — destroy all creatures", effects: [{ type: "destroyAllCreatures" }] },
   "damnation": { label: "Damnation — destroy all creatures, they can't be regenerated", effects: [{ type: "destroyAllCreatures", noRegen: true }] },
+  // The optional "pay {2} more to cast as though it had flash" alternative cost is a real,
+  // disclosed narrowing left unmodeled (same as elsewhere in this file) -- the core wipe is
+  // identical to Damnation's own entry above, just cast at normal sorcery speed.
+  "rout": { label: "Rout — destroy all creatures, they can't be regenerated", effects: [{ type: "destroyAllCreatures", noRegen: true }] },
   "depopulate": { label: "Depopulate — each player with a multicolored creature draws a card, then destroy all creatures", effects: [{ type: "drawForMulticoloredControllersThenDestroyAllCreatures" }] },
   "end hostilities": { label: "End Hostilities — destroy all creatures and all permanents attached to creatures", effects: [{ type: "destroyAllCreaturesAndAttachments" }] },
   "dragon fodder": { label: "Dragon Fodder — create two Goblin tokens", effects: [{ type: "createToken", amount: 2, name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
