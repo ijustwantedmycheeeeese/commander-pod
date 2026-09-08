@@ -4512,6 +4512,10 @@ function spellCostReductionFor(lobby, ownerId, card) {
 // tool like every other manual action in this app, so it's deliberately not checked here.
 function isProtectedFromCountering(lobby, stackItem) {
   if (!stackItem || stackItem.kind === "ability") return false;
+  // Hit-Monkey and similar -- a spell's own printed "This spell can't be countered," checked
+  // directly on the stack item's own text (pushToStack pushes the real card object, so .text
+  // survives onto the stack). No anthem/grant needed for this self-referential case.
+  if (/this spell can'?t be countered/i.test(stackItem.text || "")) return true;
   if (!(stackItem.type || "").toLowerCase().includes("creature")) return false;
   return Object.values(lobby.cards).some((c) => c.owner === stackItem.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /creature spells you control can'?t be countered/i.test(c.text || ""));
 }
