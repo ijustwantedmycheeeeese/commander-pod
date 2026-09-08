@@ -709,6 +709,10 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "War Room — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{3}", tap: true, life: (lobby, controllerId) => commanderColorIdentity(lobby, controllerId).length }, label: "War Room — pay life equal to your commanders' color identity, draw a card", effects: [{ type: "drawCards", amount: 1 }] }
   ],
+  // Chromatic Lantern's OWN tap ability -- the "Lands you control have ..." grant to every OTHER
+  // land is handled generically by getGrantedActivatedAbilities/grantedAbilityGrantMatches, no
+  // table entry needed for that half at all.
+  "chromatic lantern": [{ cost: { tap: true }, manaAbility: true, label: "Chromatic Lantern — Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }],
   // Same shape, any-color instead of a fixed pair (chooseManaAnyColor, the Treasure-token mana
   // effect) plus a real life cost and an artifact-control condition instead of a type check.
   "spire of industry": [
@@ -1019,6 +1023,14 @@ function grantedAbilityGrantMatches(text) {
     const typeWord = (m[1] || m[2] || "").toLowerCase();
     matches.push({ typeWord, abilityText: m[3] });
   }
+  // Chromatic Lantern-style "Lands you control have '[ability]'" -- the LAND-scoped sibling of the
+  // creature-type-word grants above (own alternative since "lands" isn't a creature type and this
+  // wording has no "creatures" word for the existing branches to match against). typeWord "land" is
+  // a sentinel getGrantedActivatedAbilities/getGrantedTriggeredAbilities check for explicitly.
+  const landRe = /lands you control have "([^"]+)"/gi;
+  while ((m = landRe.exec(text || ""))) {
+    matches.push({ typeWord: "land", abilityText: m[1] });
+  }
   return matches;
 }
 // Maps ONE granted ability's quoted text to a real ACTIVATED_ABILITIES-shaped entry, reusing
@@ -1059,19 +1071,28 @@ function grantedAbilityFromText(abilityText) {
 // shape actually reads); "other creatures you control" is the one variant that excludes the
 // granting card's own copy of the ability.
 function getGrantedActivatedAbilities(card, lobby) {
-  if (!lobby || card.zoneType !== "creature") return [];
+  const isCreature = card.zoneType === "creature";
+  // Chromatic Lantern -- "Lands you control have [ability]" needs the exact same grant-detection
+  // machinery, just scoped to lands (zoneType "mana") instead of creatures.
+  const isLand = card.zoneType === "mana";
+  if (!lobby || (!isCreature && !isLand)) return [];
   const cardType = (card.type || "").toLowerCase();
   const grants = [];
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
     grantedAbilityGrantMatches(c.text).forEach(({ typeWord, abilityText }) => {
-      const excludeSelf = typeWord === "other";
-      if (!excludeSelf && typeWord && !cardType.includes(typeWord)) return;
-      if (excludeSelf && c.id === card.id) return;
+      if (typeWord === "land") {
+        if (!isLand) return;
+      } else {
+        if (!isCreature) return;
+        const excludeSelf = typeWord === "other";
+        if (!excludeSelf && typeWord && !cardType.includes(typeWord)) return;
+        if (excludeSelf && c.id === card.id) return;
+      }
       const shape = grantedAbilityFromText(abilityText);
       if (!shape) return;
-      grants.push({ ...shape, label: `${card.name || "Creature"} — ${abilityText.trim().replace(/\.$/, "")}` });
+      grants.push({ ...shape, label: `${card.name || (isLand ? "Land" : "Creature")} — ${abilityText.trim().replace(/\.$/, "")}` });
     });
   }
   return grants;
