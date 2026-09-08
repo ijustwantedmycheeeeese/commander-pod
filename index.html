@@ -198,7 +198,7 @@
     @keyframes fxPowerupAnim { 0% { box-shadow: 0 0 0 3px #444, 0 4px 12px rgba(0,0,0,0.7); filter: brightness(1) saturate(1); } 35% { box-shadow: 0 0 26px 10px rgba(120,220,255,0.95), 0 0 0 3px #d4af37; filter: brightness(1.7) saturate(1.4); transform: scale(1.06); } 100% { box-shadow: 0 4px 12px rgba(0,0,0,0.7), 0 0 0 3px #444; filter: brightness(1) saturate(1); transform: scale(1); } }
     .card.equip-powerup { animation: fxPowerupAnim 0.55s ease-out; }
     .card-back { width: 100%; height: 120px; background: repeating-linear-gradient(45deg, #2a2a30, #2a2a30 8px, #202024 8px, #202024 16px); display: flex; align-items: center; justify-content: center; font-size: 26px; }
-    .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+    .counter-badge { position: absolute; bottom: 18px; right: 4px; background: #eab308; color: #1a1a1d; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); white-space: nowrap; }
     .equip-bonus-badge { position: absolute; bottom: 18px; left: 4px; background: #3b82f6; color: #fff; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
     .kw-badges { position: absolute; top: 2px; left: 2px; display: flex; flex-wrap: wrap; gap: 1px; max-width: 100px; }
     .kw-badge { background: rgba(10,8,6,0.75); border-radius: 4px; font-size: 11px; padding: 0 2px; line-height: 15px; }
@@ -678,8 +678,8 @@
       <button data-action="target">Target / Untarget</button>
       <div id="context-menu-abilities"></div>
       <hr>
-      <button data-action="counterUp">+1 Counter</button>
-      <button data-action="counterDown">-1 Counter</button>
+      <button data-action="counterUp" title="Adds a +1/+1 counter -- boosts power and toughness by 1 (or cancels out one -1/-1 counter, per the real rule)">+1/+1 Counter</button>
+      <button data-action="counterDown" title="Adds a -1/-1 counter -- reduces power and toughness by 1 (or cancels out one +1/+1 counter, per the real rule)">-1/-1 Counter</button>
       <button data-action="keywords">Manage Keywords</button>
       <button data-action="attach">Attach To...</button>
       <button data-action="detach">Detach</button>
@@ -706,8 +706,8 @@
       <hr>
       <button data-group-action="tap">Tap All</button>
       <button data-group-action="flip">Flip All Face Up/Down</button>
-      <button data-group-action="counterUp">+1 Counter (each)</button>
-      <button data-group-action="counterDown">-1 Counter (each)</button>
+      <button data-group-action="counterUp">+1/+1 Counter (each)</button>
+      <button data-group-action="counterDown">-1/-1 Counter (each)</button>
       <hr>
       <button data-group-action="toHand">Return All to Hand</button>
       <button data-group-action="toGraveyard">Send All to Graveyard</button>
@@ -5216,7 +5216,19 @@
       } else {
         inner = `<img src="${escapeHtml(cardArtSrc(card))}"><div class="card-label">${escapeHtml(card.name || "")}${isMineFaceDown ? " (face down)" : ""}</div>${attachmentLabel(card)}${controlLabel(card)}`;
       }
-      if (card.counters) inner += `<div class="counter-badge">${card.counters > 0 ? "+" : ""}${card.counters}</div>`;
+      // A token's own art (real Scryfall art picked via "Choose Art," or the generic name-matched
+      // fallback -- see DEFAULT_TOKEN_ART) is only a PICTURE, not necessarily of a token with this
+      // exact power/toughness -- whatever's baked into that image can genuinely mismatch this
+      // token's real stats, unlike a real card's own printed P/T. So a token creature always gets
+      // its real effective P/T shown here instead of the raw counters-delta badge every other
+      // creature gets (which only appears when it actually HAS counters, since a real card's own
+      // printed P/T is already trustworthy on its own).
+      const isTokenCreature = !isMasked && card.zoneType === "creature" && (card.type || "").toLowerCase().includes("token");
+      if (isTokenCreature) {
+        inner += `<div class="counter-badge" title="This token's actual power/toughness -- its own art may not match">${effectivePT(card)}</div>`;
+      } else if (card.counters) {
+        inner += `<div class="counter-badge">${card.counters > 0 ? "+" : ""}${card.counters}</div>`;
+      }
       if (!isMasked && card.zoneType === "creature") {
         const eqBonus = attachedBonusFor(card);
         if (eqBonus.powerBonus || eqBonus.toughnessBonus) {
