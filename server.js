@@ -595,6 +595,12 @@ const CARD_ABILITIES = {
   // without it the shared amount-merge in fireGlobalOtherCreatureEtbTriggers would silently scale
   // this to the entering creature's power instead of always drawing exactly 1 (the Wave 52 bug).
   "welcoming vampire": [{ trigger: "otherCreatureEtb", maxPower: 2, oncePerTurn: true, label: "Welcoming Vampire — draw a card", requiresTarget: false, effects: [{ type: "drawCards", amount: 1 }] }],
+  // New global "youDiscard" event type -- wired into every real discard choke point (resolveDiscard,
+  // the autoDiscardFilter activation cost, and cycleCard -- cycling IS discarding, CR 702.28e). "Or
+  // discard another card" needs no excludeSelf-style check: by the time this fires, a discarded
+  // Archfiend of Ifnir itself has already left the battlefield (moved out of lobby.cards), so it
+  // can't scan its own battlefield copy to fire off its own discard anyway.
+  "archfiend of ifnir": [{ trigger: "youDiscard", label: "Archfiend of Ifnir — put a -1/-1 counter on each creature your opponents control", requiresTarget: false, effects: [{ type: "addNegativeCounterToEachOpponentCreature", amount: 1 }] }],
   // "of their choice" isn't a real per-opponent picker -- reuses eachOpponentSacrifices' existing
   // auto-pick (built for Pick Your Poison), same disclosed simplification as everywhere else.
   "grave pact": [{ trigger: "deathYouControl", label: "Grave Pact — each other player sacrifices a creature", requiresTarget: false, effects: [{ type: "eachOpponentSacrifices", zoneTypeFilter: "creature" }] }],
@@ -3278,6 +3284,18 @@ const EFFECTS = {
     if (!card) return;
     card.counters = (card.counters || 0) - (params.amount || 1);
     broadcastCard(lobby, card);
+  },
+  // Archfiend of Ifnir -- "put a -1/-1 counter on each creature your opponents control." The
+  // opposite scope from addCountersToAllYourCreatures (every OTHER player's creatures, not the
+  // controller's own) -- kept as its own small effect rather than a parameterized "whose creatures"
+  // flag on that one, since -1/-1 counters shouldn't run through bonusCountersFor/
+  // counterMultiplierFor (those only ever apply to +1/+1-counter-adding effects).
+  addNegativeCounterToEachOpponentCreature(lobby, ctx, params) {
+    const amount = params.amount || 1;
+    Object.values(lobby.cards).filter((c) => c.owner !== ctx.controllerId && c.zoneType === "creature").forEach((c) => {
+      c.counters = (c.counters || 0) - amount;
+      broadcastCard(lobby, c);
+    });
   },
   // Generic "destroy every permanent matching a filter" -- covers every modal board-wipe MODE found
   // in the gap analysis (Austere Command's four, Crux of Fate's two, Cleansing Nova's second) with
@@ -7798,6 +7816,10 @@ io.on("connection", (socket) => {
     p.mana = remaining;
     sendToGraveyardInternal(lobby, card);
     pushLog(lobby, `${p.name} cycles ${card.name || "a card"}`);
+    // Cycling IS discarding (CR 702.28e) -- Archfiend of Ifnir's own "whenever you cycle OR
+    // discard" spells this out explicitly, but even a plain "whenever you discard a card" ability
+    // is real Magic-correct to fire here too.
+    fireGlobalTrigger(lobby, "youDiscard", socket.id, card);
     if (cyc.kind === "basicLand") EFFECTS.tutorToHand(lobby, { controllerId: socket.id }, { typeFilter: cyc.landType || "land" });
     else drawN(lobby, socket.id, 1);
     broadcastPlayers(lobby);
@@ -8136,6 +8158,7 @@ io.on("connection", (socket) => {
     if (autoDiscardCard) {
       pushLog(lobby, `${p.name} discards ${autoDiscardCard.name || "a card"} to pay the cost`);
       sendToGraveyardInternal(lobby, autoDiscardCard);
+      fireGlobalTrigger(lobby, "youDiscard", socket.id, autoDiscardCard);
     }
     if (ability.manaAbility) {
       // Real Magic (CR 605): a mana ability never uses the stack -- it resolves the instant it's
@@ -9197,8 +9220,14 @@ io.on("connection", (socket) => {
     }
     const p = lobby.players[socket.id];
     const advanceAfter = pd.advanceAfter;
-    ids.forEach((id) => sendToGraveyardInternal(lobby, lobby.cards[id]));
+    const discardedCards = ids.map((id) => lobby.cards[id]);
+    discardedCards.forEach((card) => sendToGraveyardInternal(lobby, card));
     pushLog(lobby, `${p.name} discarded ${ids.length} card(s)${advanceAfter ? " to hand size" : ""}`);
+    // Archfiend of Ifnir-style "whenever you discard a card" -- fired once per card (a multi-card
+    // discard, e.g. hand-size cleanup or Mind Rot, is really N separate discard events), covers both
+    // this hand-size/pendingDiscard path and any spell/ability-driven discard (they all route
+    // through the same targetPlayerDiscards -> pendingDiscard -> resolveDiscard pipeline).
+    discardedCards.forEach((card) => fireGlobalTrigger(lobby, "youDiscard", socket.id, card));
     lobby.turn.pendingDiscard = null;
     // Only the End Step hand-size cleanup (nextPhase's own check, flagged via advanceAfter) should
     // actually move the turn forward once resolved -- a mid-turn discard from a spell effect
