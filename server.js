@@ -5919,6 +5919,7 @@ function playersView(lobby, viewerId) {
 
 function broadcastPlayers(lobby) {
   refreshAllDynamicPT(lobby); // Body of Knowledge/Molimo -- see its own comment for why this is the right choke point
+  checkStateBasedSacrificeConditions(lobby); // Tethered Griffin -- see its own comment for why this is the right choke point
   for (const sid of lobbySocketIds(lobby)) {
     const sock = io.sockets.sockets.get(sid);
     if (sock) sock.emit("players", playersView(lobby, sid));
@@ -6008,6 +6009,33 @@ function refreshAllDynamicPT(lobby) {
     const card = lobby.cards[id];
     if (applyDynamicPT(lobby, card)) broadcastCard(lobby, card);
   }
+}
+// Tethered Griffin -- "When you control no enchantments, sacrifice this creature." A real state
+// trigger (CR 603.8): checked continuously as the game state changes, not fired off one specific
+// event. Same "hook into broadcastPlayers, the single most ubiquitous state-changed choke point in
+// this file" precedent refreshAllDynamicPT just above already established for item 10's own
+// continuous characteristic-defining abilities. Generic text-scan (no table entry needed),
+// reusable for any future "when you control no [type], sacrifice this creature" card, not just
+// this one. Collects matches first, then destroys them in a second pass -- mutating lobby.cards
+// (deleting entries) while iterating `for...in` over it is unsafe.
+function checkStateBasedSacrificeConditions(lobby) {
+  const toSacrifice = [];
+  for (const id in lobby.cards) {
+    const card = lobby.cards[id];
+    if (card.zoneType !== "creature") continue;
+    const m = (card.text || "").match(/when you control no (.+?), sacrifice this creature/i);
+    if (!m) continue;
+    let typeWord = m[1].trim().toLowerCase();
+    if (typeWord.endsWith("s")) typeWord = typeWord.slice(0, -1);
+    const hasType = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && (c.type || "").toLowerCase().includes(typeWord));
+    if (!hasType) toSacrifice.push(card);
+  }
+  toSacrifice.forEach((card) => {
+    if (!lobby.cards[card.id]) return; // already gone (e.g. two matching cards checked in the same pass)
+    pushLog(lobby, `${card.name || "A creature"} is sacrificed (its own state-trigger condition is no longer met)`);
+    fireDeathTriggers(lobby, card);
+    sendToGraveyardInternal(lobby, card);
+  });
 }
 
 function spawnBattlefieldCard(lobby, data) {
