@@ -8418,7 +8418,10 @@ io.on("connection", (socket) => {
   // "resolveManaChoice") -- same precedent as everywhere else in this file reading a land's own
   // text directly rather than keying off its name.
   function applyPainlandDamageIfNeeded(lobby, card, playerId) {
-    if (!/this land deals 1 damage to you/i.test(card.text || "")) return;
+    // Elves of Deep Shadow and similar "painful" mana dorks use "this creature" instead of "this
+    // land" -- same text, different voice, same mechanism (this check already runs for every
+    // tapped mana source, lands and dorks alike, per this function's own call sites).
+    if (!/this (?:land|creature) deals 1 damage to you/i.test(card.text || "")) return;
     applyLifeLoss(lobby, playerId, 1);
     checkEliminations(lobby); // a real way to die, checked immediately -- same as any other life-loss cost
     broadcastPlayers(lobby);
