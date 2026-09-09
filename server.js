@@ -496,6 +496,10 @@ const CARD_ABILITIES = {
   // District just above (entersTapped itself needs no table entry, already generic).
   "hedge maze": [{ trigger: "etb", label: "Hedge Maze — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
   "thundering falls": [{ trigger: "etb", label: "Thundering Falls — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
+  // MKM "Surveil land" cycle -- same shape as the MID/VOW cycle just above. Its dual-color "{T}: Add
+  // X or Y" half is reminder text (parenthetical in the real oracle text) needing no table entry --
+  // same free-tap dual-land shortcut as every other basic-type dual land.
+  "undercity sewers": [{ trigger: "etb", label: "Undercity Sewers — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
   "izzet boilerworks": [{ trigger: "etb", label: "Izzet Boilerworks — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
   // "When this land enters UNTAPPED" -- checked against the card's own real tapped state at ETB
   // time (whatever entersTapped already decided, including its own "unless you control..."
