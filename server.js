@@ -4925,6 +4925,27 @@ function conditionalEntersTappedTypes(text) {
   if (!m) return null;
   return [m[1], m[2]].filter(Boolean);
 }
+// Mystic Sanctuary-style "unless you control three or more other Islands" and the Kaldheim
+// slowland cycle's "unless you control two or more other lands" -- a genuinely DIFFERENT shape
+// from conditionalEntersTappedTypes above (a real MINIMUM count, not just "at least one of either
+// type"), previously unhandled entirely: the singular-article regex above never matched "N or
+// more", so entersTapped fell through to its own generic "unless you" fallback below and returned
+// false unconditionally -- confirmed LIVE (Mystic Sanctuary entered UNTAPPED with zero other
+// Islands controlled) that this silently made every card with this wording always enter untapped,
+// strictly better than real Magic regardless of board state. "lands" (the slowland wording) needs
+// no special-casing: every land's own type line already contains "Land", so counting type-matches
+// against typeWord "land" naturally counts all lands, same mechanism as a specific type like
+// "Island". `c.id !== card.id` excludes the land itself (matters for Mystic Sanctuary, whose own
+// type line IS "Land — Island" and would otherwise silently count toward its own "other Islands").
+function conditionalEntersTappedCount(text) {
+  const m = (text || "").toLowerCase().match(/enters(?: the battlefield)? tapped unless you control (\w+) or more(?: other)? ([a-z]+)/);
+  if (!m) return null;
+  const min = NUMBER_WORDS[m[1]] || parseInt(m[1], 10);
+  if (!min) return null;
+  let typeWord = m[2];
+  if (typeWord.endsWith("s")) typeWord = typeWord.slice(0, -1);
+  return { type: typeWord, min };
+}
 function entersTapped(card, lobby) {
   const text = (card.text || "").toLowerCase();
   if (!text.includes("enters the battlefield tapped") && !text.includes("enters tapped")) return false;
@@ -4933,6 +4954,12 @@ function entersTapped(card, lobby) {
     if (!lobby || !card.owner) return true; // conservative fallback if lobby context isn't available
     const hasType = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && conditionalTypes.some((t) => (c.type || "").toLowerCase().includes(t)));
     return !hasType;
+  }
+  const countCond = conditionalEntersTappedCount(card.text);
+  if (countCond) {
+    if (!lobby || !card.owner) return true;
+    const count = Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.id !== card.id && c.zoneType === "mana" && (c.type || "").toLowerCase().includes(countCond.type)).length;
+    return count < countCond.min;
   }
   // Scoped to the SENTENCE that actually contains "enters tapped" -- a card can have an unrelated
   // "unless"/"if you don't" elsewhere in its text (Jungle Basin/Coral Atoll's own separate
