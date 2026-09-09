@@ -345,12 +345,18 @@ const CARD_ABILITIES = {
   // proliferate/rad-counter clause itself ships here, same "automate what reuses, defer what needs a
   // whole new mechanism" precedent as every earlier partial-card wave this session.
   "thrummingbird": [{ trigger: "combatDamageToPlayer", label: "Thrummingbird — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
-  "glowing one": [{ trigger: "combatDamageToPlayer", label: "Glowing One — they get four rad counters", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 4 }] }],
-  // Infesting Radroach's "can't block" and graveyard-return-on-opponent-mill halves are separate,
-  // unautomated (no generic mill-tracking-per-player exists) -- just the rad-counter clause here.
+  "glowing one": [
+    { trigger: "combatDamageToPlayer", label: "Glowing One — they get four rad counters", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 4 }] },
+    { trigger: "cardsMilled", label: "Glowing One — gain life equal to nonland cards milled", requiresTarget: false, effects: [{ type: "gainLifeEqualToMilledCount" }] }
+  ],
+  // Infesting Radroach's "can't block" half is separate/unautomated. The graveyard-return-on-
+  // opponent-mill half needs no table entry -- it's a graveyard-based reactive trigger, handled by
+  // fireCardsMilledTrigger's own inline text-scan (see its comment).
   "infesting radroach": [{ trigger: "combatDamageToPlayer", label: "Infesting Radroach — they get that many rad counters", requiresTarget: false, effects: [{ type: "giveRadCounters", amountFromDealtDamage: true }] }],
-  // Screeching Scorchbeast's mill-triggered token half is separate/unautomated.
-  "screeching scorchbeast": [{ trigger: "attack", label: "Screeching Scorchbeast — each player gets two rad counters", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 2, target: "eachPlayer" }] }],
+  "screeching scorchbeast": [
+    { trigger: "attack", label: "Screeching Scorchbeast — each player gets two rad counters", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 2, target: "eachPlayer" }] },
+    { trigger: "cardsMilled", condition: (c, lobby) => c.lastMillTriggerTurn !== lobby.turn.turnNumber, label: "Screeching Scorchbeast — create Zombie Mutant tokens equal to nonland cards milled", requiresTarget: false, effects: [{ type: "createZombieMutantsEqualToMilledCountOncePerTurn" }] }
+  ],
   // The Wise Mothman's mill-triggered +1/+1 counter half is separate/unautomated.
   "the wise mothman": [
     { trigger: "etb", label: "The Wise Mothman — each player gets a rad counter", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 1, target: "eachPlayer" }] },
@@ -366,7 +372,10 @@ const CARD_ABILITIES = {
   // "graveyard card milled this turn" tracking, which doesn't exist).
   "the master, transcendent": [{ trigger: "etb", label: "The Master, Transcendent — target player gets two rad counters", requiresTarget: true, targetKind: "player", effects: [{ type: "giveRadCounters", amount: 2 }] }],
   // Mirelurk Queen's mill-triggered draw+counter half is separate/unautomated.
-  "mirelurk queen": [{ trigger: "etb", label: "Mirelurk Queen — target player gets two rad counters", requiresTarget: true, targetKind: "player", effects: [{ type: "giveRadCounters", amount: 2 }] }],
+  "mirelurk queen": [
+    { trigger: "etb", label: "Mirelurk Queen — target player gets two rad counters", requiresTarget: true, targetKind: "player", effects: [{ type: "giveRadCounters", amount: 2 }] },
+    { trigger: "cardsMilled", condition: (c, lobby) => c.lastMillTriggerTurn !== lobby.turn.turnNumber, label: "Mirelurk Queen — draw a card, put a +1/+1 counter on this creature", requiresTarget: false, effects: [{ type: "drawAndCounterSelfOncePerMillTurn" }] }
+  ],
   // Nightkin Ambusher's Ward and "can't be blocked while defender has a rad counter" halves are
   // separate/unautomated (Ward is a cosmetic badge in this engine's trust model; the block
   // restriction has no generic hook).
@@ -1992,6 +2001,35 @@ const EFFECTS = {
     if (already) return;
     spawnBattlefieldCard(lobby, { name: "The Hollow Sentinel", type: "Legendary Artifact Creature — Phyrexian Golem", power: "3", toughness: "3", colors: [], keywords: [], owner: ctx.controllerId, zoneType: "creature", text: "" });
   },
+  // Glowing One -- "Whenever a player mills a nonland card, you gain 1 life." Real wording fires
+  // once PER CARD milled (unlike Mirelurk Queen/Screeching Scorchbeast's own "one or more... are
+  // milled" batched wording just below) -- gaining nonlandMilledCount life at once is
+  // mathematically identical to firing once per card, just simpler to implement.
+  gainLifeEqualToMilledCount(lobby, ctx, params) { applyLifeGain(lobby, ctx.controllerId, params.nonlandMilledCount || 0); },
+  // Mirelurk Queen -- "Whenever one or more nonland cards are milled, draw a card, then put a
+  // +1/+1 counter on this creature. This ability triggers only once each turn." The once-per-turn
+  // gate is a `condition` on the table entry (same lastExtraCombatTurn-style stamp precedent as
+  // grantExtraCombatPhase's own stampCard), stamped here on the real live card.
+  drawAndCounterSelfOncePerMillTurn(lobby, ctx) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    card.lastMillTriggerTurn = lobby.turn.turnNumber;
+    drawN(lobby, ctx.controllerId, 1);
+    EFFECTS.addCountersToSelf(lobby, ctx, { amount: 1 });
+  },
+  // Screeching Scorchbeast -- "Whenever one or more nonland cards are milled, you may create that
+  // many 2/2 black Zombie Mutant creature tokens. Do this only once each turn." Same once-per-turn
+  // gate/stamp shape as Mirelurk Queen just above; "you may" is auto-taken (always creates the
+  // tokens), same "no real choice worth a UI" disclosed simplification used throughout this table.
+  createZombieMutantsEqualToMilledCountOncePerTurn(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    card.lastMillTriggerTurn = lobby.turn.turnNumber;
+    const n = params.nonlandMilledCount || 0;
+    for (let i = 0; i < n; i++) {
+      spawnBattlefieldCard(lobby, { name: "Zombie Mutant", type: "Token Creature — Zombie Mutant", power: "2", toughness: "2", colors: ["B"], owner: ctx.controllerId, zoneType: "creature" });
+    }
+  },
   // Cephalid Coliseum -- "Target player draws three cards, then discards three cards." The
   // target-player counterpart to drawCards (which always draws for the controller), same
   // self/chosenTargetId convention targetPlayerDiscards already uses -- chosenTargetId is merged
@@ -2143,12 +2181,7 @@ const EFFECTS = {
     });
   },
   millCards(lobby, ctx, params) {
-    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => {
-      const p = lobby.players[id]; if (!p) return;
-      for (let i = 0; i < (params.amount || 1) && p.library.length > 0; i++) {
-        p.graveyard.push(p.library.shift());
-      }
-    });
+    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => millLibraryCards(lobby, id, params.amount || 1));
   },
   // `tokenType` (the token's own type line), NOT `type` -- an effect's dispatch key IS `type`
   // ("createToken", read by executeAbilityEffects via `EFFECTS[params.type]`), so a params object
@@ -7171,6 +7204,52 @@ function fireYouProliferateTrigger(lobby, controllerId) {
   });
   if (returning.length) broadcastPlayers(lobby);
 }
+// Fallout's "whenever one or more nonland cards are milled" family -- real wording has no "you"/
+// "an opponent" qualifier, so ANY player's mill counts, same "scan the whole table" shape
+// fireGlobalTriggerAllPlayers already established for Ledger Shredder (a new dedicated dispatcher
+// rather than reusing that one directly, since this needs to bake a custom nonlandMilledCount into
+// every fired effect, not just a chosenTargetId). Infesting Radroach's "whenever AN OPPONENT
+// mills... if this creature is in YOUR graveyard" is a genuinely different, graveyard-based shape
+// (the watching card isn't on the battlefield at all) handled by its own inline scan below, same
+// "plain text-scan, no table entry" precedent as Voidwing Hybrid's own graveyard trigger.
+function fireCardsMilledTrigger(lobby, milledPlayerId, nonlandCount) {
+  if (!lobby.turn.started || nonlandCount <= 0) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "cardsMilled").forEach((ability) => {
+      const fireAbility = { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, nonlandMilledCount: nonlandCount })) };
+      fireTrigger(lobby, c, fireAbility);
+    });
+  }
+  Object.keys(lobby.players).forEach((watcherId) => {
+    if (watcherId === milledPlayerId) return; // "an opponent" -- not this same player's own mill
+    const watcher = lobby.players[watcherId];
+    const match = (watcher.graveyard || []).find((e) => /whenever an opponent mills a nonland card, if this creature is in your graveyard, you may return it to your hand/i.test(e.text || ""));
+    if (match) {
+      watcher.graveyard = watcher.graveyard.filter((e) => e !== match);
+      spawnBattlefieldCard(lobby, { ...match, owner: watcherId, faceDown: true, zoneType: "hand" });
+      broadcastPlayers(lobby);
+    }
+  });
+}
+// The one real choke point every mill site funnels through -- EFFECTS.millCards (automated card
+// effects) and the millCard socket handler (a manual self-mill button) both call this instead of
+// duplicating the shift-and-push loop, so fireCardsMilledTrigger fires correctly regardless of how
+// the mill happened. Returns how many cards were ACTUALLY milled (library could run out early).
+function millLibraryCards(lobby, playerId, amount) {
+  const p = lobby.players[playerId];
+  if (!p) return 0;
+  let nonlandCount = 0, total = 0;
+  for (let i = 0; i < amount && p.library.length > 0; i++) {
+    const entry = p.library.shift();
+    p.graveyard.push(entry);
+    total++;
+    if (!(entry.type || "").toLowerCase().includes("land")) nonlandCount++;
+  }
+  if (total > 0) fireCardsMilledTrigger(lobby, playerId, nonlandCount);
+  return total;
+}
 // Fires every authored "dies" ability for `card` (self-referential only). Must be called BEFORE
 // the card is actually removed from lobby.cards, so its data (owner, etc.) is still intact to
 // build the ability instance from.
@@ -10174,11 +10253,7 @@ io.on("connection", (socket) => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     const n = Math.max(1, Math.min(20, count || 1));
-    let milled = 0;
-    for (let i = 0; i < n && p.library.length > 0; i++) {
-      p.graveyard.push(p.library.shift());
-      milled++;
-    }
+    const milled = millLibraryCards(lobby, socket.id, n);
     broadcastPlayers(lobby);
     if (milled) pushLog(lobby, `${p.name} milled ${milled} card${milled > 1 ? "s" : ""}`);
   });
