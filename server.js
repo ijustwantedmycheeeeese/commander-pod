@@ -250,6 +250,12 @@ const CARD_ABILITIES = {
   "nekrataal": [{ trigger: "etb", label: "Nekrataal — destroy target creature", requiresTarget: true, effects: [{ type: "destroyTarget" }] }],
   "ravenous chupacabra": [{ trigger: "etb", label: "Ravenous Chupacabra — destroy target creature", requiresTarget: true, effects: [{ type: "destroyTarget" }] }],
   "man-o'-war": [{ trigger: "etb", label: "Man-o'-War — bounce target creature", requiresTarget: true, effects: [{ type: "bounceTargetToHand" }] }],
+  // "You may destroy target creature with flying" -- new creatureWithFlying targetKind (see its own
+  // comment in resolveChosenTarget), plus a CR 603.3c auto-fizzle in fireTrigger for the common
+  // no-flying-creature-anywhere case. The "may" auto-resolves to a real target choice like every
+  // other undisclosed "may" in this file (see Valakut's own comment) -- cancelTargetChoice covers
+  // declining.
+  "stingerfling spider": [{ trigger: "etb", label: "Stingerfling Spider — you may destroy target creature with flying", requiresTarget: true, targetKind: "creatureWithFlying", effects: [{ type: "destroyTarget" }] }],
   // Marang River Regent -- "return up to two OTHER target nonland permanents," narrowed to one
   // target, same disclosed "up to two -> one" simplification as Angel of the Ruins above.
   // targetKind "permanent" is already hardcoded to creature/artifact zoneTypes only (this engine
@@ -5897,6 +5903,14 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
     return { ok: true };
   }
+  // Stingerfling Spider -- "target creature with flying." Same shape as tappedCreature above, just
+  // checked via effectiveKeywords (so a granted, not just printed, Flying counts too).
+  if (targetKind === "creatureWithFlying") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "creature" || !effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying")) return { ok: false, error: "Choose a creature with flying." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
   if (targetKind === "permanent") {
     const c = lobby.cards[targetId];
     if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent." };
@@ -6131,6 +6145,12 @@ function fireTrigger(lobby, card, ability, xValue) {
     if (ability.targetKind === "ownGraveyard") {
       const p = lobby.players[card.owner];
       if (!p || !(p.graveyard || []).length) return;
+    }
+    // Stingerfling Spider -- same CR 603.3c auto-fizzle: without this, the common case (no flying
+    // creature anywhere on the battlefield) would queue an unanswerable "may destroy" prompt.
+    if (ability.targetKind === "creatureWithFlying") {
+      const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying"));
+      if (!hasMatch) return;
     }
     // Griffin Dreamfinder/Sharuum the Hegemon-style "target artifact/enchantment card in your
     // graveyard" -- same CR 603.3c auto-fizzle as ownGraveyardCreature just above (this one was
