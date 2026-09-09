@@ -5981,6 +5981,55 @@ function pushToStack(lobby, card, casterId) {
     casterP.spellsCastThisTurn = (casterP.spellsCastThisTurn || 0) + 1;
     if (casterP.spellsCastThisTurn === 2) fireGlobalTriggerAllPlayers(lobby, "secondSpellCastByAPlayer", card);
   }
+  // Cascade (CR 702.84) -- a pure text-scan on the cast spell's own printed text, same "no table
+  // entry needed" precedent as entersTapped/applyPainlandDamageIfNeeded, rather than a real
+  // triggered ability on the stack (which could itself be responded to). Runs right here, after the
+  // spell is already on the stack, same reasoning as the youCastSpell comment above: the free cast
+  // this produces goes through the real castSpell/pushToStack path, so it lands on TOP of the
+  // cascading spell and resolves first, matching "this trigger resolves before the spell that
+  // caused it." Maelstrom Wanderer's "Cascade, cascade" does the whole process twice --
+  // cascadeCountFromText counts literal occurrences of the word rather than assuming 1, since the
+  // reminder text for this keyword never repeats the word itself.
+  if (/\bcascade\b/i.test(card.text || "")) resolveCascade(lobby, casterId, card);
+}
+function cascadeCountFromText(text) {
+  return ((text || "").match(/\bcascade\b/gi) || []).length;
+}
+// Exiles cards from the top of the caster's library until a nonland card with a lower mana value
+// than the cascading spell is found, then casts it for free via the real castSpell path (so it
+// fires every normal cast-trigger in turn, exactly like a genuine cast). WHETHER to cast the found
+// card is never prompted -- declining is essentially never correct for a free cast, same "no real
+// choice worth a UI" disclosed simplification as exileTopNPutCreatureOntoBattlefield's auto-pick.
+// "Put the exiled cards on the bottom in a random order" simplifies to shuffling the whole library
+// after returning them, same precedent as lookTopNRevealTypesToHand's own comment (this app's
+// library has no concept of top/bottom ordering beyond draw-from-top).
+function resolveCascade(lobby, casterId, spellCard) {
+  const p = lobby.players[casterId];
+  if (!p) return;
+  const times = cascadeCountFromText(spellCard.text);
+  for (let i = 0; i < times; i++) {
+    const exiled = [];
+    let found = null;
+    while (p.library.length > 0) {
+      const entry = p.library.shift();
+      exiled.push(entry);
+      if (!(entry.type || "").toLowerCase().includes("land") && (entry.cmc || 0) < (spellCard.cmc || 0)) {
+        found = entry;
+        break;
+      }
+    }
+    const rest = found ? exiled.filter((e) => e !== found) : exiled;
+    rest.forEach((e) => p.library.push(e));
+    shuffle(p.library);
+    if (found) {
+      pushLog(lobby, `${p.name} cascades off ${spellCard.name || "a spell"} into ${found.name || "a card"}`);
+      const freeCard = spawnBattlefieldCard(lobby, { ...found, owner: casterId, zoneType: "stack", faceDown: false });
+      castSpell(lobby, freeCard, casterId, " without paying its mana cost (cascade)");
+    } else {
+      pushLog(lobby, `${p.name} cascades off ${spellCard.name || "a spell"} but finds no qualifying card`);
+    }
+  }
+  broadcastPlayers(lobby);
 }
 // Esper Sentinel: "Whenever an opponent casts their FIRST noncreature spell each turn, draw a card
 // unless that player pays {X}." Once-per-opponent-per-turn, tracked on the CASTING player (not the
