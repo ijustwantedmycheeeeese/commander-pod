@@ -705,6 +705,14 @@ const ACTIVATED_ABILITIES = {
   "grixis panorama": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Grixis Panorama — search for a basic Island, Swamp, or Mountain", effects: [{ type: "searchLandTypes", types: ["Island", "Swamp", "Mountain"], basicOnly: true, entersTapped: true }] }],
   "jund panorama": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Jund Panorama — search for a basic Swamp, Mountain, or Forest", effects: [{ type: "searchLandTypes", types: ["Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
   "naya panorama": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Naya Panorama — search for a basic Mountain, Forest, or Plains", effects: [{ type: "searchLandTypes", types: ["Mountain", "Forest", "Plains"], basicOnly: true, entersTapped: true }] }],
+  // Landscape cycle -- same painless-fetch shape as the Panoramas just above, but Tap+Sacrifice
+  // only (no {1}), matching their real cost. Each one's own "Cycling {cost}" line needs no separate
+  // handling here -- cyclingCostFromText/the cycleCard handler already generically cover any
+  // card's Cycling ability regardless of name.
+  "deceptive landscape": [{ cost: { tap: true, sacrifice: true }, label: "Deceptive Landscape — search for a basic Plains, Swamp, or Forest", effects: [{ type: "searchLandTypes", types: ["Plains", "Swamp", "Forest"], basicOnly: true, entersTapped: true }] }],
+  "sheltering landscape": [{ cost: { tap: true, sacrifice: true }, label: "Sheltering Landscape — search for a basic Mountain, Forest, or Plains", effects: [{ type: "searchLandTypes", types: ["Mountain", "Forest", "Plains"], basicOnly: true, entersTapped: true }] }],
+  "tranquil landscape": [{ cost: { tap: true, sacrifice: true }, label: "Tranquil Landscape — search for a basic Forest, Plains, or Island", effects: [{ type: "searchLandTypes", types: ["Forest", "Plains", "Island"], basicOnly: true, entersTapped: true }] }],
+  "twisted landscape": [{ cost: { tap: true, sacrifice: true }, label: "Twisted Landscape — search for a basic Swamp, Mountain, or Forest", effects: [{ type: "searchLandTypes", types: ["Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
   // Signets -- "{1}, {T}: Add {X}{Y}." Both colors at once for a fixed cost, not a choice the way a
   // dual land's "T: add X or Y" is -- manaAbility:true is what makes that distinction real (see
   // activateAbility and the tap handler's own comments for why this can't just be the same
