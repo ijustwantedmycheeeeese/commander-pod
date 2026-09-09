@@ -266,6 +266,9 @@ const CARD_ABILITIES = {
   // "deathYouControl"/"selfGainsLife"/"youCastSpell" fire for a permanent's controller off an event
   // on any of their OTHER permanents/actions, not just this card's own name.
   "zulaport cutthroat": [{ trigger: "deathYouControl", label: "Zulaport Cutthroat — drains for 1", effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }, { type: "gainLife", target: "controller", amount: 1 }] }],
+  // Poison-Tip Archer -- "whenever ANOTHER creature dies" (any player's), not the self-scoped
+  // deathYouControl above -- see fireGlobalTriggerAllPlayers' own new excludeSelf check.
+  "poison-tip archer": [{ trigger: "deathAnyCreature", excludeSelf: true, label: "Poison-Tip Archer — each opponent loses 1 life", effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] }],
   "ajani's pridemate": [{ trigger: "selfGainsLife", label: "Ajani's Pridemate — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
   // Real text has no further condition ("Whenever you cast a spell, you gain 1 life") -- no
   // simplification needed here, unlike most other narrowed entries in this table.
@@ -6461,6 +6464,10 @@ function fireDeathTriggers(lobby, card) {
   if (card.zoneType === "creature") io.to(lobby.id).emit("creatureDied", { id: card.id, colors: card.colors || [] });
   getAutomatedAbilities(card.name, "death").forEach((ability) => fireTrigger(lobby, card, ability));
   fireGlobalTrigger(lobby, "deathYouControl", card.owner, card);
+  // Poison-Tip Archer -- "whenever ANOTHER creature dies" (any player's, not just this one's own
+  // controller) -- same fireGlobalTriggerAllPlayers dispatcher built for Ledger Shredder's connive,
+  // just a new eventType name.
+  fireGlobalTriggerAllPlayers(lobby, "deathAnyCreature", card);
   fireLiesaReturnToHandTrigger(lobby, card);
   fireKardurDoomscourgeDeathTrigger(lobby, card);
   checkEquipmentDeathDraw(lobby, card);
@@ -6579,7 +6586,13 @@ function fireGlobalTriggerAllPlayers(lobby, eventType, eventCard) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.zoneType === "hand" || c.zoneType === "stack") continue;
-    getAutomatedAbilities(c.name, eventType).forEach((ability) => fireTrigger(lobby, c, ability));
+    getAutomatedAbilities(c.name, eventType).forEach((ability) => {
+      // Poison-Tip Archer-style "whenever ANOTHER creature dies" -- same excludeSelf shape as
+      // fireGlobalTrigger's own (City of Traitors, etc.), needed here since this dispatcher scans
+      // every player's battlefield including the watching permanent's own controller.
+      if (ability.excludeSelf && eventCard && c.id === eventCard.id) return;
+      fireTrigger(lobby, c, ability);
+    });
   }
 }
 
