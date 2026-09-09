@@ -405,6 +405,14 @@ const CARD_ABILITIES = {
   "thriving heath": [{ trigger: "etb", label: "Thriving Heath — choose a color other than white", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "W" }] }],
   "thriving isle": [{ trigger: "etb", label: "Thriving Isle — choose a color other than blue", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "U" }] }],
   "thriving moor": [{ trigger: "etb", label: "Thriving Moor — choose a color other than black", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "B" }] }],
+  // Pillar of Origins / Secluded Courtyard / Unclaimed Territory -- "as this enters, choose a
+  // creature type," the ETB half of their own restricted-mana ability (see the matching
+  // ACTIVATED_ABILITIES entries). Reuses the EXISTING targetKind:"creatureType" + chooseCreatureType
+  // mechanism built for Icon of Ancestry/Cavern of Souls verbatim -- same free-text target-choice
+  // flow, same card.chosenCreatureType field read back by addRestrictedManaAnyColorForChosenType.
+  "pillar of origins": [{ trigger: "etb", label: "Pillar of Origins — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
+  "secluded courtyard": [{ trigger: "etb", label: "Secluded Courtyard — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
+  "unclaimed territory": [{ trigger: "etb", label: "Unclaimed Territory — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "commercial district": [{ trigger: "etb", label: "Commercial District — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
   // MID/VOW "Surveil land" cycle -- same "enters tapped" + "surveil 1" shape as Commercial
@@ -866,6 +874,60 @@ const ACTIVATED_ABILITIES = {
   "spire of industry": [
     { cost: { tap: true }, manaAbility: true, label: "Spire of Industry — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { tap: true, life: 1 }, manaAbility: true, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && (c.type || "").toLowerCase().includes("artifact")), conditionError: "You need to control an artifact to activate this.", label: "Spire of Industry — Pay 1 life: Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }
+  ],
+  // Restricted ("spend this mana only to...") mana sources -- see affordWithRestricted's own
+  // comment for the core mechanism. Each `matches` closure is baked in here at table-definition
+  // time (same precedent as every ability's own `condition(card, lobby)`), evaluated later against
+  // the real cast/activation it's tested against.
+  "jeweled lotus": [
+    { cost: { tap: true, sacrifice: true }, manaAbility: true, label: "Jeweled Lotus — Add three mana of any one color, spend only on your commander", effects: [{ type: "addRestrictedManaAnyColor", amount: 3, matches: (ctx) => ctx.kind === "cast" && !!ctx.card.isCommander, label: "Jeweled Lotus" }] }
+  ],
+  "delighted halfling": [
+    { cost: { tap: true }, manaAbility: true, label: "Delighted Halfling — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Delighted Halfling — Add one mana of any color, spend only on a legendary spell (uncounterable)", effects: [{ type: "addRestrictedManaAnyColor", matches: (ctx) => ctx.kind === "cast" && /legendary/i.test(ctx.card.type || ""), label: "Delighted Halfling", grantsUncounterable: true }] }
+  ],
+  // "Spend this mana only to activate abilities" -- the one card on this list restricted by WHAT
+  // it's spent on (any activated ability) rather than WHAT'S being cast. No player choice in the
+  // colors either (a fixed {C}{U}), so this uses addFixedRestrictedMana, not the any-color variant.
+  "omen hawker": [
+    { cost: { tap: true }, manaAbility: true, label: "Omen Hawker — Add {C}{U}, spend only to activate abilities", effects: [{ type: "addFixedRestrictedMana", colors: ["C", "U"], matches: (ctx) => ctx.kind === "activate", label: "Omen Hawker" }] }
+  ],
+  // Only the plain mana + "legendary spell" restriction half is in scope here -- Plaza of Heroes'
+  // other two abilities ("add one mana of any color AMONG your legendary permanents," a different
+  // kind of restriction on which colors can be produced at all, and the exile-for-hexproof ability)
+  // are separate mechanisms, not attempted in this pass.
+  "plaza of heroes": [
+    { cost: { tap: true }, manaAbility: true, label: "Plaza of Heroes — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Plaza of Heroes — Add one mana of any color, spend only on a legendary spell", effects: [{ type: "addRestrictedManaAnyColor", matches: (ctx) => ctx.kind === "cast" && /legendary/i.test(ctx.card.type || ""), label: "Plaza of Heroes" }] }
+  ],
+  "giada, font of hope": [
+    { cost: { tap: true }, manaAbility: true, label: "Giada, Font of Hope — Add {W}, spend only on an Angel spell", effects: [{ type: "addFixedRestrictedMana", colors: ["W"], matches: (ctx) => ctx.kind === "cast" && /angel/i.test(ctx.card.type || ""), label: "Giada, Font of Hope" }] }
+  ],
+  // "Add X mana of any one color, where X is Helga's power" -- amount is a real function(lobby,
+  // sourceCard) resolved once at activation (see addRestrictedManaAnyColor's own comment), same
+  // live power-with-bonuses expression Bonders' Enclave/Bugenhagen's own conditions already use.
+  "helga, skittish seer": [
+    { cost: { tap: true }, manaAbility: true, label: "Helga, Skittish Seer — Add X mana of any one color (X = Helga's power), spend only on big/X creature spells", effects: [{ type: "addRestrictedManaAnyColor", amount: (lobby, sourceCard) => sourceCard ? (parsePT(sourceCard.power) + (sourceCard.counters || 0) + attachedBonusFor(lobby, sourceCard).powerBonus + staticBonusFor(lobby, sourceCard).powerBonus) : 1, matches: (ctx) => ctx.kind === "cast" && /creature/i.test(ctx.card.type || "") && ((ctx.card.cmc || 0) >= 4 || /\{x\}/i.test(ctx.card.manaCost || "")), label: "Helga, Skittish Seer" }] }
+  ],
+  // Only the plain mana + "Dragon or Omen spell" restriction half is in scope here -- its own
+  // library-tutor ability (separate mechanism) isn't attempted in this pass.
+  "maelstrom of the spirit dragon": [
+    { cost: { tap: true }, manaAbility: true, label: "Maelstrom of the Spirit Dragon — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Maelstrom of the Spirit Dragon — Add one mana of any color, spend only on a Dragon or Omen spell", effects: [{ type: "addRestrictedManaAnyColor", matches: (ctx) => ctx.kind === "cast" && /dragon|omen/i.test(ctx.card.type || ""), label: "Maelstrom of the Spirit Dragon" }] }
+  ],
+  // Pillar of Origins / Secluded Courtyard / Unclaimed Territory -- the restriction depends on the
+  // creature type chosen at ETB (see the matching CARD_ABILITIES entries + chooseCreatureType),
+  // resolved fresh each activation by addRestrictedManaAnyColorForChosenType.
+  "pillar of origins": [
+    { cost: { tap: true }, manaAbility: true, label: "Pillar of Origins — Add one mana of any color, spend only on a creature spell of the chosen type", effects: [{ type: "addRestrictedManaAnyColorForChosenType" }] }
+  ],
+  "secluded courtyard": [
+    { cost: { tap: true }, manaAbility: true, label: "Secluded Courtyard — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Secluded Courtyard — Add one mana of any color, spend only on a creature spell of the chosen type or to activate an ability of a creature source of the chosen type", effects: [{ type: "addRestrictedManaAnyColorForChosenType", allowActivate: true }] }
+  ],
+  "unclaimed territory": [
+    { cost: { tap: true }, manaAbility: true, label: "Unclaimed Territory — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Unclaimed Territory — Add one mana of any color, spend only on a creature spell of the chosen type", effects: [{ type: "addRestrictedManaAnyColorForChosenType" }] }
   ],
   // Wave 24 -- not a mana ability, so the plain "{T}: Add {C}" half stays covered by the free-tap
   // shortcut as-is (only a manaAbility-flagged entry disqualifies it -- see the "tap" handler's own
@@ -2541,6 +2603,58 @@ const EFFECTS = {
     p.pendingFreeManaChoice = { amount: upgraded ? 2 : 1 };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: ["W", "U", "B", "R", "G"] });
+  },
+  // Jeweled Lotus / Delighted Halfling / Omen Hawker / Plaza of Heroes / Giada / Maelstrom of the
+  // Spirit Dragon-style "Spend this mana only to cast/activate X" -- same "__free__" sentinel
+  // pending-choice flow as chooseManaAnyColor just above, but the eventual mana lands in
+  // p.restrictedMana (see affordWithRestricted's own comment) instead of p.mana. `params.matches` is
+  // a real function baked in at table-definition time (same precedent as every ability's own
+  // `condition(card, lobby)`), evaluated later against the actual cast/activation, not right now.
+  // `params.amount` can also be a function(lobby, sourceCard) for a dynamic amount (Helga's own
+  // power) -- resolved here, once, at the moment the mana is actually produced.
+  addRestrictedManaAnyColor(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const sourceCard = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    const amount = typeof params.amount === "function" ? Math.max(0, params.amount(lobby, sourceCard)) : (params.amount || 1);
+    if (amount <= 0) return;
+    p.pendingFreeManaChoice = { amount, restricted: { matches: params.matches, label: params.label || (sourceCard && sourceCard.name) || "Mana source", grantsUncounterable: !!params.grantsUncounterable } };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.label || (sourceCard && sourceCard.name) || "Mana source", options: ["W", "U", "B", "R", "G"] });
+  },
+  // Omen Hawker -- "{T}: Add {C}{U}. Spend this mana only to activate abilities." Unlike every
+  // other restricted-mana source on this list, there's no player choice at all (a FIXED set of
+  // colors, not "any one color") -- pushes straight into p.restrictedMana, no chooseMana prompt.
+  addFixedRestrictedMana(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    if (!p.restrictedMana) p.restrictedMana = [];
+    (params.colors || []).forEach((color) => {
+      if (["W", "U", "B", "R", "G", "C"].includes(color)) p.restrictedMana.push({ color, matches: params.matches, label: params.label || "Mana source", grantsUncounterable: !!params.grantsUncounterable });
+    });
+    pushLog(lobby, `${p.name} adds ${(params.colors || []).map((c) => `{${c}}`).join("")} (${params.label || "restricted"})`);
+    broadcastPlayers(lobby);
+  },
+  // Pillar of Origins / Secluded Courtyard / Unclaimed Territory -- same shape as
+  // addRestrictedManaAnyColor just above, but the restriction depends on a creature type chosen
+  // when the source ETB'd (card.chosenCreatureType, see chooseCreatureType's own comment) rather
+  // than a fixed one baked into the table entry -- so the matcher closure has to be built here,
+  // once the chosen type is actually known, instead of at table-definition time.
+  addRestrictedManaAnyColorForChosenType(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const sourceCard = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    const chosenType = (sourceCard && sourceCard.chosenCreatureType) || "";
+    if (!chosenType) return;
+    const allowActivate = !!params.allowActivate;
+    const matches = (castCtx) => {
+      if (!/creature/i.test((castCtx.card.type || ""))) return false;
+      if (!(castCtx.card.type || "").toLowerCase().includes(chosenType.toLowerCase())) return false;
+      return castCtx.kind === "cast" || (allowActivate && castCtx.kind === "activate");
+    };
+    p.pendingFreeManaChoice = { amount: 1, restricted: { matches, label: `${(sourceCard && sourceCard.name) || "Mana source"} (${chosenType})` } };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: sourceCard ? sourceCard.name : "Mana source", options: ["W", "U", "B", "R", "G"] });
   },
   // Cascading Cataracts -- "Add five mana in any combination of colors," a real INDEPENDENT choice
   // per mana (unlike chooseManaAnyColor's own `amount`, which adds several mana of the SAME picked
@@ -4922,6 +5036,9 @@ function isProtectedFromCountering(lobby, stackItem) {
   // directly on the stack item's own text (pushToStack pushes the real card object, so .text
   // survives onto the stack). No anthem/grant needed for this self-referential case.
   if (/this spell can'?t be countered/i.test(stackItem.text || "")) return true;
+  // Delighted Halfling -- "...and that spell can't be countered," set on the cast card itself in
+  // attemptPlay only when mana carrying this specific bonus was actually spent on it.
+  if (stackItem.castWithUncounterableMana) return true;
   if (!(stackItem.type || "").toLowerCase().includes("creature")) return false;
   return Object.values(lobby.cards).some((c) => c.owner === stackItem.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /creature spells you control can'?t be countered/i.test(c.text || ""));
 }
@@ -5127,6 +5244,48 @@ function canAffordAndPay(pool, cost, xValue) {
   }
   if (genericNeeded > 0) return null;
   return p;
+}
+
+// Restricted mana ("Spend this mana only to cast your commander," Delighted Halfling/Jeweled
+// Lotus/Omen Hawker/etc.) -- p.restrictedMana is a flat array of single mana-point units,
+// { color, matches: fn(castCtx) => boolean, label }, produced by EFFECTS.addRestrictedManaAnyColor
+// (see its own comment) instead of going straight into p.mana. castCtx is { kind: "cast"|"activate",
+// card: <the card being cast, or whose ability is being activated> }.
+//
+// Reuses canAffordAndPay completely unchanged: builds a MERGED pool (normal mana + only the
+// restricted units that qualify for this specific cast/activation), asks the existing function to
+// pay from that, then works out afterward how much of what got spent came from the restricted side
+// (preferring restricted mana first, since it's otherwise stranded) vs. the normal pool, so the
+// caller can commit both. Returns null if unaffordable even with qualifying restricted mana added
+// in -- fully backward compatible: a player with no restricted mana, or a cast that doesn't qualify
+// for any of it, behaves exactly like a plain canAffordAndPay call.
+function affordWithRestricted(p, cost, xValue, castCtx) {
+  const restricted = p.restrictedMana || [];
+  const qualifying = castCtx ? restricted.filter((u) => u.matches(castCtx)) : [];
+  const qualByColor = EMPTY_MANA();
+  qualifying.forEach((u) => { qualByColor[u.color] = (qualByColor[u.color] || 0) + 1; });
+  const merged = EMPTY_MANA();
+  for (const c of ["W", "U", "B", "R", "G", "C"]) merged[c] = (p.mana[c] || 0) + qualByColor[c];
+  const afterMerged = canAffordAndPay(merged, cost, xValue);
+  if (!afterMerged) return null;
+  const newNormalPool = { ...p.mana };
+  const removedIds = new Set();
+  for (const c of ["W", "U", "B", "R", "G", "C"]) {
+    const spentTotal = merged[c] - afterMerged[c];
+    const spentRestricted = Math.min(spentTotal, qualByColor[c]);
+    newNormalPool[c] = (newNormalPool[c] || 0) - (spentTotal - spentRestricted);
+    let toRemove = spentRestricted;
+    for (const u of qualifying) {
+      if (toRemove <= 0) break;
+      if (u.color !== c || removedIds.has(u)) continue;
+      removedIds.add(u);
+      toRemove--;
+    }
+  }
+  const newRestrictedMana = restricted.filter((u) => !removedIds.has(u));
+  // spentUnits lets a caller react to a property carried on the specific restricted units actually
+  // used to pay -- Delighted Halfling's own bonus "and that spell can't be countered" reads this.
+  return { normalPool: newNormalPool, restrictedMana: newRestrictedMana, spentUnits: [...removedIds] };
 }
 
 function extractCardFields(c) {
@@ -5598,11 +5757,17 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
       return { ok: false, error: `You have no ${addlCost.sacrificeType} to sacrifice as an additional cost.` };
     }
   }
-  const remaining = canAffordAndPay(p.mana, cost, xValue);
-  if (!remaining) {
+  const paid = affordWithRestricted(p, cost, xValue, { kind: "cast", card });
+  if (!paid) {
     return { ok: false, error: `Not enough mana to cast ${card.name || "this card"}.` };
   }
-  p.mana = remaining;
+  p.mana = paid.normalPool;
+  p.restrictedMana = paid.restrictedMana;
+  // Delighted Halfling -- "...and that spell can't be countered." Only true when mana carrying
+  // this specific bonus was ACTUALLY spent on this cast (not just present in the pool), checked via
+  // affordWithRestricted's own spentUnits list. isProtectedFromCountering reads this flag straight
+  // off the stack item later, same as it already reads a spell's own printed "can't be countered."
+  if (paid.spentUnits.some((u) => u.grantsUncounterable)) card.castWithUncounterableMana = true;
   if (sacrificeForCost) {
     fireDeathTriggers(lobby, sacrificeForCost);
     sendToGraveyardInternal(lobby, sacrificeForCost);
@@ -7228,7 +7393,7 @@ function advanceOnePhase(lobby) {
     }
   }
 
-  for (const pid in lobby.players) lobby.players[pid].mana = EMPTY_MANA(); // mana empties every step/phase
+  for (const pid in lobby.players) { lobby.players[pid].mana = EMPTY_MANA(); lobby.players[pid].restrictedMana = []; } // mana empties every step/phase
 
   if (oldPhase === "Combat" && turn.phase !== "Combat") {
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
@@ -7894,7 +8059,7 @@ io.on("connection", (socket) => {
       library: [], graveyard: [], exile: [],
       commanders: [null, null],
       mulligans: 0, handKept: false, openingHandDrawn: false,
-      mana: EMPTY_MANA(), landsPlayedThisTurn: 0, landDropBonus: 0,
+      mana: EMPTY_MANA(), restrictedMana: [], landsPlayedThisTurn: 0, landDropBonus: 0,
       // Live cursor tracking's own style -- see setCursorColor/setCursorIcon; null color falls back
       // to the player's own `color` above. Seeded from the account's saved defaults, if any (see
       // setDefaultCursorColor/setDefaultCursorIcon), same "account-wide preference, applied per new
@@ -8524,8 +8689,15 @@ io.on("connection", (socket) => {
       if (!p.pendingFreeManaChoice || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
       const amount = p.pendingFreeManaChoice.amount || 1;
       const remaining = (p.pendingFreeManaChoice.remainingPicks || 1) - 1;
-      p.mana[color] = (p.mana[color] || 0) + amount;
-      pushLog(lobby, `${p.name} adds {${color}}${amount > 1 ? ` x${amount}` : ""}`);
+      const restricted = p.pendingFreeManaChoice.restricted;
+      if (restricted) {
+        if (!p.restrictedMana) p.restrictedMana = [];
+        for (let i = 0; i < amount; i++) p.restrictedMana.push({ color, matches: restricted.matches, label: restricted.label, grantsUncounterable: !!restricted.grantsUncounterable });
+        pushLog(lobby, `${p.name} adds {${color}}${amount > 1 ? ` x${amount}` : ""} (${restricted.label})`);
+      } else {
+        p.mana[color] = (p.mana[color] || 0) + amount;
+        pushLog(lobby, `${p.name} adds {${color}}${amount > 1 ? ` x${amount}` : ""}`);
+      }
       // Cascading Cataracts-style "N independent picks" -- re-prompt for the next one instead of
       // clearing pendingFreeManaChoice, see chooseManaAnyColorRepeated's own comment.
       if (remaining > 0) {
@@ -8715,12 +8887,15 @@ io.on("connection", (socket) => {
     // real cost actually contains {X} (parseManaCost's own cost.x flag), so a plain non-X ability
     // ignores whatever x the client happens to send rather than demanding phantom extra mana.
     let remainingMana = null;
+    let paidRestricted = null;
     let xVal = 0;
     if (cost.mana) {
       const parsedCost = parseManaCost(cost.mana);
       xVal = parsedCost.x ? Math.max(0, parseInt(x, 10) || 0) : 0;
-      remainingMana = canAffordAndPay(p.mana, parsedCost, xVal);
-      if (!remainingMana) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s ability.`); return; }
+      const paid = affordWithRestricted(p, parsedCost, xVal, { kind: "activate", card });
+      if (!paid) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s ability.`); return; }
+      remainingMana = paid.normalPool;
+      paidRestricted = paid.restrictedMana;
     }
     // cost.sacrifice has nothing to validate -- you already own it and it's on the battlefield.
     // cost.life (a plain number, e.g. fetchlands' "Pay 1 life", OR a function(lobby, controllerId)
@@ -8730,7 +8905,7 @@ io.on("connection", (socket) => {
     const lifeCost = typeof cost.life === "function" ? cost.life(lobby, socket.id) : cost.life;
 
     if (cost.tap) { card.tapped = true; broadcastCard(lobby, card); }
-    if (cost.mana) { p.mana = remainingMana; broadcastPlayers(lobby); }
+    if (cost.mana) { p.mana = remainingMana; p.restrictedMana = paidRestricted; broadcastPlayers(lobby); }
     if (lifeCost) {
       applyLifeLoss(lobby, socket.id, lifeCost);
       checkEliminations(lobby); // paying life is a real way to die -- check immediately, not just at resolution
@@ -8801,9 +8976,12 @@ io.on("connection", (socket) => {
     if (target.zoneType === "hand" || target.zoneType === "stack") return;
     const cost = equipCostFromText(card.text);
     if (cost) {
-      const remaining = canAffordAndPay(p.mana, cost, 0);
-      if (!remaining) { socket.emit("actionError", `Not enough mana to equip ${card.name || "this"}.`); return; }
-      p.mana = remaining;
+      // Equip is itself an activated ability (CR 301.5c) -- Omen Hawker's restricted mana should
+      // be just as spendable here as on any other activated ability.
+      const paid = affordWithRestricted(p, cost, 0, { kind: "activate", card });
+      if (!paid) { socket.emit("actionError", `Not enough mana to equip ${card.name || "this"}.`); return; }
+      p.mana = paid.normalPool;
+      p.restrictedMana = paid.restrictedMana;
       broadcastPlayers(lobby);
     }
     card.attachedTo = targetId;
@@ -9729,12 +9907,16 @@ io.on("connection", (socket) => {
     if (!timing.ok) { socket.emit("actionError", timing.error); return; }
     const cost = parseManaCost(cmd.manaCost);
     cost.generic += cmd.tax || 0; // commander tax: +{2} generic per previous cast from the command zone
-    const remaining = canAffordAndPay(p.mana, cost, 0);
-    if (!remaining) {
+    // Jeweled Lotus's own restriction ("spend only to cast your commander") needs isCommander
+    // already true on the ctx card at affordability-check time, even though `cmd` itself -- the
+    // command-zone entry, not yet a battlefield card -- doesn't normally carry that flag.
+    const paid = affordWithRestricted(p, cost, 0, { kind: "cast", card: { ...cmd, isCommander: true } });
+    if (!paid) {
       socket.emit("actionError", `Not enough mana to cast ${cmd.name}${cmd.tax ? ` (includes +${cmd.tax} commander tax)` : ""}.`);
       return;
     }
-    p.mana = remaining;
+    p.mana = paid.normalPool;
+    p.restrictedMana = paid.restrictedMana;
     const card = spawnBattlefieldCard(lobby, { ...cmd, owner: socket.id, faceDown: false, zoneType: classifyType(cmd.type), isCommander: true });
     cmd.battlefieldId = card.id;
     cmd.tax += 2;
@@ -9784,6 +9966,7 @@ io.on("connection", (socket) => {
     lobby.priority = { holderId: null, lastActorId: null };
     for (const pid in lobby.players) {
       lobby.players[pid].mana = EMPTY_MANA();
+      lobby.players[pid].restrictedMana = [];
       lobby.players[pid].landsPlayedThisTurn = 0;
     }
     pushLog(lobby, `${lobby.players[lobby.turn.order[0]].name} goes first! Turn order: ${lobby.turn.order.map((id) => (lobby.players[id] ? lobby.players[id].name : "?")).join(" → ")}`);
@@ -10273,6 +10456,7 @@ io.on("connection", (socket) => {
       p.handKept = false;
       p.openingHandDrawn = false;
       p.mana = EMPTY_MANA();
+      p.restrictedMana = [];
       p.landsPlayedThisTurn = 0;
       p.landDropBonus = 0;
     }
