@@ -384,6 +384,13 @@ const CARD_ABILITIES = {
   "dreamtide whale": [{ trigger: "secondSpellCastByAPlayer", label: "Dreamtide Whale — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
   "inexorable tide": [{ trigger: "youCastSpell", label: "Inexorable Tide — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
   "flux channeler": [{ trigger: "youCastSpell", excludeTypeFilter: ["creature"], label: "Flux Channeler — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
+  // Venser, Corpse Puppet's "target artifact creature gains flying and lifelink" mode is separate/
+  // unautomated -- see createHollowSentinelIfMissing's own comment. Voidwing Hybrid needs NO table
+  // entry at all -- its "whenever you proliferate, return this card from your graveyard to your
+  // hand" is a graveyard-based reactive trigger, handled by fireYouProliferateTrigger's own inline
+  // text-scan (a card sitting in the graveyard can't be looked up via the normal battlefield-scan
+  // CARD_ABILITIES dispatch this table drives).
+  "venser, corpse puppet": [{ trigger: "youProliferate", requiresTarget: false, label: "Venser, Corpse Puppet — create The Hollow Sentinel if you don't control one", effects: [{ type: "createHollowSentinelIfMissing" }] }],
   // Glistening Sphere -- "This artifact enters tapped" needs no extra work (entersTapped's own
   // generic unconditional-tapped scan already covers it); the {T}: Add one mana of any color
   // ability is a separate ACTIVATED_ABILITIES entry (see there). The Corrupted mana ability
@@ -1974,6 +1981,17 @@ const EFFECTS = {
   // Body of Knowledge -- "draw that many cards," the dynamic-amount sibling of drawCards just
   // above. damageDealtAmount is baked in by fireCreatureDamagedTrigger at fire time.
   drawCardsEqualToDamageDealt(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.damageDealtAmount || 0); },
+  // Venser, Corpse Puppet -- "Whenever you proliferate, choose one -- If you don't control a
+  // creature named The Hollow Sentinel, create it. / Target artifact creature you control gains
+  // flying and lifelink until end of turn." Only the first (conditional, no-target) mode is
+  // automated -- always taken -- same "auto-pick the simple no-real-choice option, skip the
+  // targeted mode" disclosed simplification used throughout this table for modal triggers with no
+  // real choice-UI built for them.
+  createHollowSentinelIfMissing(lobby, ctx) {
+    const already = Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && c.name === "The Hollow Sentinel");
+    if (already) return;
+    spawnBattlefieldCard(lobby, { name: "The Hollow Sentinel", type: "Legendary Artifact Creature — Phyrexian Golem", power: "3", toughness: "3", colors: [], keywords: [], owner: ctx.controllerId, zoneType: "creature", text: "" });
+  },
   // Cephalid Coliseum -- "Target player draws three cards, then discards three cards." The
   // target-player counterpart to drawCards (which always draws for the controller), same
   // self/chosenTargetId convention targetPlayerDiscards already uses -- chosenTargetId is merged
@@ -2298,6 +2316,9 @@ const EFFECTS = {
       if (p.radCounters > 0) p.radCounters += times;
     });
     broadcastPlayers(lobby);
+    // Venser, Corpse Puppet / Voidwing Hybrid -- "Whenever you proliferate." Fired once per real
+    // proliferate EVENT (not once per counter), so Tekuthal's doubling correctly fires this twice.
+    if (ctx && ctx.controllerId) { for (let i = 0; i < times; i++) fireYouProliferateTrigger(lobby, ctx.controllerId); }
   },
   // Fallout's rad counters -- a player-level scalar (p.radCounters, same shape as p.poison) with no
   // real rules consequence modeled (real Magic's "at 10+ rad counters, mill 10 and lose a permanent
@@ -7126,6 +7147,29 @@ function fireCreatureDamagedTrigger(lobby, card, amount) {
     const effects = (ability.effects || []).map((e) => ({ ...e, damageDealtAmount: amount }));
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   });
+}
+// Venser, Corpse Puppet / Voidwing Hybrid -- "Whenever you proliferate, [effect]." Called from
+// EFFECTS.proliferateAll itself, once per real proliferate event (so Tekuthal's doubling correctly
+// fires this twice too, not just once). Scans the ACTING player's own battlefield (same
+// self/"you"-scoped shape as fireGlobalTrigger) for a real "youProliferate" CARD_ABILITIES entry,
+// plus a SEPARATE graveyard scan for Voidwing Hybrid's own reactive return-from-graveyard clause --
+// a genuinely different shape (the source watching for the event isn't on the battlefield at all),
+// so it's a plain inline text-scan rather than a table entry.
+function fireYouProliferateTrigger(lobby, controllerId) {
+  if (!lobby.turn.started) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== controllerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "youProliferate").forEach((ability) => fireTrigger(lobby, c, ability));
+  }
+  const p = lobby.players[controllerId];
+  if (!p) return;
+  const returning = (p.graveyard || []).filter((e) => /when you proliferate, return this card from your graveyard to your hand/i.test(e.text || ""));
+  returning.forEach((entry) => {
+    p.graveyard = p.graveyard.filter((e) => e !== entry);
+    spawnBattlefieldCard(lobby, { ...entry, owner: controllerId, faceDown: true, zoneType: "hand" });
+  });
+  if (returning.length) broadcastPlayers(lobby);
 }
 // Fires every authored "dies" ability for `card` (self-referential only). Must be called BEFORE
 // the card is actually removed from lobby.cards, so its data (owner, etc.) is still intact to
