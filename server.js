@@ -1392,6 +1392,7 @@ const ACTIVATED_ABILITIES = {
   }],
   "kyodai, soul of kamigawa": [{ cost: { mana: "{W}{U}{B}{R}{G}" }, label: "Kyodai, Soul of Kamigawa — gets +5/+5 until end of turn", effects: [{ type: "grantTemporaryPTToSelf", power: 5, toughness: 5 }] }],
   "chulane, teller of tales": [{ cost: { mana: "{3}", tap: true }, requiresTarget: true, targetKind: "ownCreature", label: "Chulane, Teller of Tales — return target creature you control to its owner's hand", effects: [{ type: "bounceTargetToHand" }] }],
+  "riptide laboratory": [{ cost: { mana: "{1}{U}", tap: true }, requiresTarget: true, targetKind: "ownCreature", typeFilter: ["wizard"], label: "Riptide Laboratory — return target Wizard you control to its owner's hand", effects: [{ type: "bounceTargetToHand" }] }],
   // Field of Ruin -- its plain "{T}: Add {C}" half needs no table entry (free-tap shortcut).
   "field of ruin": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, requiresTarget: true, targetKind: "opponentNonbasicLand", label: "Field of Ruin — destroy target nonbasic land an opponent controls; each player searches for a basic land", effects: [{ type: "destroyTarget" }, { type: "eachPlayerSearchesForBasicLand" }] }]
 };
@@ -6827,6 +6828,9 @@ function resolveChosenTarget(lobby, entry, targetId) {
     // otherOwnCreature's hardcoded sourceCard.id exclusion, since the excluded card here is neither
     // the ability's source nor a fixed relationship, just whatever the caller passes.
     if (entry.excludeCardId && targetId === entry.excludeCardId) return { ok: false, error: "Choose a DIFFERENT creature you control." };
+    // Riptide Laboratory -- "target Wizard YOU CONTROL" -- optional, so every existing plain
+    // ownCreature caller (with no typeFilter) is unaffected.
+    if (entry.typeFilter && !entry.typeFilter.some((t) => (c.type || "").toLowerCase().includes(t))) return { ok: false, error: `Choose a ${entry.typeFilter.join("/")} you control.` };
     return { ok: true };
   }
   // Giver of Runes -- "ANOTHER target creature you control" -- same as ownCreature but excludes the
@@ -9613,6 +9617,12 @@ io.on("connection", (socket) => {
     if (ability.requiresTarget && ability.targetKind === "otherCreature") {
       const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && c.id !== card.id);
       if (!hasMatch) { socket.emit("actionError", "There's no other creature to target."); return; }
+    }
+    // Riptide Laboratory -- same "reject before paying" reason, for when there's no matching
+    // creature you control right now (ownCreature's own optional typeFilter, e.g. "Wizard").
+    if (ability.requiresTarget && ability.targetKind === "ownCreature" && ability.typeFilter) {
+      const hasMatch = Object.values(lobby.cards).some((c) => c.owner === socket.id && c.zoneType === "creature" && ability.typeFilter.some((t) => (c.type || "").toLowerCase().includes(t)));
+      if (!hasMatch) { socket.emit("actionError", `You have no ${ability.typeFilter.join("/")} to target.`); return; }
     }
     // Temple of the False God -- "Activate only if you control five or more lands." A real
     // activation-condition gate, checked before anything is paid, same "reject before paying" reason
