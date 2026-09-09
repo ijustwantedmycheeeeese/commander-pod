@@ -875,6 +875,7 @@ const ACTIVATED_ABILITIES = {
   // since producedMana having more than one entry would otherwise make the free-tap shortcut
   // prompt a CHOICE instead of adding both.
   "jungle basin": [{ cost: { tap: true }, manaAbility: true, label: "Jungle Basin — Add {C}{G}", effects: [{ type: "addFixedMana", colors: ["C", "G"] }] }],
+  "throne of the high city": [{ cost: { mana: "{4}", tap: true, sacrifice: true }, label: "Throne of the High City — you become the monarch", requiresTarget: false, effects: [{ type: "becomeMonarch" }] }],
   "coral atoll": [{ cost: { tap: true }, manaAbility: true, label: "Coral Atoll — Add {C}{U}", effects: [{ type: "addFixedMana", colors: ["C", "U"] }] }],
   "grim monolith": [
     { cost: { tap: true }, manaAbility: true, label: "Grim Monolith — Add {C}{C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C", "C"] }] },
@@ -1392,6 +1393,12 @@ function grantedTriggeredAbilityFromText(abilityText) {
   }
   if (/^when this permanent enters, destroy target artifact or enchantment$/i.test(t)) {
     return { trigger: "etb", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], effects: [{ type: "destroyTarget" }] };
+  }
+  // Regal Sliver -- "When this creature enters, Slivers you control get +1/+1 until end of turn if
+  // you're the monarch. Otherwise, you become the monarch." A real conditional (see
+  // pumpSliversIfMonarchElseBecomeMonarch's own comment), not two separate grants.
+  if (/^when this creature enters, slivers you control get \+1\/\+1 until end of turn if you'?re the monarch\. otherwise, you become the monarch$/i.test(t)) {
+    return { trigger: "etb", requiresTarget: false, effects: [{ type: "pumpSliversIfMonarchElseBecomeMonarch" }] };
   }
   return null;
 }
@@ -2234,6 +2241,22 @@ const EFFECTS = {
   },
   // Thousand-Year Elixir's activated ability -- a plain targeted untap, no card in this app's
   // vocabulary needed one before now.
+  // Throne of the High City -- "You become the monarch."
+  becomeMonarch(lobby, ctx, params) {
+    setMonarch(lobby, ctx.controllerId);
+  },
+  // Regal Sliver's granted ability (see grantedTriggeredAbilityFromText's own new case) -- "Slivers
+  // you control get +1/+1 until end of turn if you're the monarch. Otherwise, you become the
+  // monarch." A real conditional, not two separate always-fires effects.
+  pumpSliversIfMonarchElseBecomeMonarch(lobby, ctx, params) {
+    if (lobby.monarchId === ctx.controllerId) {
+      Object.values(lobby.cards).forEach((c) => {
+        if (c.owner === ctx.controllerId && c.zoneType === "creature" && /sliver/i.test(c.type || "")) grantTemporaryPT(lobby, c, 1, 1);
+      });
+    } else {
+      setMonarch(lobby, ctx.controllerId);
+    }
+  },
   untapTarget(lobby, ctx, params) {
     const card = lobby.cards[params.chosenTargetId];
     if (!card || !card.tapped) return;
@@ -4004,6 +4027,7 @@ function createLobbyState(id, name, hostUsername, password) {
     spectators: {}, // socket.id -> { username, name } -- watch-only, never touches lobby.players
     voiceParticipants: new Set(),
     turn: { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null, extraCombatsPending: 0 },
+    monarchId: null, // CR 716 -- see setMonarch/broadcastMonarch
     combat: { step: "none", attackers: {}, blocks: {}, defendersPending: [] },
     stack: [], // cast spells awaiting resolution, top = last element
     priority: { holderId: null, lastActorId: null }, // only meaningful while stack.length > 0
@@ -4067,6 +4091,7 @@ function restoreLobbies() {
     if (!l.turn) l.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null, extraCombatsPending: 0 };
     if (l.turn.pendingDiscard === undefined) l.turn.pendingDiscard = null;
     if (l.turn.phaseStartedAt === undefined) l.turn.phaseStartedAt = null;
+    if (l.monarchId === undefined) l.monarchId = null;
     if (!l.stack) l.stack = [];
     if (!l.priority) l.priority = { holderId: null, lastActorId: null };
     if (!l.pendingTargetChoices) l.pendingTargetChoices = [];
@@ -6942,6 +6967,23 @@ function fireGlobalTriggerAllPlayers(lobby, eventType, eventCard) {
   }
 }
 
+// CR 716, the Monarch mechanic -- Throne of the High City / Regal Sliver. Only one player can be
+// the monarch at a time (becoming monarch always replaces whoever held it, same as real Magic).
+// The two real consequences (draw at the monarch's own end step, monarch passes to whoever deals
+// them combat damage) are each hooked at their own single real choke point below -- see
+// advanceOnePhase's End Step branch and resolveCombatDamage's two "damage actually landed on a
+// player" branches.
+function setMonarch(lobby, playerId) {
+  if (lobby.monarchId === playerId) return;
+  lobby.monarchId = playerId;
+  broadcastMonarch(lobby);
+  const p = lobby.players[playerId];
+  pushLog(lobby, `${p ? p.name : "Someone"} becomes the monarch!`);
+}
+function broadcastMonarch(lobby) {
+  io.to(lobby.id).emit("monarchState", { monarchId: lobby.monarchId });
+}
+
 // The one hook point for any positive life change, so selfGainsLife triggers fire regardless of
 // source (an EFFECTS.gainLife resolution, or the manual +life button in statChange) instead of two
 // divergent raw `p.life +=` sites. Only actual gains route through here -- life loss never fires
@@ -7567,6 +7609,13 @@ function advanceOnePhase(lobby) {
   if (activePlayer && turn.phase === "Upkeep") fireGlobalTrigger(lobby, "upkeep", activeId);
   // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
   if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
+  // CR 716.4 -- "At the beginning of the monarch's end step, that player draws a card." Only on
+  // the monarch's OWN end step (not every end step), matching setMonarch's own comment.
+  if (activePlayer && turn.phase === "End Step" && activeId === lobby.monarchId) {
+    drawN(lobby, activeId, 1);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${activePlayer.name} draws a card (monarch)`);
+  }
   // Real Magic has the player going first skip their very first draw step -- deliberately NOT
   // followed here per an explicit house-rule request: everyone draws for the turn, including
   // whoever's turn 1 it is.
@@ -7707,6 +7756,8 @@ function resolveCombatDamage(lobby) {
                   fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
                   fireGlobalCombatDamageToPlayerTrigger(lobby, attacker, defenderId, toPlayer);
                   fireBreathOfFuryTrigger(lobby, attacker, defenderId, toPlayer);
+                  // CR 716.5 -- monarch passes to whoever just dealt the (now-former) monarch combat damage.
+                  if (lobby.monarchId === defenderId) setMonarch(lobby, attacker.owner);
                   checkEquipmentCombatDamageDraw(lobby, attacker);
                   checkEquipmentCombatDamageCounters(lobby, attacker, toPlayer);
                   checkEquipmentCombatDamageTreasure(lobby, attacker, toPlayer);
@@ -7772,6 +7823,8 @@ function resolveCombatDamage(lobby) {
             fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, dealt);
             fireGlobalCombatDamageToPlayerTrigger(lobby, attacker, defenderId, dealt);
             fireBreathOfFuryTrigger(lobby, attacker, defenderId, dealt);
+            // CR 716.5 -- monarch passes to whoever just dealt the (now-former) monarch combat damage.
+            if (lobby.monarchId === defenderId) setMonarch(lobby, attacker.owner);
             checkEquipmentCombatDamageDraw(lobby, attacker);
             checkEquipmentCombatDamageCounters(lobby, attacker, dealt);
             checkEquipmentCombatDamageTreasure(lobby, attacker, dealt);
@@ -10609,6 +10662,7 @@ io.on("connection", (socket) => {
     }
     lobby.gameState.log = [];
     lobby.turn = { started: false, order: [], activeIndex: 0, phase: "Main 1", turnNumber: 1, pendingDiscard: null, phaseStartedAt: null, extraCombatsPending: 0 };
+    lobby.monarchId = null;
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
     lobby.stack = [];
     lobby.priority = { holderId: null, lastActorId: null };
