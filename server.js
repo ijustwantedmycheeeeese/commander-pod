@@ -1389,6 +1389,29 @@ function getActivatedAbilities(card, lobby) {
   return [...named, ...getGrantedActivatedAbilities(card, lobby)];
 }
 
+// Channel (CR 702.83) -- "Channel — {cost}, Discard this card: EFFECT." A genuinely different
+// activation shape from ACTIVATED_ABILITIES above: the source is a card sitting in HAND (not on the
+// battlefield), and the cost is discarding it, not tapping/sacrificing a permanent. Kept as its own
+// small table + dedicated channelAbility socket handler rather than shoehorning "hand" into the
+// existing activateAbility handler, which explicitly rejects hand-zone cards for every other real
+// activated ability. requiresTarget/targetKind/effects reuse the exact same shapes/EFFECTS
+// (bounceTargetToHand, damageTarget) real battlefield activated abilities already use -- only the
+// cost-payment and source-card handling differ.
+const CHANNEL_ABILITIES = {
+  "otawara, soaring city": { cost: { mana: "{3}{U}" }, requiresTarget: true, targetKind: "permanent", label: "Otawara, Soaring City — Channel: return target artifact, creature, enchantment, or planeswalker to its owner's hand", effects: [{ type: "bounceTargetToHand" }] },
+  "eiganjo, seat of the empire": { cost: { mana: "{2}{W}" }, requiresTarget: true, targetKind: "attackingOrBlockingCreature", label: "Eiganjo, Seat of the Empire — Channel: deal 4 damage to target attacking or blocking creature", effects: [{ type: "damageTarget", amount: 4 }] }
+};
+function getChannelAbility(cardName) {
+  return CHANNEL_ABILITIES[archiveKey(cardName)] || null;
+}
+// Otawara/Eiganjo's shared "This ability costs {1} less to activate for each legendary creature you
+// control" -- self-referential on the CHANNELING card's own text (checked here, not scanned off
+// other permanents), same precedent as spellCostReductionFor's own Ghalta clause.
+function channelCostReductionFor(lobby, ownerId, card) {
+  if (!/this ability costs \{1\} less to activate for each legendary creature you control/i.test(card.text || "")) return 0;
+  return Object.values(lobby.cards).filter((c) => c.owner === ownerId && c.zoneType === "creature" && (c.type || "").toLowerCase().includes("legendary")).length;
+}
+
 // The TRIGGERED-ability counterpart to grantedAbilityFromText/getGrantedActivatedAbilities above --
 // same grant-clause detection (grantedAbilityGrantMatches), a different small shape library for
 // quoted ETB-triggered text instead of activated-ability text. Harmonic Sliver/Lavabelly Sliver's
@@ -5609,6 +5632,13 @@ function maskCard(card, viewerId, lobby) {
     if (alt) extra.altCastOption = { label: alt.label };
     const cyc = cyclingCostFromText(card.text);
     if (cyc) extra.cycleOption = { label: `Cycling ${cyc.cost}` };
+    // Channel (Otawara, Eiganjo) -- same "only shown when a real option exists" precedent as
+    // altCastOption/cycleOption just above. Shows the card's own printed Channel cost -- the actual
+    // amount charged at activation time is silently reduced for legendary creatures controlled
+    // (channelCostReductionFor), same "the effect works, the pre-cast label shows the base cost"
+    // precedent spellCostReductionFor's own reductions already follow with no live label anywhere.
+    const chan = getChannelAbility(card.name);
+    if (chan) extra.channelOption = { label: `Channel ${chan.cost.mana}` };
     if (Object.keys(extra).length) return { ...card, ...extra };
   }
   // Live-computed, never stored on the card itself -- lets the client show a real, correctly-labeled
@@ -6376,6 +6406,17 @@ function resolveChosenTarget(lobby, entry, targetId) {
   if (targetKind === "attackingCreature") {
     const c = lobby.cards[targetId];
     if (!c || c.zoneType !== "creature" || !lobby.combat.attackers[targetId]) return { ok: false, error: "Choose an attacking creature." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Eiganjo, Seat of the Empire -- "target attacking OR BLOCKING creature." attackers is keyed by
+  // attacker id; blocks is keyed by ATTACKER id -> array of blocker ids (see declareBlockers), so a
+  // "blocking" creature is any id appearing in ANY of those arrays.
+  if (targetKind === "attackingOrBlockingCreature") {
+    const c = lobby.cards[targetId];
+    const isAttacking = !!lobby.combat.attackers[targetId];
+    const isBlocking = Object.values(lobby.combat.blocks || {}).some((blockerIds) => (blockerIds || []).includes(targetId));
+    if (!c || c.zoneType !== "creature" || (!isAttacking && !isBlocking)) return { ok: false, error: "Choose an attacking or blocking creature." };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
     return { ok: true };
   }
@@ -9249,6 +9290,47 @@ io.on("connection", (socket) => {
     } else {
       fireTrigger(lobby, card, ability, xVal);
     }
+  });
+
+  // Channel (CR 702.83) -- Otawara/Eiganjo's own "discard this HAND card as a cost" activated
+  // ability, a genuinely different shape from activateAbility above (which explicitly rejects
+  // hand-zone cards, since every other activated ability lives on a battlefield permanent). Pays
+  // mana, discards the card, then hands off to the exact same fireTrigger/requiresTarget machinery
+  // every other targeted ability already uses -- the card object stays valid for fireTrigger even
+  // after sendToGraveyardInternal removes it from lobby.cards, same "discard/sacrifice the source
+  // immediately, the object itself is still fine to read" precedent activateAbility's own
+  // cost.sacrifice handling already established.
+  socket.on("channelAbility", ({ cardId }) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const card = lobby.cards[cardId];
+    const p = lobby.players[socket.id];
+    if (!p || !card || card.owner !== socket.id || card.zoneType !== "hand") return;
+    if (!lobby.turn.started) { socket.emit("actionError", "You can't activate Channel abilities before the game starts."); return; }
+    const ability = getChannelAbility(card.name);
+    if (!ability) return;
+    // Reject before paying anything if there's no legal target right now, same "reject before
+    // paying" precedent activateAbility's own graveyard/attacking-creature checks already follow.
+    if (ability.targetKind === "permanent") {
+      const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" || c.zoneType === "artifact");
+      if (!hasMatch) { socket.emit("actionError", "There's no permanent to target."); return; }
+    }
+    if (ability.targetKind === "attackingOrBlockingCreature") {
+      const blockingIds = new Set(Object.values(lobby.combat.blocks || {}).flat());
+      const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && (lobby.combat.attackers[c.id] || blockingIds.has(c.id)));
+      if (!hasMatch) { socket.emit("actionError", "There's no attacking or blocking creature to target."); return; }
+    }
+    const cost = parseManaCost(ability.cost.mana);
+    const reduction = channelCostReductionFor(lobby, socket.id, card);
+    if (reduction > 0) cost.generic = Math.max(0, cost.generic - reduction);
+    const paid = affordWithRestricted(p, cost, 0, { kind: "activate", card });
+    if (!paid) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s Channel ability.`); return; }
+    p.mana = paid.normalPool;
+    p.restrictedMana = paid.restrictedMana;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} discards ${card.name || "a card"} to activate its Channel ability`);
+    sendToGraveyardInternal(lobby, card);
+    fireGlobalTrigger(lobby, "youDiscard", socket.id, card);
+    fireTrigger(lobby, card, ability);
   });
 
   // Manually granted keywords -- represents an aura/equipment/anthem/etc. effect, since none of
