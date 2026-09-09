@@ -615,6 +615,8 @@ const CARD_ABILITIES = {
   // for Goblin Warchief). Goblin Piledriver/Goblin Wardriver's attack-triggered pumps need no table
   // entry either -- see applySelfAttackTypeCountPump/applyBattleCry, called from declareAttackers.
   "goblin instigator": [{ trigger: "etb", label: "Goblin Instigator — create a Goblin token", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  "twin-silk spider": [{ trigger: "etb", label: "Twin-Silk Spider — create a 1/2 green Spider token with reach", requiresTarget: false, effects: [{ type: "createToken", name: "Spider", tokenType: "Token Creature — Spider", power: "1", toughness: "2", colors: ["G"], keywords: ["Reach"] }] }],
+  "penumbra spider": [{ trigger: "death", label: "Penumbra Spider — create a 2/4 black Spider token with reach", requiresTarget: false, effects: [{ type: "createToken", name: "Spider", tokenType: "Token Creature — Spider", power: "2", toughness: "4", colors: ["B"], keywords: ["Reach"] }] }],
   "impact tremors": [{ trigger: "otherCreatureEtb", label: "Impact Tremors — deal 1 damage to each opponent", requiresTarget: false, effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] }],
   // The static "Creatures you control have haste" half is already covered generically by
   // anthemKeywordsFromText's own self-inclusive "creatures you control have [X]" branch -- no table
