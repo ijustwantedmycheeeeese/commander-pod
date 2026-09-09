@@ -696,6 +696,15 @@ const ACTIVATED_ABILITIES = {
   // find any land with a matching type (including a nonbasic dual) and inherit ITS OWN tapped state.
   "evolving wilds": [{ cost: { tap: true, sacrifice: true }, label: "Evolving Wilds — search for a basic land", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
   "terramorphic expanse": [{ cost: { tap: true, sacrifice: true }, label: "Terramorphic Expanse — search for a basic land", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
+  // Panorama cycle -- same painless-fetch shape as Evolving Wilds/Terramorphic Expanse just above
+  // (basicOnly + entersTapped), but each one is restricted to its own 3-color wedge's basics AND
+  // costs {1} in addition to Tap+Sacrifice (see Wayfarer's Bauble below for the mana+tap+sacrifice
+  // cost shape precedent).
+  "bant panorama": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Bant Panorama — search for a basic Forest, Plains, or Island", effects: [{ type: "searchLandTypes", types: ["Forest", "Plains", "Island"], basicOnly: true, entersTapped: true }] }],
+  "esper panorama": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Esper Panorama — search for a basic Plains, Island, or Swamp", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp"], basicOnly: true, entersTapped: true }] }],
+  "grixis panorama": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Grixis Panorama — search for a basic Island, Swamp, or Mountain", effects: [{ type: "searchLandTypes", types: ["Island", "Swamp", "Mountain"], basicOnly: true, entersTapped: true }] }],
+  "jund panorama": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Jund Panorama — search for a basic Swamp, Mountain, or Forest", effects: [{ type: "searchLandTypes", types: ["Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
+  "naya panorama": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Naya Panorama — search for a basic Mountain, Forest, or Plains", effects: [{ type: "searchLandTypes", types: ["Mountain", "Forest", "Plains"], basicOnly: true, entersTapped: true }] }],
   // Signets -- "{1}, {T}: Add {X}{Y}." Both colors at once for a fixed cost, not a choice the way a
   // dual land's "T: add X or Y" is -- manaAbility:true is what makes that distinction real (see
   // activateAbility and the tap handler's own comments for why this can't just be the same
