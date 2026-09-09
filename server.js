@@ -1116,6 +1116,9 @@ const ACTIVATED_ABILITIES = {
   // Minamo, School at Water's Edge -- same untapTarget reuse as Thousand-Year Elixir just above,
   // new legendaryPermanent targetKind (any permanent type, not creature-only).
   "minamo, school at water's edge": [{ cost: { mana: "{U}", tap: true }, label: "Minamo, School at Water's Edge — untap target legendary permanent", requiresTarget: true, targetKind: "legendaryPermanent", effects: [{ type: "untapTarget" }] }],
+  // Scavenger Grounds -- new autoSacrificeLandFilter cost primitive (see its own comment in the
+  // activateAbility handler) + new exileAllGraveyards effect.
+  "scavenger grounds": [{ cost: { mana: "{2}", tap: true, autoSacrificeLandFilter: "desert" }, label: "Scavenger Grounds — exile all graveyards", effects: [{ type: "exileAllGraveyards" }] }],
   // Wave 14 gap-analysis batch.
   // "{T}: Add {C}." needs no table entry (free single-color tap shortcut).
   "bloom tender": [{ cost: { tap: true }, manaAbility: true, label: "Bloom Tender — Add one mana of each color among permanents you control", effects: [{ type: "addManaForEachColorControlled" }] }],
@@ -3350,6 +3353,15 @@ const EFFECTS = {
     if (!p) return;
     p.exile.push(...p.graveyard);
     p.graveyard = [];
+    broadcastPlayers(lobby);
+  },
+  // Scavenger Grounds -- "Exile all graveyards." Untargeted, every player at once -- the ALL-
+  // players sibling of exilePlayerGraveyard just above.
+  exileAllGraveyards(lobby, ctx, params) {
+    Object.values(lobby.players).forEach((p) => {
+      p.exile.push(...p.graveyard);
+      p.graveyard = [];
+    });
     broadcastPlayers(lobby);
   },
   // Balefire Dragon -- "whenever this creature deals combat damage to a player, it deals that much
@@ -8658,6 +8670,17 @@ io.on("connection", (socket) => {
         : candidates.find((c) => c.id !== card.id) || candidates.find((c) => c.id === card.id) || null;
       if (!autoSacrificeCard) { socket.emit("actionError", `You have no ${cost.excludeSelf ? "other " : ""}${filter === "creature" ? "creature" : filter} to sacrifice.`); return; }
     }
+    // Scavenger Grounds-style "Sacrifice a Desert" -- same auto-pick-first-qualifying shape as
+    // autoSacrificeFilter just above, scoped to LANDS (zoneType "mana") instead of creatures. The
+    // real card doesn't say "another," so sacrificing itself is a legal candidate like any other
+    // match, same as Pashalik Mons's own "a Goblin" (not "another Goblin").
+    let autoSacrificeLand = null;
+    if (cost.autoSacrificeLandFilter) {
+      const filter = cost.autoSacrificeLandFilter;
+      const candidates = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "mana" && (c.type || "").toLowerCase().includes(filter));
+      autoSacrificeLand = candidates[0] || null;
+      if (!autoSacrificeLand) { socket.emit("actionError", `You have no ${filter} to sacrifice.`); return; }
+    }
     // Tortured Existence-style "Discard a creature card" / Hollowhead Sliver-style "Discard a
     // card" -- same auto-pick-the-first-qualifying-card shape as autoSacrificeFilter just above,
     // for hand cards instead of battlefield creatures. "card" (not a real type substring) matches
@@ -8726,6 +8749,11 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} sacrifices ${autoSacrificeCard.name || "a creature"} to pay the cost`);
       fireDeathTriggers(lobby, autoSacrificeCard);
       sendToGraveyardInternal(lobby, autoSacrificeCard);
+    }
+    if (autoSacrificeLand) {
+      pushLog(lobby, `${p.name} sacrifices ${autoSacrificeLand.name || "a land"} to pay the cost`);
+      fireDeathTriggers(lobby, autoSacrificeLand);
+      sendToGraveyardInternal(lobby, autoSacrificeLand);
     }
     if (autoDiscardCard) {
       pushLog(lobby, `${p.name} discards ${autoDiscardCard.name || "a card"} to pay the cost`);
