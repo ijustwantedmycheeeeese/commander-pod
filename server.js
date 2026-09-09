@@ -372,6 +372,12 @@ const CARD_ABILITIES = {
   // restriction has no generic hook).
   "nightkin ambusher": [{ trigger: "etb", label: "Nightkin Ambusher — target player gets four rad counters", requiresTarget: true, targetKind: "player", effects: [{ type: "giveRadCounters", amount: 4 }] }],
   "blightbelly rat": [{ trigger: "death", label: "Blightbelly Rat — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
+  // Body of Knowledge -- the power/toughness half ("equal to the number of cards in your hand") is
+  // a pure generic text-scan (dynamicPTCountKindFor/applyDynamicPT), no table entry needed. Only
+  // the "whenever this creature is dealt damage, draw that many cards" half needs one, via the new
+  // damagedSelf trigger. "You have no maximum hand size" is already a separate, pre-existing
+  // text-scan (hasNoMaxHandSize).
+  "body of knowledge": [{ trigger: "damagedSelf", label: "Body of Knowledge — draw that many cards", requiresTarget: false, effects: [{ type: "drawCardsEqualToDamageDealt" }] }],
   // Dreamtide Whale's Vanishing (time-counter self-sacrifice) half is separate/unautomated (no
   // upkeep time-counter-removal mechanic exists). Reuses the exact secondSpellCastByAPlayer event
   // built for Ledger Shredder's connive.
@@ -1949,6 +1955,9 @@ function effectTargets(lobby, controllerId, target) {
 }
 const EFFECTS = {
   drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
+  // Body of Knowledge -- "draw that many cards," the dynamic-amount sibling of drawCards just
+  // above. damageDealtAmount is baked in by fireCreatureDamagedTrigger at fire time.
+  drawCardsEqualToDamageDealt(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.damageDealtAmount || 0); },
   // Cephalid Coliseum -- "Target player draws three cards, then discards three cards." The
   // target-player counterpart to drawCards (which always draws for the controller), same
   // self/chosenTargetId convention targetPlayerDiscards already uses -- chosenTargetId is merged
@@ -3331,6 +3340,7 @@ const EFFECTS = {
     // taking sub-lethal damage still has nothing MECHANICAL to represent (see the comment on this
     // effect's doc block above), but there's no reason it shouldn't visibly react.
     io.to(lobby.id).emit("spellDamage", { targetId: card.id, amount, sourceCardId });
+    fireCreatureDamagedTrigger(lobby, card, amount);
     const bonus = attachedBonusFor(lobby, card);
     const stat = staticBonusFor(lobby, card);
     const effToughness = parsePT(card.toughness) + (card.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
@@ -5831,6 +5841,7 @@ function playersView(lobby, viewerId) {
 }
 
 function broadcastPlayers(lobby) {
+  refreshAllDynamicPT(lobby); // Body of Knowledge/Molimo -- see its own comment for why this is the right choke point
   for (const sid of lobbySocketIds(lobby)) {
     const sock = io.sockets.sockets.get(sid);
     if (sock) sock.emit("players", playersView(lobby, sid));
@@ -5884,6 +5895,44 @@ function clearAllUndo(lobby) {
 // the one shared choke point every OTHER (already-bounded) caller keeps using without a check.
 const MAX_CARDS_PER_LOBBY = 600;
 
+// Body of Knowledge / Molimo, Maro-Sorcerer -- "[Name]'s power and toughness are each equal to the
+// number of X" is a real continuous characteristic-defining ability (CR 613.1c): recomputed fresh
+// constantly, not a one-shot effect. Rather than threading a dynamic resolver through parsePT
+// (called in ~50+ places across combat/damage/effects with no lobby context in scope there) or
+// duplicating the calculation in index.html's own parallel P/T chain, this keeps the STORED
+// card.power/toughness fields themselves always up to date as plain numbers -- every existing
+// consumer (parsePT, the client's own display, equipment/counter math layered on top via the usual
+// parsePT(c.power) + counters + bonuses composition) needs zero changes, since they already just
+// read card.power/toughness as a live string.
+function dynamicPTCountKindFor(card) {
+  if (!/power and toughness are each equal to the number of/i.test(card.text || "")) return null;
+  if (/lands you control/i.test(card.text)) return "lands";
+  if (/cards in your hand/i.test(card.text)) return "hand";
+  return null;
+}
+function applyDynamicPT(lobby, card) {
+  if (card.zoneType !== "creature") return false;
+  const kind = dynamicPTCountKindFor(card);
+  if (!kind) return false;
+  const n = kind === "hand"
+    ? Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "hand").length
+    : Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "mana").length;
+  const s = String(n);
+  if (card.power === s && card.toughness === s) return false;
+  card.power = s; card.toughness = s;
+  return true;
+}
+// Called from broadcastPlayers -- already the single most ubiquitous "something changed" choke
+// point in this file, firing after nearly every mutation -- so every dynamic-P/T creature
+// effectively recomputes on every real state change without a bespoke hook at each individual
+// hand-size/land-count-changing call site (drawing, discarding, playing a land, etc.).
+function refreshAllDynamicPT(lobby) {
+  for (const id in lobby.cards) {
+    const card = lobby.cards[id];
+    if (applyDynamicPT(lobby, card)) broadcastCard(lobby, card);
+  }
+}
+
 function spawnBattlefieldCard(lobby, data) {
   const { owner, faceDown, zoneType, isCommander } = data;
   const p = lobby.players[owner];
@@ -5910,6 +5959,7 @@ function spawnBattlefieldCard(lobby, data) {
     controllerSince: lobby.turn.started ? lobby.turn.turnNumber : 0
   };
   lobby.cards[id] = card;
+  applyDynamicPT(lobby, card); // sets a real number instead of a literal "*" for the very first broadcast
   broadcastCard(lobby, card);
   return card;
 }
@@ -7041,6 +7091,19 @@ function fireOpponentSearchTrigger(lobby, searchingPlayerId) {
   }
 }
 
+// Body of Knowledge -- "Whenever this creature is dealt damage, draw that many cards" (also the
+// shape "Enrage" cards like Strong, the Brutish Thespian use, though only Body of Knowledge is
+// wired to this table so far). Self-referential only, same as fireDeathTriggers just below. Hooked
+// at BOTH real "damage was just marked on a creature" choke points -- markDamage inside
+// resolveCombatDamage (combat) and EFFECTS.damageTarget (spell/ability damage) -- missing either
+// one would silently under-trigger for half of what "dealt damage" really covers.
+function fireCreatureDamagedTrigger(lobby, card, amount) {
+  if (!lobby.turn.started || amount <= 0) return;
+  getAutomatedAbilities(card.name, "damagedSelf").forEach((ability) => {
+    const effects = (ability.effects || []).map((e) => ({ ...e, damageDealtAmount: amount }));
+    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
+  });
+}
 // Fires every authored "dies" ability for `card` (self-referential only). Must be called BEFORE
 // the card is actually removed from lobby.cards, so its data (owner, etc.) is still intact to
 // build the ability instance from.
@@ -7935,6 +7998,7 @@ function resolveCombatDamage(lobby) {
     marked[card.id] = (marked[card.id] || 0) + amount;
     if (isDeathtouch) deathtouchHit.add(card.id);
     dmgEvents.push({ targetId: card.id, amount });
+    fireCreatureDamagedTrigger(lobby, card, amount);
   }
   function dealtLethal(card, dealtByDeathtouch) {
     // CR 702.12b: lethal damage doesn't destroy an indestructible permanent. This keyword was
@@ -8837,6 +8901,12 @@ io.on("connection", (socket) => {
     } else {
       pushLog(lobby, data.faceDown ? `${who} spawned a card face down` : `${who} spawned ${data.name}`);
     }
+    // Refreshes any OTHER already-on-the-battlefield dynamic-P/T creature (Molimo, Body of
+    // Knowledge) whose count just changed because of what was just spawned -- spawnBattlefieldCard's
+    // own applyDynamicPT call only ever updates the newly spawned card itself, not pre-existing ones
+    // watching it. changeZone's own land-drop branch already calls broadcastPlayers for the same
+    // reason; spawnCard (the deck-testing/token tool) was the one real gap.
+    broadcastPlayers(lobby);
   });
 
   socket.on("changeZone", ({ id, zoneType, x }) => {
