@@ -602,6 +602,8 @@ const CARD_ABILITIES = {
   // the entire Max Speed subsystem ("Start your engines!", the {T} ability) -- this app tracks no
   // concept of speed at all, a disclosed gap wider than just this one card.
   "howlsquad heavy": [{ trigger: "beginningOfCombat", label: "Howlsquad Heavy — create a Goblin token", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  "helm of the host": [{ trigger: "beginningOfCombat", label: "Helm of the Host — create a nonlegendary token copy of equipped creature with haste", requiresTarget: false, effects: [{ type: "createTokenCopyOfAttachedHost" }] }],
+  "astral dragon": [{ trigger: "etb", label: "Astral Dragon — create two 3/3 flying Dragon token copies of target noncreature permanent", requiresTarget: true, targetKind: "noncreaturePermanent", effects: [{ type: "createDragonTokenCopiesOfTarget", count: 2, power: 3, toughness: 3, keywords: ["Flying"] }] }],
   // Wave 15 gap-analysis batch.
   "coiling oracle": [{ trigger: "etb", label: "Coiling Oracle — reveal the top card, land to battlefield or else to hand", requiresTarget: false, effects: [{ type: "revealTopCardLandToBattlefieldElseHand" }] }],
   "diregraf colossus": [
@@ -3036,6 +3038,50 @@ const EFFECTS = {
     const token = spawnBattlefieldCard(lobby, data);
     const p = lobby.players[ctx.controllerId];
     pushLog(lobby, `${p ? p.name : "Someone"} creates a token copy of ${source.name || "a creature"}`);
+  },
+  // Helm of the Host -- "create a token that's a copy of EQUIPPED creature, except it isn't
+  // legendary. That token gains haste." Self-referential via card.attachedTo (the Helm's own
+  // equipped host), not a target or an entering creature -- same COPY_FIELDS list as
+  // createTokenCopyOfEnteringCreature just above, reused verbatim.
+  createTokenCopyOfAttachedHost(lobby, ctx, params) {
+    const helm = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    const host = helm && helm.attachedTo && lobby.cards[helm.attachedTo];
+    if (!host) return;
+    const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
+    const data = {};
+    COPY_FIELDS.forEach((f) => { data[f] = host[f]; });
+    data.type = (data.type || "").replace(/\blegendary\s+/i, "");
+    data.keywords = [...new Set([...(data.keywords || []), "Haste"])];
+    data.owner = ctx.controllerId;
+    data.zoneType = classifyType(data.type);
+    spawnBattlefieldCard(lobby, data);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"} creates a hasty token copy of ${host.name || "a creature"} (Helm of the Host)`);
+  },
+  // Astral Dragon -- "Project Image" -- "create two tokens that are copies of target noncreature
+  // permanent, except they're 3/3 Dragon creatures in addition to their other types, and they have
+  // flying." Same COPY_FIELDS reuse, plus real P/T and type/keyword overrides layered on top --
+  // classifyType still resolves to "creature" zoneType once "Dragon Creature" is appended to
+  // whatever the source's own type line already was (a land keeps being a land too, same as real
+  // Magic's "in addition to its other types").
+  createDragonTokenCopiesOfTarget(lobby, ctx, params) {
+    const source = lobby.cards[params.chosenTargetId];
+    if (!source) return;
+    const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
+    const count = params.count || 1;
+    for (let i = 0; i < count; i++) {
+      const data = {};
+      COPY_FIELDS.forEach((f) => { data[f] = source[f]; });
+      data.type = `${data.type || ""} Dragon Creature`.trim();
+      if (params.power != null) data.power = String(params.power);
+      if (params.toughness != null) data.toughness = String(params.toughness);
+      data.keywords = [...new Set([...(data.keywords || []), ...(params.keywords || [])])];
+      data.owner = ctx.controllerId;
+      data.zoneType = classifyType(data.type);
+      spawnBattlefieldCard(lobby, data);
+    }
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"} creates ${count} 3/3 flying Dragon token cop${count === 1 ? "y" : "ies"} of ${source.name || "a permanent"} (Astral Dragon)`);
   },
   // Hellkite Courser -- chosenTargetId here is the commander's SLOT (0 or 1, see the
   // ownCommanderInZone targetKind), not a card id. Puts it onto the battlefield with temporary
@@ -6164,6 +6210,15 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
+  // Astral Dragon -- "target NONCREATURE permanent." The inverse of "permanent" (which allows
+  // creature OR artifact) -- artifact/enchantment/planeswalker (all "artifact" zoneType in this
+  // engine) or a land, explicitly excluding creatures.
+  if (targetKind === "noncreaturePermanent") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType === "hand" || c.zoneType === "stack" || c.zoneType === "creature") return { ok: false, error: "Choose a noncreature permanent." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
   // Witch's Clinic -- "target commander," any player's, not restricted to your own the way
   // ownCreature is. isCommander is already stamped on the card at cast/battlefield time.
   if (targetKind === "commander") {
@@ -6378,6 +6433,12 @@ function fireTrigger(lobby, card, ability, xValue) {
     // creature anywhere on the battlefield) would queue an unanswerable "may destroy" prompt.
     if (ability.targetKind === "creatureWithFlying") {
       const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying"));
+      if (!hasMatch) return;
+    }
+    // Astral Dragon -- same CR 603.3c auto-fizzle, for the case no noncreature permanent exists
+    // anywhere on the battlefield yet.
+    if (ability.targetKind === "noncreaturePermanent") {
+      const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && c.zoneType !== "creature");
       if (!hasMatch) return;
     }
     // Griffin Dreamfinder/Sharuum the Hegemon-style "target artifact/enchantment card in your
