@@ -2006,6 +2006,9 @@ const SPELL_ABILITIES = {
   // past the cost itself reuses existing effects verbatim (searchLandTypes/tutorToHand).
   "crop rotation": { label: "Crop Rotation — sacrifice a land, search for a land, put it onto the battlefield", additionalCost: { sacrificeType: "land" }, effects: [{ type: "searchLandTypes", types: ["Land"] }] },
   "diabolic intent": { label: "Diabolic Intent — sacrifice a creature, search for a card, put it into your hand", additionalCost: { sacrificeType: "creature" }, effects: [{ type: "tutorToHand" }] },
+  "fling": { label: "Fling — sacrifice a creature, deal damage equal to its power to any target", additionalCost: { sacrificeType: "creature" }, effects: [{ type: "damageEqualToSacrificedCreaturePower" }], requiresTarget: true, targetKind: "any" },
+  "utter end": { label: "Utter End — exile target nonland permanent", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "permanent" },
+  "deadly dispute": { label: "Deadly Dispute — sacrifice an artifact or creature, draw two cards and create a Treasure", additionalCost: { sacrificeType: ["artifact", "creature"] }, effects: [{ type: "drawCards", amount: 2 }, { type: "createTreasureToken" }] },
   "brave the elements": { label: "Brave the Elements — choose a color", modes: ["White", "Blue", "Black", "Red", "Green"].map((color) => ({
     label: `Brave the Elements — white creatures you control gain protection from ${color} until end of turn`,
     requiresTarget: false,
@@ -3763,6 +3766,15 @@ const EFFECTS = {
   // already handles keeps working here for free.
   damageEqualToGoblinsEnteredThisTurn(lobby, ctx, params) {
     const amount = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && c.controllerSince === lobby.turn.turnNumber && (c.type || "").toLowerCase().includes("goblin")).length;
+    EFFECTS.damageTarget(lobby, ctx, { ...params, amount });
+  },
+  // Fling -- "deals damage equal to the SACRIFICED creature's power to any target." The power was
+  // captured onto the spell card itself (ctx.sourceCard, still the same object) back when the
+  // additional cost was paid in attemptPlay, since the creature is already gone by the time this
+  // effect runs. Same "delegate to damageTarget for free multiplier/lifelink/death-trigger
+  // handling" precedent as damageEqualToGoblinsEnteredThisTurn just above.
+  damageEqualToSacrificedCreaturePower(lobby, ctx, params) {
+    const amount = (ctx.sourceCard && ctx.sourceCard._sacrificedCreaturePower) || 0;
     EFFECTS.damageTarget(lobby, ctx, { ...params, amount });
   },
   damageTarget(lobby, ctx, params) {
@@ -6581,10 +6593,16 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   const addlCost = spellAbility && spellAbility.additionalCost;
   let sacrificeForCost = null;
   if (addlCost && addlCost.sacrificeType) {
-    const zoneForFilter = addlCost.sacrificeType === "land" ? "mana" : "creature";
-    sacrificeForCost = Object.values(lobby.cards).find((c) => c.owner === card.owner && c.zoneType === zoneForFilter && c.id !== card.id) || null;
+    // Deadly Dispute -- "sacrifice an artifact OR creature" -- a real union, not just one fixed
+    // zone. sacrificeType can now be an array; a plain string (Crop Rotation/Diabolic Intent's
+    // existing single-type shape) still works unchanged via the wrap below. "land" is the one type
+    // word that doesn't match its own zoneType name (lands classify to "mana"); "creature"/
+    // "artifact" already match zoneType verbatim.
+    const types = Array.isArray(addlCost.sacrificeType) ? addlCost.sacrificeType : [addlCost.sacrificeType];
+    const zones = types.map((t) => (t === "land" ? "mana" : t));
+    sacrificeForCost = Object.values(lobby.cards).find((c) => c.owner === card.owner && zones.includes(c.zoneType) && c.id !== card.id) || null;
     if (!sacrificeForCost) {
-      return { ok: false, error: `You have no ${addlCost.sacrificeType} to sacrifice as an additional cost.` };
+      return { ok: false, error: `You have no ${types.join(" or ")} to sacrifice as an additional cost.` };
     }
   }
   const paid = affordWithRestricted(p, cost, xValue, { kind: "cast", card });
@@ -6599,6 +6617,17 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   // off the stack item later, same as it already reads a spell's own printed "can't be countered."
   if (paid.spentUnits.some((u) => u.grantsUncounterable)) card.castWithUncounterableMana = true;
   if (sacrificeForCost) {
+    // Fling -- "deals damage equal to the SACRIFICED creature's power" needs that number after the
+    // creature is already gone. Stashed directly on the spell card object (same object that stays
+    // valid all the way through queueTargetChoice into the final EFFECTS call, per the "card object
+    // stays valid, only lobby.cards bookkeeping is cleared" precedent used everywhere else a cost is
+    // paid before a spell/ability resolves) rather than threaded through params, since nothing
+    // upstream of the eventual effect call has a way to pass it along otherwise.
+    if (sacrificeForCost.zoneType === "creature") {
+      const bonus = attachedBonusFor(lobby, sacrificeForCost);
+      const stat = staticBonusFor(lobby, sacrificeForCost);
+      card._sacrificedCreaturePower = Math.max(0, parsePT(sacrificeForCost.power) + (sacrificeForCost.counters || 0) + bonus.powerBonus + stat.powerBonus);
+    }
     fireDeathTriggers(lobby, sacrificeForCost);
     sendToGraveyardInternal(lobby, sacrificeForCost);
     broadcastPlayers(lobby);
@@ -8621,6 +8650,14 @@ function resolveCombatDamage(lobby) {
   function hasKw(card, kw) {
     return effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === kw);
   }
+  // Toxic N (CR 702.164) -- unlike Infect, Toxic is ADDITIVE: normal life-loss damage happens as
+  // usual, and the player ALSO gets N poison counters. Checked by text (no fixed keyword list entry
+  // exists for it the way Infect has one), applied at both real combat-damage-to-player sites right
+  // alongside the existing life-loss/infect-poison line, only when the hit actually landed.
+  function toxicAmountFor(card) {
+    const m = (card.text || "").match(/\btoxic (\d+)/i);
+    return m ? parseInt(m[1], 10) : 0;
+  }
   // Kor Haven -- "Prevent all combat damage that would be dealt by target attacking creature this
   // turn." Only zeroes the damage THIS creature deals (not damage dealt TO it, and not other
   // creatures it's paired with), so it's checked at each of the three points a creature's own power
@@ -8724,6 +8761,8 @@ function resolveCombatDamage(lobby) {
                 // is infect's primary win condition and the part worth having.
                 const tookIt = hasKw(attacker, "infect") ? (defender.poison = (defender.poison || 0) + toPlayer, true) : applyLifeLoss(lobby, defenderId, toPlayer, attacker.id);
                 if (tookIt) {
+                  const toxicAmt = toxicAmountFor(attacker);
+                  if (toxicAmt) defender.poison = (defender.poison || 0) + toxicAmt;
                   dmgEvents.push({ targetId: defenderId, amount: toPlayer });
                   pushLog(lobby, `${attacker.name || "A face-down creature"} tramples ${toPlayer} over to ${defender.name}${hasKw(attacker, "infect") ? " (poison)" : ""}`);
                   fireCombatDamageToPlayerTriggers(lobby, attacker, defenderId, toPlayer);
@@ -8782,6 +8821,8 @@ function resolveCombatDamage(lobby) {
           // defender any damage -- no commander-damage tracking, no lifelink, no
           // combat-damage-to-player trigger for a hit that didn't land.
           if (tookIt) {
+            const toxicAmt = toxicAmountFor(attacker);
+            if (toxicAmt) defender.poison = (defender.poison || 0) + toxicAmt;
             if (attacker.isCommander) {
               defender.cmdr = (defender.cmdr || 0) + dealt; // kept as the quick-glance total
               const key = commanderSlotKey(lobby, attacker);
