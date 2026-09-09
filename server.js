@@ -524,7 +524,7 @@ const CARD_ABILITIES = {
   // until end of turn, except it has haste." requiresTarget + the existing Cancel escape hatch on
   // any pending target choice already gives the "may" semantics for free -- no separate optional-
   // choice mechanism needed. See EFFECTS.becomeCopyUntilEOT for the actual copy.
-  "cursed mirror": [{ trigger: "etb", label: "Cursed Mirror — you may have it become a copy of any creature on the battlefield until end of turn, except it has haste", requiresTarget: true, targetKind: "creature", effects: [{ type: "becomeCopyUntilEOT" }] }],
+  "cursed mirror": [{ trigger: "etb", label: "Cursed Mirror — you may have it become a copy of any creature on the battlefield until end of turn, except it has haste", requiresTarget: true, targetKind: "creature", effects: [{ type: "becomeCopyUntilEOT", grantHaste: true }] }],
   // Batch added from the same live-decklist gap-analysis pass as SPELL_ABILITIES/ACTIVATED_ABILITIES
   // below. typeFilter is a plain type-line substring match, same shape tutorToHand already supports
   // for Weathered Wayfarer-style cards.
@@ -944,6 +944,19 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Kessig Wolf Run — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{X}{R}{G}", tap: true }, label: "Kessig Wolf Run — target creature gets +X/+0 and gains trample until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", keywords: ["Trample"] }] }
   ],
+  // Item 14, CR 707 "becomes a copy" batch (wingus's deck). See becomeCopyPermanent/
+  // becomeCopyUntilEOT's own comments for the shared copy mechanism (built earlier for Cursed
+  // Mirror, generalized here).
+  "thespian's stage": [
+    { cost: { tap: true }, manaAbility: true, label: "Thespian's Stage — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{2}", tap: true }, requiresTarget: true, targetKind: "land", label: "Thespian's Stage — becomes a copy of target land, except it has this ability", effects: [{ type: "becomeCopyPermanent", retainAbilityName: "thespian's stage" }] }
+  ],
+  "the mycosynth gardens": [
+    { cost: { tap: true }, manaAbility: true, label: "The Mycosynth Gardens — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{1}", tap: true }, manaAbility: true, label: "The Mycosynth Gardens — Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] },
+    { cost: { mana: "{X}", tap: true }, requiresTarget: true, targetKind: "ownNontokenArtifact", label: "The Mycosynth Gardens — becomes a copy of target nontoken artifact you control, except it has this ability", effects: [{ type: "becomeCopyPermanent", retainAbilityName: "the mycosynth gardens" }] }
+  ],
+  "impossible man": [{ cost: { mana: "{2}{U}" }, requiresTarget: true, targetKind: "anyPermanent", excludeSelf: true, label: "Impossible Man — becomes a copy of another target permanent until end of turn, except his name is Impossible Man", effects: [{ type: "becomeCopyUntilEOT", forceName: "Impossible Man" }] }],
   // Grim Monolith / Basalt Monolith -- "This artifact doesn't untap during your untap step" needs
   // no table entry (see advanceOnePhase's own Untap-step comment); only the paid self-untap
   // ability needs one here, via the new untapSelf effect.
@@ -1471,7 +1484,13 @@ function getGrantedActivatedAbilities(card, lobby) {
 }
 function getActivatedAbilities(card, lobby) {
   const named = ACTIVATED_ABILITIES[archiveKey(card.name)] || [];
-  return [...named, ...getGrantedActivatedAbilities(card, lobby)];
+  // Thespian's Stage / The Mycosynth Gardens -- "...except it has this ability." Once the card's
+  // own name changes via becomeCopyPermanent, the normal name-keyed lookup above would otherwise
+  // lose its own re-copy ability entirely, since this engine's activated-ability table is purely
+  // name-keyed. _retainedAbilityName (stamped by becomeCopyPermanent) keeps it findable under its
+  // ORIGINAL name regardless of what it currently looks like.
+  const retained = card._retainedAbilityName ? (ACTIVATED_ABILITIES[card._retainedAbilityName] || []) : [];
+  return [...named, ...retained, ...getGrantedActivatedAbilities(card, lobby)];
 }
 
 // Channel (CR 702.83) -- "Channel — {cost}, Discard this card: EFFECT." A genuinely different
@@ -2823,12 +2842,38 @@ const EFFECTS = {
     original.zoneType = mirror.zoneType;
     mirror._copyOriginal = original;
     COPY_FIELDS.forEach((f) => { mirror[f] = source[f]; });
-    const hasHaste = (mirror.keywords || []).some((k) => (k || "").toLowerCase() === "haste");
-    if (!hasHaste) mirror.keywords = [...(mirror.keywords || []), "Haste"];
+    // Cursed Mirror's own "except it has haste" -- opt-in, since Impossible Man's own "except"
+    // clause is about its NAME instead (see forceName just below), not haste.
+    if (params.grantHaste) {
+      const hasHaste = (mirror.keywords || []).some((k) => (k || "").toLowerCase() === "haste");
+      if (!hasHaste) mirror.keywords = [...(mirror.keywords || []), "Haste"];
+    }
+    // Impossible Man -- "...except his name is Impossible Man."
+    if (params.forceName) mirror.name = params.forceName;
     mirror.zoneType = classifyType(mirror.type);
     broadcastCard(lobby, mirror);
     const p = lobby.players[ctx.controllerId];
-    pushLog(lobby, `${p ? p.name : "Someone"}'s Cursed Mirror becomes a copy of ${source.name || "a creature"}`);
+    pushLog(lobby, `${p ? p.name : "Someone"}'s ${original.name || "permanent"} becomes a copy of ${source.name || "a permanent"}`);
+  },
+  // Thespian's Stage / The Mycosynth Gardens -- CR 707 copying, same as becomeCopyUntilEOT just
+  // above but PERMANENT (no "until end of turn," so no _copyOriginal snapshot/revert -- this sticks
+  // until something else changes it). Both real cards' own "except it has this ability" clause is
+  // handled by retainAbilityName: getActivatedAbilities checks a card's own _retainedAbilityName
+  // (see its own comment) so the land keeps its own re-copy ability even after its name/text change
+  // to something else entirely, since this engine's activated-ability lookup is otherwise purely
+  // name-keyed.
+  becomeCopyPermanent(lobby, ctx, params) {
+    const mirror = lobby.cards[ctx.sourceCard.id];
+    const source = lobby.cards[params.chosenTargetId];
+    if (!mirror || !source || mirror.id === source.id) return;
+    const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
+    const originalName = mirror.name;
+    COPY_FIELDS.forEach((f) => { mirror[f] = source[f]; });
+    if (params.retainAbilityName) mirror._retainedAbilityName = params.retainAbilityName;
+    mirror.zoneType = classifyType(mirror.type);
+    broadcastCard(lobby, mirror);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"}'s ${originalName || "permanent"} becomes a copy of ${source.name || "a permanent"}`);
   },
   // Mithril Coat -- "When Mithril Coat enters, attach it to target legendary creature you control."
   // The actual grant ("Equipped creature has indestructible") is already handled generically by
@@ -6645,6 +6690,34 @@ function resolveChosenTarget(lobby, entry, targetId) {
     const c = lobby.cards[targetId];
     if (!c || c.zoneType === "hand" || c.zoneType === "stack" || c.zoneType === "creature") return { ok: false, error: "Choose a noncreature permanent." };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Thespian's Stage -- "target land," any player's, unrestricted by type (unlike "permanent",
+  // which is hardcoded to creature/artifact and excludes lands entirely).
+  if (targetKind === "land") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "mana") return { ok: false, error: "Choose a land." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That land"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Impossible Man -- "another target permanent," any type (creature, artifact, or land), any
+  // controller -- the union of "permanent" and "land" above, since neither alone covers every real
+  // permanent type this engine tracks.
+  if (targetKind === "anyPermanent") {
+    const c = lobby.cards[targetId];
+    if (!c || (c.zoneType !== "creature" && c.zoneType !== "artifact" && c.zoneType !== "mana")) return { ok: false, error: "Choose a permanent." };
+    if (entry.excludeSelf && entry.sourceCard && c.id === entry.sourceCard.id) return { ok: false, error: "Choose another permanent." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // The Mycosynth Gardens -- "target NONTOKEN artifact YOU CONTROL." "with mana value X" (X being
+  // whatever was paid for this ability) isn't cross-checked against the target's own cmc -- a
+  // disclosed simplification (no existing target-validation shape ties a target's legality to the
+  // ability's own paid cost value), same "the effect works, one real constraint is loosened"
+  // precedent as other X-cost/target combinations elsewhere in this file.
+  if (targetKind === "ownNontokenArtifact") {
+    const c = lobby.cards[targetId];
+    if (!c || c.owner !== entry.controllerId || c.zoneType !== "artifact" || (c.type || "").toLowerCase().includes("token")) return { ok: false, error: "Choose a nontoken artifact you control." };
     return { ok: true };
   }
   // Witch's Clinic -- "target commander," any player's, not restricted to your own the way
