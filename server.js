@@ -378,6 +378,16 @@ const CARD_ABILITIES = {
   // Kolaghan's own controller -- see fireGlobalOpponentCastsMatchingGraveyardCardTrigger's comment.
   "dragonlord kolaghan": [{ trigger: "opponentCastsMatchingGraveyardCard", label: "Dragonlord Kolaghan — that player loses 10 life", requiresTarget: false, effects: [{ type: "loseLife", amount: 10 }] }],
   "rakdos, patron of chaos": [{ trigger: "endStep", label: "Rakdos, Patron of Chaos — target opponent may sacrifice two nonland permanents or you draw two cards", requiresTarget: true, targetKind: "player", effects: [{ type: "offerSacrificeOrDraw", sacrificeCount: 2, declinedDraw: 2 }] }],
+  // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step, that
+  // player does X," reusing the eachOpponentEndStep event fireGlobalTriggerEachOpponent dispatches
+  // (see its own comment) with "that player" baked into chosenTargetId automatically.
+  "archfiend of depravity": [{ trigger: "eachOpponentEndStep", requiresTarget: false, label: "Archfiend of Depravity — that player sacrifices all but two creatures", effects: [{ type: "targetPlayerSacrificesAllCreaturesExceptChosen", keepCount: 2 }] }],
+  "goblin spymaster": [{ trigger: "eachOpponentEndStep", requiresTarget: false, label: "Goblin Spymaster — that player creates a 1/1 red Goblin creature token that must attack", effects: [{ type: "createTokenForTargetPlayer", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], text: "Creatures you control attack each combat if able." }] }],
+  // Gimli, Counter of Kills -- "whenever a creature AN OPPONENT controls dies, Gimli deals 1 damage
+  // to that creature's controller." opponentOnly narrows deathAnyCreature's usual table-wide scan to
+  // just Gimli's opponents; dynamicTargetOwner bakes the dying creature's own controller into
+  // damageTarget's chosenTargetId (see fireGlobalTriggerAllPlayers' own comment for both flags).
+  "gimli, counter of kills": [{ trigger: "deathAnyCreature", opponentOnly: true, dynamicTargetOwner: true, requiresTarget: false, label: "Gimli, Counter of Kills — deal 1 damage to that creature's controller", effects: [{ type: "damageTarget", amount: 1 }] }],
   "serra's emissary": [{ trigger: "etb", label: "Serra's Emissary — choose a card type for protection", requiresTarget: true, targetKind: "cardType", effects: [{ type: "grantPlayerProtectionFromCardType" }] }],
   // Two independent youCastSpell triggers, each gated by its own colorFilter (fireGlobalTrigger)
   // -- casting a spell that's BOTH red and white (a rare gold spell) correctly fires both. "any"
@@ -2050,7 +2060,10 @@ const EFFECTS = {
       spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
         power: params.power, toughness: params.toughness, colors: params.colors || [],
-        keywords: params.keywords || [], owner: ownerId, zoneType: classifyType(params.tokenType || "Token Creature")
+        // Goblin Spymaster's token carries a real (if unenforced -- no forced-attack mechanic exists
+        // in this engine) keyword ability in its own text; every other createToken* caller omits
+        // this param and gets the same "" default as before.
+        keywords: params.keywords || [], text: params.text || "", owner: ownerId, zoneType: classifyType(params.tokenType || "Token Creature")
       });
     }
   },
@@ -3800,6 +3813,24 @@ const EFFECTS = {
     if (!targetId) return;
     const match = Object.values(lobby.cards).find((c) => c.owner === targetId && c.zoneType === "creature");
     if (match) { fireDeathTriggers(lobby, match); sendToGraveyardInternal(lobby, match); }
+  },
+  // Archfiend of Depravity -- "that player chooses up to two creatures they control, then sacrifices
+  // the rest." WHICH creatures survive is auto-picked (kept: the highest-power creatures, same
+  // effective power math damageTarget/effPT already use) rather than prompted -- same "no real
+  // choice worth a UI" disclosed simplification as eachOpponentSacrifices' own auto-pick just above,
+  // just keeping the BEST N instead of losing one single match.
+  targetPlayerSacrificesAllCreaturesExceptChosen(lobby, ctx, params) {
+    const targetId = params.chosenTargetId;
+    if (!targetId) return;
+    const keepCount = params.keepCount || 0;
+    const creatures = Object.values(lobby.cards).filter((c) => c.owner === targetId && c.zoneType === "creature");
+    if (creatures.length <= keepCount) return;
+    const effPower = (c) => {
+      const bonus = attachedBonusFor(lobby, c), stat = staticBonusFor(lobby, c);
+      return parsePT(c.power) + (c.counters || 0) + bonus.powerBonus + stat.powerBonus;
+    };
+    const sorted = [...creatures].sort((a, b) => effPower(b) - effPower(a));
+    sorted.slice(keepCount).forEach((c) => { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); });
   },
   // Chain Reaction / Blasphemous Act -- "deals X damage to each creature, where X is the number of
   // creatures on the battlefield." X is computed fresh here (BEFORE anything dies, matching the real
@@ -7011,7 +7042,39 @@ function fireGlobalTriggerAllPlayers(lobby, eventType, eventCard) {
       // fireGlobalTrigger's own (City of Traitors, etc.), needed here since this dispatcher scans
       // every player's battlefield including the watching permanent's own controller.
       if (ability.excludeSelf && eventCard && c.id === eventCard.id) return;
-      fireTrigger(lobby, c, ability);
+      // Gimli, Counter of Kills -- "whenever a creature AN OPPONENT controls dies" -- narrows the
+      // table-wide scan to watching permanents whose controller is NOT the dying creature's
+      // controller, unlike the unrestricted deathAnyCreature default (every permanent, including the
+      // dying creature's own controller's own other permanents).
+      if (ability.opponentOnly && eventCard && c.owner === eventCard.owner) return;
+      let fireAbility = ability;
+      // "That creature's controller" -- a dynamic per-event player id, baked into the effect's own
+      // chosenTargetId field at fire time (the same param name the real target-choice flow already
+      // uses for "target player" effects like damageTarget/targetPlayerSacrifices), since ctx at
+      // resolve time only ever carries the watching ability's own controller, never a separate
+      // per-event target.
+      if (ability.dynamicTargetOwner && eventCard) {
+        fireAbility = { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: eventCard.owner })) };
+      }
+      fireTrigger(lobby, c, fireAbility);
+    });
+  }
+}
+// Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step, that
+// player does X." The inverse of fireGlobalTrigger's own scan (which only checks the event
+// player's OWN battlefield, "you"/"your own"): here activeId is whoever's end step is actually
+// beginning, and every OTHER player's permanents get checked, since this ability's controller is
+// one of activeId's opponents from THEIR perspective -- "that player" always means activeId, baked
+// into chosenTargetId at fire time, same dynamic-per-event-target precedent as
+// fireGlobalTriggerAllPlayers' own dynamicTargetOwner just above.
+function fireGlobalTriggerEachOpponent(lobby, eventType, activeId) {
+  if (!lobby.turn.started) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === activeId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, eventType).forEach((ability) => {
+      const fireAbility = { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: activeId })) };
+      fireTrigger(lobby, c, fireAbility);
     });
   }
 }
@@ -7658,6 +7721,12 @@ function advanceOnePhase(lobby) {
   if (activePlayer && turn.phase === "Upkeep") fireGlobalTrigger(lobby, "upkeep", activeId);
   // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
   if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
+  // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step,
+  // that player does X." Every player's end step qualifies as "an opponent's end step" from some
+  // OTHER player's perspective, so this fires on every single End Step (not gated to the ability's
+  // own controller's turn the way "endStep" above is) -- see fireGlobalTriggerEachOpponent's own
+  // comment for the scan/targeting shape.
+  if (activePlayer && turn.phase === "End Step") fireGlobalTriggerEachOpponent(lobby, "eachOpponentEndStep", activeId);
   // CR 716.4 -- "At the beginning of the monarch's end step, that player draws a card." Only on
   // the monarch's OWN end step (not every end step), matching setMonarch's own comment.
   if (activePlayer && turn.phase === "End Step" && activeId === lobby.monarchId) {
