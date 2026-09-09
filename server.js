@@ -948,6 +948,9 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Kessig Wolf Run — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{X}{R}{G}", tap: true }, label: "Kessig Wolf Run — target creature gets +X/+0 and gains trample until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", keywords: ["Trample"] }] }
   ],
+  // No targeting -- hits every flying creature on the battlefield, allies included. Reach needs no
+  // table entry (KNOWN_KEYWORDS).
+  "silklash spider": [{ cost: { mana: "{X}{G}{G}" }, label: "Silklash Spider — deals X damage to each creature with flying", effects: [{ type: "damageAllFlyingCreatures" }] }],
   // Item 14, CR 707 "becomes a copy" batch (wingus's deck). See becomeCopyPermanent/
   // becomeCopyUntilEOT's own comments for the shared copy mechanism (built earlier for Cursed
   // Mirror, generalized here).
@@ -2475,6 +2478,19 @@ const EFFECTS = {
     EFFECTS.destroyTarget(lobby, ctx, params);
     const flyingCount = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying")).length;
     if (flyingCount > 0) applyLifeGain(lobby, ctx.controllerId, flyingCount);
+  },
+  // Silklash Spider -- "{X}{G}{G}: This creature deals X damage to each creature with flying."
+  // No targeting at all (it hits every flying creature on the table, allies included, matching the
+  // real card's unrestricted wording), so this just loops params.xAmount (baked in by fireTrigger's
+  // own X-cost handling, the same Kessig Wolf Run precedent) through the existing single-target
+  // damageTarget for each match -- same "delegate to damageTarget so multiplier/lifelink/death
+  // triggers keep working for free" precedent as damageEqualToGoblinsEnteredThisTurn above.
+  damageAllFlyingCreatures(lobby, ctx, params) {
+    const amount = params.xAmount || params.amount || 0;
+    if (amount <= 0) return;
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature" && effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying")).forEach((c) => {
+      EFFECTS.damageTarget(lobby, ctx, { ...params, chosenTargetId: c.id, amount });
+    });
   },
   // Boseiju, Who Endures -- destroy the target, then THAT PLAYER (the destroyed permanent's own
   // owner, not the caster) searches their library for a basic land to put onto the battlefield.
