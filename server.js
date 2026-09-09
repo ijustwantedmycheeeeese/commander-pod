@@ -867,6 +867,23 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Kessig Wolf Run — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{X}{R}{G}", tap: true }, label: "Kessig Wolf Run — target creature gets +X/+0 and gains trample until end of turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", keywords: ["Trample"] }] }
   ],
+  // Grim Monolith / Basalt Monolith -- "This artifact doesn't untap during your untap step" needs
+  // no table entry (see advanceOnePhase's own Untap-step comment); only the paid self-untap
+  // ability needs one here, via the new untapSelf effect.
+  // Jungle Basin / Coral Atoll -- "{T}: Add {C}{G}" (both colors at once from one tap, not a
+  // choice between them) -- same fixed-pair shape as the Signet family, needs a real table entry
+  // since producedMana having more than one entry would otherwise make the free-tap shortcut
+  // prompt a CHOICE instead of adding both.
+  "jungle basin": [{ cost: { tap: true }, manaAbility: true, label: "Jungle Basin — Add {C}{G}", effects: [{ type: "addFixedMana", colors: ["C", "G"] }] }],
+  "coral atoll": [{ cost: { tap: true }, manaAbility: true, label: "Coral Atoll — Add {C}{U}", effects: [{ type: "addFixedMana", colors: ["C", "U"] }] }],
+  "grim monolith": [
+    { cost: { tap: true }, manaAbility: true, label: "Grim Monolith — Add {C}{C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C", "C"] }] },
+    { cost: { mana: "{4}" }, label: "Grim Monolith — untap this artifact", requiresTarget: false, effects: [{ type: "untapSelf" }] }
+  ],
+  "basalt monolith": [
+    { cost: { tap: true }, manaAbility: true, label: "Basalt Monolith — Add {C}{C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C", "C"] }] },
+    { cost: { mana: "{3}" }, label: "Basalt Monolith — untap this artifact", requiresTarget: false, effects: [{ type: "untapSelf" }] }
+  ],
   "ominous cemetery": [
     { cost: { tap: true }, manaAbility: true, label: "Ominous Cemetery — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{5}", tap: true, exile: true }, label: "Ominous Cemetery — target creature's owner shuffles it into their library", requiresTarget: true, targetKind: "creature", effects: [{ type: "shuffleTargetIntoLibrary" }] }
@@ -2223,6 +2240,14 @@ const EFFECTS = {
     card.tapped = false;
     broadcastCard(lobby, card);
   },
+  // Grim Monolith / Basalt Monolith's own "{N}: Untap this artifact" -- pure self, no targeting at
+  // all (same "self, no target" shape as grantTemporaryPTToSelf/Kyodai), unlike untapTarget above.
+  untapSelf(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card || !card.tapped) return;
+    card.tapped = false;
+    broadcastCard(lobby, card);
+  },
   // Boros Charm's "permanents you control gain indestructible until end of turn" mode -- applies
   // grantTemporaryKeyword (see its own comment) to every permanent the controller has, not just one.
   // Generalized to any keyword list (default ["Indestructible"], Boros Charm's own case unchanged)
@@ -2453,6 +2478,14 @@ const EFFECTS = {
   tapSelf(lobby, ctx, params) {
     const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
     if (card) { card.tapped = true; broadcastCard(lobby, card); }
+  },
+  // Jungle Basin / Coral Atoll's own decline path -- "sacrifice it unless you return an untapped
+  // [Type]..." -- same self-only shape as tapSelf just above, sacrifice instead of tap.
+  sacrificeSelf(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    fireDeathTriggers(lobby, card);
+    sendToGraveyardInternal(lobby, card);
   },
   // Dragon Tempest's "it gains haste until end of turn" -- enteringCardId is baked in by
   // fireGlobalOtherCreatureEtbTriggers at fire time (the target here is fixed by the trigger
@@ -4363,7 +4396,13 @@ function entersTapped(card, lobby) {
     const hasType = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && conditionalTypes.some((t) => (c.type || "").toLowerCase().includes(t)));
     return !hasType;
   }
-  if (text.includes("you may pay") || text.includes("unless you") || text.includes("if you don't") || text.includes("you may reveal")) return false;
+  // Scoped to the SENTENCE that actually contains "enters tapped" -- a card can have an unrelated
+  // "unless"/"if you don't" elsewhere in its text (Jungle Basin/Coral Atoll's own separate
+  // "sacrifice it unless you return an untapped [Type]..." ETB clause, say) that has nothing to do
+  // with whether it enters tapped at all. Matching the WHOLE text here was a real bug, silently
+  // making such lands always enter untapped instead of their real unconditional "enters tapped."
+  const tappedSentence = text.split(/(?<=[.!?])\s+/).find((s) => s.includes("enters tapped") || s.includes("enters the battlefield tapped")) || text;
+  if (tappedSentence.includes("you may pay") || tappedSentence.includes("unless you") || tappedSentence.includes("if you don't") || tappedSentence.includes("you may reveal")) return false;
   return true;
 }
 
@@ -6496,6 +6535,7 @@ function fireEtbTriggers(lobby, card) {
   applyEntersTappedByOpponentEffect(lobby, card);
   checkShockLandChoice(lobby, card);
   checkRevealFromHandChoice(lobby, card);
+  checkBounceLandUnlessSacrifice(lobby, card);
   checkChromeMoxImprint(lobby, card);
   checkMoxDiamondLandDiscard(lobby, card);
   checkRiot(lobby, card);
@@ -6560,6 +6600,30 @@ function revealFromHandChoiceFromText(text) {
   const m = (text || "").match(/as this land enters, you may reveal an? ([a-z]+)(?:\s+or\s+(?:an? )?([a-z]+))? card from (?:your )?hand\.\s*if you don'?t, this land enters tapped/i);
   if (!m) return null;
   return { types: [m[1], m[2]].filter(Boolean) };
+}
+// Jungle Basin / Coral Atoll -- "This land enters tapped. When this land enters, sacrifice it
+// unless you return an untapped [Type] you control to its owner's hand." Same real-optional-payment
+// shape as checkRevealFromHandChoice just below it (a real choice only when a qualifying source
+// exists; the "no way to pay" case auto-resolves immediately, here to an unconditional sacrifice
+// rather than a retroactive tap), just bouncing a land instead of revealing a hand card, and
+// sacrificing on decline instead of tapping. Auto-picks the first qualifying untapped land of that
+// type (same "auto-pick over a new picker UI" precedent as autoSacrificeFilter and everywhere else
+// in this file) rather than a real choice among several.
+function bounceLandUnlessChoiceFromText(text) {
+  const m = (text || "").match(/sacrifice it unless you return an untapped ([a-z]+) you control to its owner'?s hand/i);
+  return m ? m[1] : null;
+}
+function checkBounceLandUnlessSacrifice(lobby, card) {
+  const wantedType = bounceLandUnlessChoiceFromText(card.text);
+  if (!wantedType) return;
+  const candidate = Object.values(lobby.cards).find((c) => c.owner === card.owner && c.zoneType === "mana" && c.id !== card.id && !c.tapped && (c.type || "").toLowerCase().includes(wantedType.toLowerCase()));
+  if (!candidate) { fireDeathTriggers(lobby, card); sendToGraveyardInternal(lobby, card); return; }
+  queueOptionalPayment(lobby, {
+    playerId: card.owner, controllerId: card.owner, sourceCard: card,
+    label: `${card.name} — return an untapped ${wantedType} you control to its owner's hand, or this land is sacrificed`,
+    costLabel: `Return ${candidate.name || `an untapped ${wantedType}`}`,
+    cost: { bounceCardId: candidate.id }, declinedEffects: [{ type: "sacrificeSelf" }]
+  });
 }
 function checkRevealFromHandChoice(lobby, card) {
   if (card.tapped) return;
@@ -7487,7 +7551,11 @@ function advanceOnePhase(lobby) {
     activePlayer.lifeLocked = false;
     activePlayer.protectionFromEverything = false;
     for (const id in lobby.cards) {
-      if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped) {
+      // Grim Monolith / Basalt Monolith-style "This artifact doesn't untap during your untap
+      // step" -- a pure text-scan, no table entry needed (same precedent as every other
+      // name-independent mechanism in this file). Its own separate "{N}: Untap this artifact"
+      // paid ability is the only way it comes back untapped.
+      if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped && !/this (?:artifact|permanent) doesn'?t untap during your untap step/i.test(lobby.cards[id].text || "")) {
         lobby.cards[id].tapped = false;
         broadcastCard(lobby, lobby.cards[id]);
       }
@@ -9277,6 +9345,24 @@ io.on("connection", (socket) => {
       applyLifeLoss(lobby, socket.id, entry.cost.life);
       checkEliminations(lobby);
       broadcastPlayers(lobby);
+    }
+    // Jungle Basin / Coral Atoll's own cost -- return the specific (auto-picked) land back to its
+    // owner's hand. The land might have left the battlefield some other way between the prompt
+    // being queued and now (tapped, sacrificed, bounced) -- re-validate it's still a real, legal,
+    // untapped land right here rather than trusting the id blindly. Reuses bounceCardToHandInternal
+    // verbatim (the same helper every other "bounce to hand" effect already goes through).
+    if (entry.cost && entry.cost.bounceCardId) {
+      const landToBounce = lobby.cards[entry.cost.bounceCardId];
+      if (!landToBounce || landToBounce.zoneType !== "mana" || landToBounce.tapped) {
+        socket.emit("actionError", "That land is no longer a legal choice -- this land is sacrificed instead.");
+        lobby.pendingOptionalPayments.splice(idx, 1);
+        if (entry.declinedEffects && entry.declinedEffects.length && entry.sourceCard) {
+          pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: `${entry.label} (declined)`, effects: entry.declinedEffects });
+        }
+        promptNextOptionalPayment(lobby, socket.id);
+        return;
+      }
+      bounceCardToHandInternal(lobby, landToBounce);
     }
     lobby.pendingOptionalPayments.splice(idx, 1);
     pushLog(lobby, `${p ? p.name : "Someone"} paid for: ${entry.label}`);
