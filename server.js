@@ -374,6 +374,9 @@ const CARD_ABILITIES = {
   // land-count condition (same pattern as Temple of the False God's own condition/lobby.cards scan,
   // just counting Plains specifically instead of any land).
   "emeria, the sky ruin": [{ trigger: "upkeep", label: "Emeria, the Sky Ruin — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", condition: (card, lobby) => Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes("plains")).length >= 7, effects: [{ type: "reanimateFromGraveyard" }] }],
+  // Bugenhagen, Wise Elder -- same "control a creature with power >= N" condition shape as Bonders'
+  // Enclave's activated-ability condition, just on an upkeep trigger instead.
+  "bugenhagen, wise elder": [{ trigger: "upkeep", label: "Bugenhagen, Wise Elder — draw a card (you control a creature with power 7 or greater)", requiresTarget: false, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 7), effects: [{ type: "drawCards", amount: 1 }] }],
   // Wave 27 -- the "Thriving" land cycle. "This land enters tapped" is already generic; this is
   // just the ETB half of the one-time color choice (chooseColorOtherThan) -- see the matching
   // ACTIVATED_ABILITIES entries below for the ongoing mana ability that reads it back.
@@ -1106,6 +1109,8 @@ const ACTIVATED_ABILITIES = {
   // Wave 26 -- its plain "{T}: Add {C}" half is untouched by the free-tap-mana shortcut, same
   // reasoning as Desolate Lighthouse (this second ability isn't a manaAbility).
   "hall of heliod's generosity": [{ cost: { mana: "{1}{W}", tap: true }, requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], label: "Hall of Heliod's Generosity — {1}{W}, {T}: Put target enchantment card from your graveyard on top of your library", effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
+  // Same shape as Hall of Heliod's Generosity just above, artifact-filtered instead of enchantment.
+  "academy ruins": [{ cost: { mana: "{1}{U}", tap: true }, requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact"], label: "Academy Ruins — {1}{U}, {T}: Put target artifact card from your graveyard on top of your library", effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
   // The real Treasure token ability -- matches ANY token literally named "Treasure", regardless of
   // which effect created it (createTreasureToken/rollD20CreateTreasures/counterTargetSpellCreateTokenForController
   // all use this exact name). See chooseManaAnyColor's own comment for the sacrificed-source-by-the-
