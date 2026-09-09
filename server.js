@@ -1224,8 +1224,11 @@ const ACTIVATED_ABILITIES = {
   // already uses everywhere else a card has more than one.
   "escape tunnel": [
     { cost: { tap: true, sacrifice: true }, label: "Escape Tunnel — search for a basic land, tapped", effects: [{ type: "searchLandTypes", basicOnly: true, types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], entersTapped: true }] },
-    { cost: { tap: true, sacrifice: true }, label: "Escape Tunnel — target creature with power 2 or less can't be blocked this turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Unblockable" }] }
+    { cost: { tap: true, sacrifice: true }, label: "Escape Tunnel — target creature with power 2 or less can't be blocked this turn", requiresTarget: true, targetKind: "creaturePowerAtMost", maxPower: 2, effects: [{ type: "grantKeywordToTarget", keyword: "Unblockable" }] }
   ],
+  // Access Tunnel -- same shape as Escape Tunnel's second ability, just no sacrifice and a higher
+  // power ceiling. See creaturePowerAtMost's own comment in resolveChosenTarget.
+  "access tunnel": [{ cost: { mana: "{3}", tap: true }, label: "Access Tunnel — target creature with power 3 or less can't be blocked this turn", requiresTarget: true, targetKind: "creaturePowerAtMost", maxPower: 3, effects: [{ type: "grantKeywordToTarget", keyword: "Unblockable" }] }],
   // Clue tokens' own real text -- "{2}, Sacrifice this artifact: Draw a card." Keyed by the plain
   // token name ("Clue"), so ANY Clue on the battlefield already has this ability regardless of
   // which card's investigate/effect created it (Tireless Tracker's landfall, or any future
@@ -6680,6 +6683,20 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
     return { ok: true };
   }
+  // Access Tunnel / Escape Tunnel -- "target creature with power N or less." Reusable via
+  // entry.maxPower (the caller-provided N) for any future power-constrained target. Effective power
+  // uses the same parsePT + counters + attached/static-bonus formula as damageAllCreaturesTable's
+  // own local effPower closure.
+  if (targetKind === "creaturePowerAtMost") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "creature") return { ok: false, error: "Choose a creature." };
+    const bonus = attachedBonusFor(lobby, c);
+    const stat = staticBonusFor(lobby, c);
+    const power = parsePT(c.power) + (c.counters || 0) + bonus.powerBonus + stat.powerBonus;
+    if (power > entry.maxPower) return { ok: false, error: `Choose a creature with power ${entry.maxPower} or less.` };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
   // Minamo, School at Water's Edge -- "target legendary permanent" (any permanent type, not
   // restricted to creatures). Checked via the target's own printed type line, same way
   // isCommander/every other "legendary" check in this app already works -- no separate flag needed.
@@ -7049,7 +7066,7 @@ function fireTrigger(lobby, card, ability, xValue) {
       const hasMatch = Object.values(lobby.cards).some((c) => (c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana") && filter.some((t) => (c.type || "").toLowerCase().includes(t)));
       if (!hasMatch) return;
     }
-    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, maxCmc: ability.maxCmc, excludeSelf: ability.excludeSelf, commanderChoices });
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, maxCmc: ability.maxCmc, maxPower: ability.maxPower, excludeSelf: ability.excludeSelf, commanderChoices });
   } else {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   }
@@ -9639,6 +9656,18 @@ io.on("connection", (socket) => {
     if (ability.requiresTarget && ability.targetKind === "ownCreature" && ability.typeFilter) {
       const hasMatch = Object.values(lobby.cards).some((c) => c.owner === socket.id && c.zoneType === "creature" && ability.typeFilter.some((t) => (c.type || "").toLowerCase().includes(t)));
       if (!hasMatch) { socket.emit("actionError", `You have no ${ability.typeFilter.join("/")} to target.`); return; }
+    }
+    // Access Tunnel / Escape Tunnel -- same "reject before paying" reason, for when no creature
+    // (anyone's) currently qualifies for the power-constrained targetKind.
+    if (ability.requiresTarget && ability.targetKind === "creaturePowerAtMost") {
+      const hasMatch = Object.values(lobby.cards).some((c) => {
+        if (c.zoneType !== "creature") return false;
+        const bonus = attachedBonusFor(lobby, c);
+        const stat = staticBonusFor(lobby, c);
+        const power = parsePT(c.power) + (c.counters || 0) + bonus.powerBonus + stat.powerBonus;
+        return power <= ability.maxPower;
+      });
+      if (!hasMatch) { socket.emit("actionError", `There's no creature with power ${ability.maxPower} or less to target.`); return; }
     }
     // Temple of the False God -- "Activate only if you control five or more lands." A real
     // activation-condition gate, checked before anything is paid, same "reject before paying" reason
