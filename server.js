@@ -1053,6 +1053,53 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Talisman of Curiosity — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { tap: true }, manaAbility: true, label: "Talisman of Curiosity — Add {G} or {U}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["G", "U"], painDamage: 1 }] }
   ],
+  // Original ("Apocalypse cycle") painlands -- same exact shape as the Talisman cycle just above
+  // (free {C} vs. a colored choice that costs 1 life), just worded "this LAND" instead of "this
+  // artifact." Confirmed LIVE (via a debug script tapping Adarkar Wastes and picking {C} off the
+  // combined 3-way chooseMana prompt) that this was a real, worse-in-the-OTHER-direction bug: with
+  // no table entry, the free-tap shortcut's own painland regex (which DOES match "this land") fired
+  // regardless of which option the player picked, so choosing the supposedly-free {C} ALSO cost 1
+  // life. Same chooseManaFromOptionsWithPain fix as the Talisman cycle.
+  "adarkar wastes": [
+    { cost: { tap: true }, manaAbility: true, label: "Adarkar Wastes — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Adarkar Wastes — Add {W} or {U}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["W", "U"], painDamage: 1 }] }
+  ],
+  "battlefield forge": [
+    { cost: { tap: true }, manaAbility: true, label: "Battlefield Forge — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Battlefield Forge — Add {R} or {W}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["R", "W"], painDamage: 1 }] }
+  ],
+  "brushland": [
+    { cost: { tap: true }, manaAbility: true, label: "Brushland — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Brushland — Add {G} or {W}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["G", "W"], painDamage: 1 }] }
+  ],
+  "karplusan forest": [
+    { cost: { tap: true }, manaAbility: true, label: "Karplusan Forest — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Karplusan Forest — Add {R} or {G}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["R", "G"], painDamage: 1 }] }
+  ],
+  "sulfurous springs": [
+    { cost: { tap: true }, manaAbility: true, label: "Sulfurous Springs — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Sulfurous Springs — Add {B} or {R}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["B", "R"], painDamage: 1 }] }
+  ],
+  "underground river": [
+    { cost: { tap: true }, manaAbility: true, label: "Underground River — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Underground River — Add {U} or {B}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["U", "B"], painDamage: 1 }] }
+  ],
+  "yavimaya coast": [
+    { cost: { tap: true }, manaAbility: true, label: "Yavimaya Coast — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Yavimaya Coast — Add {G} or {U}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["G", "U"], painDamage: 1 }] }
+  ],
+  "shivan reef": [
+    { cost: { tap: true }, manaAbility: true, label: "Shivan Reef — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Shivan Reef — Add {U} or {R}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["U", "R"], painDamage: 1 }] }
+  ],
+  "caves of koilos": [
+    { cost: { tap: true }, manaAbility: true, label: "Caves of Koilos — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Caves of Koilos — Add {W} or {B}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["W", "B"], painDamage: 1 }] }
+  ],
+  "llanowar wastes": [
+    { cost: { tap: true }, manaAbility: true, label: "Llanowar Wastes — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Llanowar Wastes — Add {B} or {G}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["B", "G"], painDamage: 1 }] }
+  ],
   "grim monolith": [
     { cost: { tap: true }, manaAbility: true, label: "Grim Monolith — Add {C}{C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C", "C"] }] },
     { cost: { mana: "{4}" }, label: "Grim Monolith — untap this artifact", requiresTarget: false, effects: [{ type: "untapSelf" }] }
