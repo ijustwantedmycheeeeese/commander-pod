@@ -427,6 +427,17 @@ const CARD_ABILITIES = {
   // (not just flavor) -- without it, a token Dragon this ability itself just created would keep
   // re-triggering it forever. See createTokenCopyOfEnteringCreature's own comment.
   "miirym, sentinel wyrm": [{ trigger: "otherCreatureEtb", typeFilter: ["Dragon"], excludeTokenSources: true, requiresTarget: false, label: "Miirym, Sentinel Wyrm — create a nonlegendary token copy of that Dragon", effects: [{ type: "createTokenCopyOfEnteringCreature" }] }],
+  // Auton Soldier -- "You may have this creature enter as a copy of any creature on the
+  // battlefield, except it isn't legendary, is an artifact in addition to its other types, and
+  // has myriad." Unlike Miirym's createTokenCopyOfEnteringCreature (which spawns a brand-new
+  // token), this permanent's OWN identity changes in place -- reuses becomeCopyPermanent (built
+  // for the CR 707 "becomes a copy" batch), just generalized with the stripLegendary/addType/
+  // addKeywords overrides above. "Any creature on the battlefield" (not "target") plus "may" is
+  // modeled the same way every other optional targeted ETB choice already is in this file --
+  // requiresTarget queues a real target choice, and the pre-existing cancelTargetChoice escape
+  // hatch is the "you may decline" half.
+  "auton soldier": [{ trigger: "etb", requiresTarget: true, targetKind: "creature", label: "Auton Soldier — you may have this creature enter as a copy of any creature on the battlefield",
+    effects: [{ type: "becomeCopyPermanent", stripLegendary: true, addType: "Artifact", addKeywords: ["Myriad"] }] }],
   "lathliss, dragon queen": [{ trigger: "otherCreatureEtb", label: "Lathliss, Dragon Queen — create a 5/5 red Dragon creature token with flying", requiresTarget: false, typeFilter: ["dragon"], excludeTokenSources: true, effects: [{ type: "createToken", amount: 1, name: "Dragon", tokenType: "Token Creature — Dragon", power: "5", toughness: "5", colors: ["R"], keywords: ["Flying"] }] }],
   // "opponentDraws"/"opponentFirstNoncreatureSpell" are handled by fireGlobalOpponentDrawTriggers/
   // fireGlobalOpponentFirstNoncreatureSpellTriggers (drawN/pushToStack hooks) rather than
@@ -768,6 +779,21 @@ const CARD_ABILITIES = {
   // without it the shared amount-merge in fireGlobalOtherCreatureEtbTriggers would silently scale
   // this to the entering creature's power instead of always drawing exactly 1 (the Wave 52 bug).
   "welcoming vampire": [{ trigger: "otherCreatureEtb", maxPower: 2, oncePerTurn: true, label: "Welcoming Vampire — draw a card", requiresTarget: false, effects: [{ type: "drawCards", amount: 1 }] }],
+  // Guardian Project -- "Whenever a nontoken creature you control enters, if it doesn't have the
+  // same name as another creature you control or a creature card in your graveyard, draw a
+  // card." excludeTokenSources covers "nontoken"; the name-uniqueness half needs the ENTERING
+  // creature itself, which is why otherCreatureEtb's condition call was just widened to pass it
+  // as a third arg (every other card's condition already ignores extra args, so this is safe).
+  "guardian project": [{ trigger: "otherCreatureEtb", excludeTokenSources: true, requiresTarget: false, label: "Guardian Project — draw a card",
+    condition: (c, lobby, enteringCard) => {
+      const name = archiveKey(enteringCard.name);
+      const dupOnBattlefield = Object.values(lobby.cards).some((x) => x.id !== enteringCard.id && x.owner === enteringCard.owner && x.zoneType === "creature" && archiveKey(x.name) === name);
+      if (dupOnBattlefield) return false;
+      const p = lobby.players[enteringCard.owner];
+      const dupInGraveyard = ((p && p.graveyard) || []).some((x) => archiveKey(x.name) === name && (x.type || "").toLowerCase().includes("creature"));
+      return !dupInGraveyard;
+    },
+    effects: [{ type: "drawCards", amount: 1 }] }],
   // New global "youDiscard" event type -- wired into every real discard choke point (resolveDiscard,
   // the autoDiscardFilter activation cost, and cycleCard -- cycling IS discarding, CR 702.28e). "Or
   // discard another card" needs no excludeSelf-style check: by the time this fires, a discarded
@@ -1282,6 +1308,17 @@ const ACTIVATED_ABILITIES = {
   "mercurial chemister": [{ cost: { mana: "{U}", tap: true }, label: "Mercurial Chemister — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
   "marker beetles": [{ cost: { mana: "{2}", sacrifice: true }, label: "Marker Beetles — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "walking ballista": [{ cost: { mana: "{4}" }, label: "Walking Ballista — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  // Idol of Oblivion -- two independent activated abilities. The first's "Activate only if you
+  // created a token this turn" needs a real per-player token-creation tracker (p.createdTokenTurn,
+  // compared against turnNumber same as every other "once per turn" gate in this file) -- stamped
+  // by EFFECTS.createToken/createTokensEqualToTypeCountControlled, the two most common
+  // token-creation effects (a disclosed narrowing: any OTHER token-creating effect not yet routed
+  // through those two won't set the flag, same "cover the common real cases" precedent as this
+  // whole automation drive uses everywhere).
+  "idol of oblivion": [
+    { cost: { tap: true }, condition: (card, lobby) => (lobby.players[card.owner] || {}).createdTokenTurn === lobby.turn.turnNumber, conditionError: "You need to have created a token this turn to activate this.", label: "Idol of Oblivion — draw a card", effects: [{ type: "drawCards", amount: 1 }] },
+    { cost: { mana: "{8}", tap: true, sacrifice: true }, label: "Idol of Oblivion — create a 10/10 Eldrazi token", effects: [{ type: "createToken", name: "Eldrazi", tokenType: "Token Creature — Eldrazi", power: "10", toughness: "10", colors: [] }] }
+  ],
   "starlight invoker": [{ cost: { mana: "{7}{W}" }, label: "Starlight Invoker — gain 5 life", effects: [{ type: "gainLife", target: "controller", amount: 5 }] }],
   "oscorp research team": [{ cost: { mana: "{6}{U}" }, label: "Oscorp Research Team — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
   "silent attendant": [{ cost: { tap: true }, label: "Silent Attendant — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
@@ -1871,6 +1908,10 @@ const SPELL_ABILITIES = {
   "rapid hybridization": { label: "Rapid Hybridization — destroy target creature, its controller creates a 3/3 Frog Lizard token", effects: [{ type: "destroyTargetCreateTokenForOwner", name: "Frog Lizard", tokenType: "Token Creature — Frog Lizard", power: "3", toughness: "3", colors: ["G"] }], requiresTarget: true, targetKind: "creature" },
   "explore": { label: "Explore — you may play an additional land this turn, draw a card", effects: [{ type: "grantExtraLandDrop" }, { type: "drawCards", amount: 1 }] },
   "urban evolution": { label: "Urban Evolution — draw three cards, you may play an additional land this turn", effects: [{ type: "drawCards", amount: 3 }, { type: "grantExtraLandDrop" }] },
+  // Growth Spiral -- "Draw a card. You may put a land card from your hand onto the battlefield."
+  // NOT an extra land drop (grantExtraLandDrop, wave 1) -- this puts a specific land straight onto
+  // the battlefield as an immediate optional action, needing a real "pick a land from hand" choice.
+  "growth spiral": { label: "Growth Spiral — draw a card, you may put a land from hand onto the battlefield", effects: [{ type: "drawCards", amount: 1 }, { type: "putLandFromHandOntoBattlefieldOptional" }] },
   // Real text: "Exile target creature. Its controller may search their library for a basic land
   // card, put that card onto the battlefield tapped, then shuffle." The optional land-search isn't
   // modeled -- same "may" abilities aren't automated precedent used everywhere else in this app.
@@ -2267,6 +2308,19 @@ const EFFECTS = {
     p.landDropBonus = (p.landDropBonus || 0) + (params.amount || 1);
     broadcastPlayers(lobby);
   },
+  // Growth Spiral -- "You may put a land card from your hand onto the battlefield." A real
+  // optional pick-from-hand, not a search or a drop-limit increase. Reuses the pendingDiscard/
+  // resolveDiscard picker pipeline a THIRD time (destination: "battlefieldLand", see wave 3's
+  // libraryTop and wave 4's altCostExile) -- needed a new `optional` flag on pendingDiscard since
+  // this is the first use where declining outright (selecting zero) is itself a legal choice, not
+  // just picking among mandatory options. No-ops with zero queued if the player has no land in
+  // hand at all, matching real Magic's own "no legal way to do it" auto-skip.
+  putLandFromHandOntoBattlefieldOptional(lobby, ctx, params) {
+    const hasLand = Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType === "hand" && (c.type || "").toLowerCase().includes("land"));
+    if (!hasLand) return;
+    lobby.turn.pendingDiscard = { playerId: ctx.controllerId, count: 1, optional: true, destination: "battlefieldLand" };
+    broadcastTurn(lobby);
+  },
   // Body of Knowledge -- "draw that many cards," the dynamic-amount sibling of drawCards just
   // above. damageDealtAmount is baked in by fireCreatureDamagedTrigger at fire time.
   drawCardsEqualToDamageDealt(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.damageDealtAmount || 0); },
@@ -2481,6 +2535,9 @@ const EFFECTS = {
         tapped: !!params.tapped
       });
     }
+    // Idol of Oblivion's "activate only if you created a token this turn" -- stamped here since
+    // this is the overwhelmingly common token-creation path (see idol of oblivion's own comment).
+    if (n > 0 && lobby.players[ctx.controllerId]) lobby.players[ctx.controllerId].createdTokenTurn = lobby.turn.turnNumber;
   },
   // Forbidden Orchard -- "target opponent creates a 1/1 colorless Spirit creature token." The
   // chosen-target counterpart to createToken (which always makes tokens for the controller) --
@@ -2516,6 +2573,7 @@ const EFFECTS = {
         keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature")
       });
     }
+    if (n > 0 && lobby.players[ctx.controllerId]) lobby.players[ctx.controllerId].createdTokenTurn = lobby.turn.turnNumber;
   },
   // Old Gnawbone -- "create that many Treasure tokens" (that many = the just-dealt combat damage
   // amount, baked in as params.dealtToPlayerAmount by fireGlobalCombatDamageToPlayerTrigger/
@@ -3177,6 +3235,12 @@ const EFFECTS = {
     const originalName = mirror.name;
     COPY_FIELDS.forEach((f) => { mirror[f] = source[f]; });
     if (params.retainAbilityName) mirror._retainedAbilityName = params.retainAbilityName;
+    // Auton Soldier -- "...except it isn't legendary, is an artifact in addition to its other
+    // types, and has myriad." Same optional-override shape becomeCopyUntilEOT's own
+    // grantHaste/forceName already established, just three more knobs on the PERMANENT sibling.
+    if (params.stripLegendary) mirror.type = (mirror.type || "").replace(/\blegendary\s+/i, "");
+    if (params.addType) mirror.type = `${mirror.type || ""} ${params.addType}`.trim();
+    if (params.addKeywords) mirror.keywords = [...new Set([...(mirror.keywords || []), ...params.addKeywords])];
     mirror.zoneType = classifyType(mirror.type);
     broadcastCard(lobby, mirror);
     const p = lobby.players[ctx.controllerId];
@@ -7694,7 +7758,10 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
       if (ability.keywordFilter && !ability.keywordFilter.some((k) => enteringKeywords.includes(k.toLowerCase()))) return;
       // Welcoming Vampire -- "with power 2 or less."
       if (ability.maxPower != null && power > ability.maxPower) return;
-      if (ability.condition && !ability.condition(c, lobby)) return;
+      // Guardian Project needs the ENTERING creature itself (its name), not just the ability
+      // holder -- every existing otherCreatureEtb condition ignores extra args, so this is
+      // backward compatible.
+      if (ability.condition && !ability.condition(c, lobby, enteringCard)) return;
       // Welcoming Vampire -- "This ability triggers only once each turn." A single per-card slot
       // (not a whole map) is enough for now, same narrow-to-what's-needed precedent as everywhere
       // else in this file -- no card yet has TWO different once-per-turn otherCreatureEtb abilities
@@ -11386,7 +11453,10 @@ io.on("connection", (socket) => {
     const pd = lobby.turn.pendingDiscard;
     if (!pd || pd.playerId !== socket.id) return;
     const ids = Array.isArray(cardIds) ? [...new Set(cardIds)] : [];
-    if (ids.length !== pd.count) { socket.emit("actionError", `You must discard exactly ${pd.count} card(s).`); return; }
+    // Growth Spiral's "you may put a land onto the battlefield" is the first pendingDiscard use
+    // where declining outright (selecting zero) is itself a legal choice -- pd.optional lets that
+    // through, every other destination keeps the old "exactly count" requirement.
+    if (ids.length !== pd.count && !(pd.optional && ids.length === 0)) { socket.emit("actionError", `You must discard exactly ${pd.count} card(s).`); return; }
     for (const id of ids) {
       const card = lobby.cards[id];
       if (!card || card.owner !== socket.id || card.zoneType !== "hand") { socket.emit("actionError", "Invalid discard selection."); return; }
@@ -11394,6 +11464,27 @@ io.on("connection", (socket) => {
     const p = lobby.players[socket.id];
     const advanceAfter = pd.advanceAfter;
     const discardedCards = ids.map((id) => lobby.cards[id]);
+    // Growth Spiral -- puts the chosen land straight onto the battlefield (not a discard, not an
+    // exile) -- entersTapped(data, lobby) inside spawnBattlefieldCard still applies normally, same
+    // as every other "put a land onto the battlefield" effect in this file.
+    if (pd.destination === "battlefieldLand") {
+      if (ids.length === 0) {
+        lobby.turn.pendingDiscard = null;
+        broadcastTurn(lobby);
+        pushLog(lobby, `${p.name} declines to put a land onto the battlefield`);
+        return;
+      }
+      const chosen = discardedCards[0];
+      if (!(chosen.type || "").toLowerCase().includes("land")) { socket.emit("actionError", "Choose a land card."); return; }
+      delete lobby.cards[chosen.id];
+      if (lobby.targets[chosen.id]) delete lobby.targets[chosen.id];
+      io.to(lobby.id).emit("cardRemove", chosen.id);
+      spawnBattlefieldCard(lobby, { ...chosen, owner: socket.id, zoneType: "mana" });
+      lobby.turn.pendingDiscard = null;
+      broadcastTurn(lobby);
+      pushLog(lobby, `${p.name} put ${chosen.name || "a land"} onto the battlefield (Growth Spiral)`);
+      return;
+    }
     // Force of Will / Force of Negation -- "exile a [color] card from your hand rather than pay
     // this spell's mana cost." Reuses this exact same "select N (here, 1) cards from hand" picker
     // as every other pendingDiscard flow, but this ISN'T a discard at all -- the chosen card is
