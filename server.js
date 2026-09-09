@@ -412,6 +412,11 @@ const CARD_ABILITIES = {
   // simplification for the conditional-tapped clause just above this in Idyllic Grange's real
   // text), rather than re-deriving the Plains count separately.
   "idyllic grange": [{ trigger: "etb", label: "Idyllic Grange — put a +1/+1 counter on target creature you control", requiresTarget: true, targetKind: "ownCreature", condition: (card) => !card.tapped, effects: [{ type: "addCountersToTarget" }] }],
+  // Mystic Sanctuary -- same "enters UNTAPPED" condition shape as Idyllic Grange just above, plus
+  // the established ownGraveyardTypeList + putOwnGraveyardEntryOnTopOfLibrary reuse (Academy Ruins/
+  // Hall of Heliod's Generosity), instant/sorcery-filtered. Its own "enters tapped unless you
+  // control three or more other Islands" needs no table entry (already generic).
+  "mystic sanctuary": [{ trigger: "etb", label: "Mystic Sanctuary — put target instant or sorcery card from your graveyard on top of your library", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["instant", "sorcery"], condition: (card) => !card.tapped, effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
   // A "death" trigger works on a LAND exactly like any other permanent -- fireDeathTriggers is
   // called unconditionally at every real sacrifice/destroy site regardless of card type (confirmed
   // via activateAbility's own cost.sacrifice handling), so this needs no new plumbing, just the
@@ -673,6 +678,10 @@ const CARD_ABILITIES = {
   // Wave 22 -- reuses the pre-existing ownGraveyardTypeList targetKind (built for Argivian Find)
   // plus returnOwnGraveyardEntryToHand (also pre-existing) -- a straight composition, no new code.
   "griffin dreamfinder": [{ trigger: "etb", label: "Griffin Dreamfinder — return target enchantment card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] }],
+  // Red XIII, Proud Warrior -- "Cosmo Memory" ETB clause, same shape as Griffin Dreamfinder just
+  // above, Aura/Equipment-filtered. The static "other modified creatures have vigilance and
+  // trample" half is a separate, out-of-scope mechanism (not attempted here).
+  "red xiii, proud warrior": [{ trigger: "etb", label: "Red XIII, Proud Warrior — return target Aura or Equipment card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["aura", "equipment"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] }],
   "mortuary mire": [{ trigger: "etb", label: "Mortuary Mire — put target creature card from your graveyard on top of your library", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["creature"], effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
   "archivist of oghma": [{ trigger: "opponentSearchesLibrary", label: "Archivist of Oghma — gain 1 life and draw a card", requiresTarget: false, effects: [{ type: "gainLife", target: "controller", amount: 1 }, { type: "drawCards", amount: 1 }] }],
   "sun titan": [
@@ -1099,6 +1108,9 @@ const ACTIVATED_ABILITIES = {
   // canActivateAbilitiesAsThoughHaste, checked directly in the activateAbility handler's own
   // summoning-sickness gate.
   "thousand-year elixir": [{ cost: { mana: "{1}", tap: true }, label: "Thousand-Year Elixir — untap target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "untapTarget" }] }],
+  // Minamo, School at Water's Edge -- same untapTarget reuse as Thousand-Year Elixir just above,
+  // new legendaryPermanent targetKind (any permanent type, not creature-only).
+  "minamo, school at water's edge": [{ cost: { mana: "{U}", tap: true }, label: "Minamo, School at Water's Edge — untap target legendary permanent", requiresTarget: true, targetKind: "legendaryPermanent", effects: [{ type: "untapTarget" }] }],
   // Wave 14 gap-analysis batch.
   // "{T}: Add {C}." needs no table entry (free single-color tap shortcut).
   "bloom tender": [{ cost: { tap: true }, manaAbility: true, label: "Bloom Tender — Add one mana of each color among permanents you control", effects: [{ type: "addManaForEachColorControlled" }] }],
@@ -5908,6 +5920,15 @@ function resolveChosenTarget(lobby, entry, targetId) {
     const c = lobby.cards[targetId];
     if (!c || c.zoneType !== "creature" || !c.tapped) return { ok: false, error: "Choose a tapped creature." };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Minamo, School at Water's Edge -- "target legendary permanent" (any permanent type, not
+  // restricted to creatures). Checked via the target's own printed type line, same way
+  // isCommander/every other "legendary" check in this app already works -- no separate flag needed.
+  if (targetKind === "legendaryPermanent") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType === "hand" || c.zoneType === "stack" || !(c.type || "").toLowerCase().includes("legendary")) return { ok: false, error: "Choose a legendary permanent." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
   // Stingerfling Spider -- "target creature with flying." Same shape as tappedCreature above, just
