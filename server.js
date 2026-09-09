@@ -2184,7 +2184,10 @@ const SPELL_ABILITIES = {
   // alternative-cost half; these SPELL_ABILITIES entries are what the spell actually DOES once
   // cast (through either the normal mana-cost path or the free alt-cost path, same as any spell).
   "fierce guardianship": { label: "Fierce Guardianship — counter target noncreature spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "nonCreatureSpell" },
-  "flawless maneuver": { label: "Flawless Maneuver — creatures you control gain indestructible until end of turn", effects: [{ type: "grantIndestructibleToAllYours", keywords: ["Indestructible"], creaturesOnly: true }] }
+  "flawless maneuver": { label: "Flawless Maneuver — creatures you control gain indestructible until end of turn", effects: [{ type: "grantIndestructibleToAllYours", keywords: ["Indestructible"], creaturesOnly: true }] },
+  // "Force" cycle -- see ALT_COSTS' own comment for the alternative-cost half.
+  "force of will": { label: "Force of Will — counter target spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spell" },
+  "force of negation": { label: "Force of Negation — counter target noncreature spell, exile it", effects: [{ type: "counterTargetSpellExile" }], requiresTarget: true, targetKind: "nonCreatureSpell" }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -2206,7 +2209,12 @@ function getSpellAbility(cardName) {
 const ALT_COSTS = {
   "sephara, sky's blade": { label: "Sephara, Sky's Blade — pay {W} and tap four untapped creatures you control with flying, rather than pay its mana cost", mana: "{W}", tapCount: 4, tapKeyword: "flying" },
   "fierce guardianship": { kind: "commanderFree", label: "Fierce Guardianship — cast for free if you control a commander" },
-  "flawless maneuver": { kind: "commanderFree", label: "Flawless Maneuver — cast for free if you control a commander" }
+  "flawless maneuver": { kind: "commanderFree", label: "Flawless Maneuver — cast for free if you control a commander" },
+  // "exileColoredCardFromHand" -- see castWithAltCost's own comment for the full interactive flow
+  // (queues a real "pick a card to exile" choice, doesn't cast immediately). onlyOffTurn is Force
+  // of Negation's own "if it's not your turn" restriction; Force of Will has no such restriction.
+  "force of will": { kind: "exileColoredCardFromHand", colorFilter: "U", lifeCost: 1, label: "Force of Will — pay 1 life, exile a blue card from your hand, rather than pay its mana cost" },
+  "force of negation": { kind: "exileColoredCardFromHand", colorFilter: "U", lifeCost: 0, onlyOffTurn: true, label: "Force of Negation — exile a blue card from your hand, rather than pay its mana cost (opponent's turn only)" }
 };
 function getAltCost(cardName) {
   return ALT_COSTS[archiveKey(cardName)] || null;
@@ -3825,6 +3833,21 @@ const EFFECTS = {
     const owner = lobby.players[item.owner];
     const caster = lobby.players[ctx.controllerId];
     if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"}`);
+  },
+  // Force of Negation -- "if that spell is countered this way, exile it instead of putting it into
+  // its owner's graveyard." Same shape as counterTargetSpell above, but removeStackItem always
+  // routes a real spell to the graveyard -- this splices the stack directly instead so it can call
+  // exileCardInternal in its place.
+  counterTargetSpellExile(lobby, ctx, params) {
+    const pending = lobby.stack.find((s) => s.id === params.chosenTargetId);
+    if (isProtectedFromCountering(lobby, pending)) { pushLog(lobby, `${pending.name || "That spell"} can't be countered.`); return; }
+    const idx = lobby.stack.findIndex((s) => s.id === params.chosenTargetId);
+    if (idx === -1) return;
+    const item = lobby.stack.splice(idx, 1)[0];
+    const owner = lobby.players[item.owner];
+    const caster = lobby.players[ctx.controllerId];
+    if (item.kind !== "ability") exileCardInternal(lobby, item);
+    if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"} and exiled it`);
   },
   // Arcane Denial -- "Counter target spell. Its controller may draw up to two cards at the beginning
   // of the next turn's upkeep. You draw a card at the beginning of the next turn's upkeep." Both
@@ -5991,6 +6014,10 @@ function staticBonusFor(lobby, card) {
   return { powerBonus, toughnessBonus };
 }
 
+// Force of Will/Force of Negation's own error text -- "Choose a blue card," not "Choose a U card."
+function colorNameFor(code) {
+  return { W: "white", U: "blue", B: "black", R: "red", G: "green" }[code] || code;
+}
 function parseManaCost(costStr) {
   const cost = { generic: 0, W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, hybrid: [], x: false };
   if (!costStr) return cost;
@@ -9796,6 +9823,27 @@ io.on("connection", (socket) => {
       castSpell(lobby, card, socket.id, " for free (commander in play)");
       return;
     }
+    // Force of Will / Force of Negation -- "pay N life and exile a [color] card from your hand
+    // rather than pay this spell's mana cost." A real interactive choice (WHICH card to exile), so
+    // this doesn't cast the spell yet -- it queues the exact same "select N cards from hand" picker
+    // Brainstorm's own libraryTop destination reuses, with a new "altCostExile" destination that
+    // resolveDiscard finishes by exiling the pick, paying any life cost, THEN casting this spell
+    // (see resolveDiscard's own comment). Force of Negation's "if it's not your turn" restriction
+    // is this card's own condition, not a general timing rule -- checked here, not in checkTiming.
+    if (alt.kind === "exileColoredCardFromHand") {
+      if (alt.onlyOffTurn && lobby.turn.order[lobby.turn.activeIndex] === socket.id) {
+        socket.emit("actionError", `You can only cast ${card.name} this way on an opponent's turn.`);
+        return;
+      }
+      const qualifying = Object.values(lobby.cards).some((c) => c.owner === socket.id && c.zoneType === "hand" && c.id !== card.id && (c.colors || []).includes(alt.colorFilter));
+      if (!qualifying) {
+        socket.emit("actionError", `You have no other ${colorNameFor(alt.colorFilter)} card to exile for ${card.name}'s alternative cost.`);
+        return;
+      }
+      lobby.turn.pendingDiscard = { playerId: socket.id, count: 1, destination: "altCostExile", altCostCardId: card.id, colorFilter: alt.colorFilter, lifeCost: alt.lifeCost || 0 };
+      broadcastTurn(lobby);
+      return;
+    }
     const qualifying = Object.values(lobby.cards).filter((c) =>
       c.owner === socket.id && c.zoneType === "creature" && !c.tapped &&
       effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === alt.tapKeyword)
@@ -11346,6 +11394,27 @@ io.on("connection", (socket) => {
     const p = lobby.players[socket.id];
     const advanceAfter = pd.advanceAfter;
     const discardedCards = ids.map((id) => lobby.cards[id]);
+    // Force of Will / Force of Negation -- "exile a [color] card from your hand rather than pay
+    // this spell's mana cost." Reuses this exact same "select N (here, 1) cards from hand" picker
+    // as every other pendingDiscard flow, but this ISN'T a discard at all -- the chosen card is
+    // exiled (not graveyarded), no "youDiscard"/connive triggers fire, and the whole point is to
+    // finish casting the ORIGINAL alt-cost spell (castAltCostCardId) once the exile is paid, so this
+    // branches out and returns early rather than falling into the generic discard bookkeeping below.
+    if (pd.destination === "altCostExile") {
+      const chosen = discardedCards[0];
+      if (!(chosen.colors || []).includes(pd.colorFilter)) {
+        socket.emit("actionError", `Choose a ${colorNameFor(pd.colorFilter)} card.`);
+        return;
+      }
+      exileCardInternal(lobby, chosen);
+      if (pd.lifeCost) { applyLifeLoss(lobby, socket.id, pd.lifeCost); checkEliminations(lobby); }
+      lobby.turn.pendingDiscard = null;
+      broadcastPlayers(lobby);
+      broadcastTurn(lobby);
+      const spellCard = lobby.cards[pd.altCostCardId];
+      if (spellCard) castSpell(lobby, spellCard, socket.id, " using its alternative cost");
+      return;
+    }
     // Brainstorm -- "put two cards from your hand on top of your library IN ANY ORDER." Reuses this
     // exact same "select N cards from hand" picker (same UI, same resolveDiscard message) rather
     // than building a parallel mechanism, just routed to a different destination -- the chosen

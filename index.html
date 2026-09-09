@@ -3472,15 +3472,23 @@
         selectedDiscardIds = new Set();
       }
     }
+    const COLOR_NAMES_BY_CODE = { W: "white", U: "blue", B: "black", R: "red", G: "green" };
     function renderDiscardModal() {
       const pd = currentTurn.pendingDiscard;
       if (!pd) return;
-      // Brainstorm-style "put N cards on top of your library" reuses this exact picker with a
-      // different destination -- swap the title only, the pick/confirm flow is identical.
+      // Brainstorm-style "put N cards on top of your library" and Force of Will-style "exile a
+      // [color] card as an alternative cost" both reuse this exact picker with a different
+      // destination -- swap the title/filter/button only, the pick/confirm flow is identical.
+      const colorLabel = pd.colorFilter ? (COLOR_NAMES_BY_CODE[pd.colorFilter] || pd.colorFilter) : null;
       document.getElementById("discard-modal-title").innerText = pd.destination === "libraryTop"
         ? `Put ${pd.count} card(s) on top of your library`
+        : pd.destination === "altCostExile"
+        ? `Exile a ${colorLabel} card from your hand`
         : `Hand size limit — discard ${pd.count} card(s)`;
-      const hand = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "hand");
+      let hand = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "hand");
+      if (pd.destination === "altCostExile") {
+        hand = hand.filter((c) => c.id !== pd.altCostCardId && (c.colors || []).includes(pd.colorFilter));
+      }
       document.getElementById("discard-modal-grid").innerHTML = hand.map((c) => `
         <div class="discard-card-pick ${selectedDiscardIds.has(c.id) ? "picked" : ""}" onclick="toggleDiscardPick('${c.id}')">
           <img src="${escapeHtml(cardArtSrc(c))}" alt="${escapeHtml(c.name || "")}">
@@ -3489,7 +3497,7 @@
       `).join("");
       document.getElementById("discard-modal-status").innerText = `${selectedDiscardIds.size} / ${pd.count} selected`;
       document.getElementById("discard-modal-confirm").disabled = selectedDiscardIds.size !== pd.count;
-      document.getElementById("discard-modal-confirm").innerText = pd.destination === "libraryTop" ? "Put on Top" : "Discard Selected";
+      document.getElementById("discard-modal-confirm").innerText = pd.destination === "libraryTop" ? "Put on Top" : pd.destination === "altCostExile" ? "Exile Selected" : "Discard Selected";
     }
     function toggleDiscardPick(id) {
       if (selectedDiscardIds.has(id)) selectedDiscardIds.delete(id);
