@@ -3813,7 +3813,7 @@ const EFFECTS = {
   // prompted -- a real, disclosed simplification, same "auto-pick, don't build a whole multi-player
   // choice UI for one clause" precedent as Demon of Loathing's sacrifice trigger.
   eachOpponentSacrifices(lobby, ctx, params) {
-    Object.keys(lobby.players).filter((id) => id !== ctx.controllerId).forEach((oppId) => {
+    Object.keys(lobby.players).filter((id) => id !== ctx.controllerId && !isProtectedFromForcedSacrifice(lobby, id, ctx.controllerId)).forEach((oppId) => {
       const match = Object.values(lobby.cards).find((c) => {
         if (c.owner !== oppId) return false;
         if (params.zoneTypeFilter && c.zoneType !== params.zoneTypeFilter) return false;
@@ -3833,7 +3833,7 @@ const EFFECTS = {
   // narrowing (the far more common half of "creature or planeswalker" in practice).
   targetPlayerSacrifices(lobby, ctx, params) {
     const targetId = params.chosenTargetId;
-    if (!targetId) return;
+    if (!targetId || isProtectedFromForcedSacrifice(lobby, targetId, ctx.controllerId)) return;
     const match = Object.values(lobby.cards).find((c) => c.owner === targetId && c.zoneType === "creature");
     if (match) { fireDeathTriggers(lobby, match); sendToGraveyardInternal(lobby, match); }
   },
@@ -3844,7 +3844,7 @@ const EFFECTS = {
   // just keeping the BEST N instead of losing one single match.
   targetPlayerSacrificesAllCreaturesExceptChosen(lobby, ctx, params) {
     const targetId = params.chosenTargetId;
-    if (!targetId) return;
+    if (!targetId || isProtectedFromForcedSacrifice(lobby, targetId, ctx.controllerId)) return;
     const keepCount = params.keepCount || 0;
     const creatures = Object.values(lobby.cards).filter((c) => c.owner === targetId && c.zoneType === "creature");
     if (creatures.length <= keepCount) return;
@@ -3879,7 +3879,7 @@ const EFFECTS = {
   // of the Void's reanimation target above, not worth a whole new choice-UI for one clause.
   sacrificeACreatureOfPlayer(lobby, ctx, params) {
     const defenderId = params.dealtToPlayerId;
-    if (!defenderId) return;
+    if (!defenderId || isProtectedFromForcedSacrifice(lobby, defenderId, ctx.controllerId)) return;
     const victim = Object.values(lobby.cards).find((c) => c.owner === defenderId && c.zoneType === "creature");
     if (!victim) return;
     fireDeathTriggers(lobby, victim);
@@ -5205,6 +5205,18 @@ function isProtectedFromCountering(lobby, stackItem) {
   if (stackItem.castWithUncounterableMana) return true;
   if (!(stackItem.type || "").toLowerCase().includes("creature")) return false;
   return Object.values(lobby.cards).some((c) => c.owner === stackItem.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /creature spells you control can'?t be countered/i.test(c.text || ""));
+}
+// Sigarda, Host of Herons -- "Spells and abilities your opponents control can't cause you to
+// sacrifice permanents." A real prevention effect, checked at every forced-sacrifice site below
+// where the AFFECTED player didn't choose this themselves. An OPTIONAL "you may sacrifice to pay a
+// cost" choice (Rakdos, Patron of Chaos's own offerSacrificeOrDraw) isn't "caused" the same way --
+// the player retains full agency to decline, so that's deliberately out of scope; this only covers
+// genuinely forced sacrifices. sourceControllerId is whoever controls the effect trying to force
+// it -- Sigarda only blocks an OPPONENT's spell/ability, never the affected player's own.
+function isProtectedFromForcedSacrifice(lobby, victimId, sourceControllerId) {
+  if (!victimId || victimId === sourceControllerId) return false;
+  return Object.values(lobby.cards).some((c) => c.owner === victimId && c.zoneType !== "hand" && c.zoneType !== "stack" &&
+    /spells and abilities your opponents control can'?t cause you to sacrifice permanents/i.test(c.text || ""));
 }
 // Riot (Rhythm of the Wild grants it to all your nontoken creatures; some cards also print it as
 // their own native keyword) -- real Magic lets the controller choose a +1/+1 counter or haste as it
