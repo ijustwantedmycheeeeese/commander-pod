@@ -4274,7 +4274,12 @@ function equipEffectsFromText(text) {
   const ptMatch = t.match(/(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+)/i);
   if (ptMatch) { powerBonus = parseInt(ptMatch[1], 10) || 0; toughnessBonus = parseInt(ptMatch[2], 10) || 0; }
   const keywords = [];
-  const hasMatch = t.match(/(?:equipped|enchanted) creature (?:gets [+-]\d+\/[+-]\d+ and )?has ([^.]+)\./i);
+  // Whispersilk Cloak-style "can't be blocked" clause -- spelled out longhand in the oracle text
+  // rather than a KNOWN_KEYWORDS word, so it needs its own check instead of falling out of the
+  // "has [keyword list]" match below (which it also sits in front of, breaking that match's own
+  // "creature ...has" adjacency unless accounted for there too).
+  if (/(?:equipped|enchanted) creature can'?t be blocked\b/i.test(t)) keywords.push("Unblockable");
+  const hasMatch = t.match(/(?:equipped|enchanted) creature (?:gets [+-]\d+\/[+-]\d+ and )?(?:can'?t be blocked and )?has ([^.]+)\./i);
   if (hasMatch) {
     hasMatch[1].split(/,| and /i).map((s) => s.trim()).forEach((raw) => {
       const found = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === raw.toLowerCase());
