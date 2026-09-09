@@ -1100,6 +1100,48 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Llanowar Wastes — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { tap: true }, manaAbility: true, label: "Llanowar Wastes — Add {B} or {G}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["B", "G"], painDamage: 1 }] }
   ],
+  // "Filter land" cycle -- see chooseManaPairFromOptions's own comment. The {W/U}-style hybrid
+  // symbol in cost.mana is already handled by parseManaCost's existing hybrid support.
+  "mystic gate": [
+    { cost: { tap: true }, manaAbility: true, label: "Mystic Gate — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{W/U}", tap: true }, manaAbility: true, label: "Mystic Gate — Add {W}{W}, {W}{U}, or {U}{U}", effects: [{ type: "chooseManaPairFromOptions", options: ["W", "U"] }] }
+  ],
+  "sunken ruins": [
+    { cost: { tap: true }, manaAbility: true, label: "Sunken Ruins — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{U/B}", tap: true }, manaAbility: true, label: "Sunken Ruins — Add {U}{U}, {U}{B}, or {B}{B}", effects: [{ type: "chooseManaPairFromOptions", options: ["U", "B"] }] }
+  ],
+  "fetid heath": [
+    { cost: { tap: true }, manaAbility: true, label: "Fetid Heath — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{W/B}", tap: true }, manaAbility: true, label: "Fetid Heath — Add {W}{W}, {W}{B}, or {B}{B}", effects: [{ type: "chooseManaPairFromOptions", options: ["W", "B"] }] }
+  ],
+  "cascade bluffs": [
+    { cost: { tap: true }, manaAbility: true, label: "Cascade Bluffs — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{U/R}", tap: true }, manaAbility: true, label: "Cascade Bluffs — Add {U}{U}, {U}{R}, or {R}{R}", effects: [{ type: "chooseManaPairFromOptions", options: ["U", "R"] }] }
+  ],
+  "twilight mire": [
+    { cost: { tap: true }, manaAbility: true, label: "Twilight Mire — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{B/G}", tap: true }, manaAbility: true, label: "Twilight Mire — Add {B}{B}, {B}{G}, or {G}{G}", effects: [{ type: "chooseManaPairFromOptions", options: ["B", "G"] }] }
+  ],
+  "wooded bastion": [
+    { cost: { tap: true }, manaAbility: true, label: "Wooded Bastion — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{G/W}", tap: true }, manaAbility: true, label: "Wooded Bastion — Add {G}{G}, {G}{W}, or {W}{W}", effects: [{ type: "chooseManaPairFromOptions", options: ["G", "W"] }] }
+  ],
+  "flooded grove": [
+    { cost: { tap: true }, manaAbility: true, label: "Flooded Grove — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{G/U}", tap: true }, manaAbility: true, label: "Flooded Grove — Add {G}{G}, {G}{U}, or {U}{U}", effects: [{ type: "chooseManaPairFromOptions", options: ["G", "U"] }] }
+  ],
+  "rugged prairie": [
+    { cost: { tap: true }, manaAbility: true, label: "Rugged Prairie — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{R/W}", tap: true }, manaAbility: true, label: "Rugged Prairie — Add {R}{R}, {R}{W}, or {W}{W}", effects: [{ type: "chooseManaPairFromOptions", options: ["R", "W"] }] }
+  ],
+  "graven cairns": [
+    { cost: { tap: true }, manaAbility: true, label: "Graven Cairns — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{B/R}", tap: true }, manaAbility: true, label: "Graven Cairns — Add {B}{B}, {B}{R}, or {R}{R}", effects: [{ type: "chooseManaPairFromOptions", options: ["B", "R"] }] }
+  ],
+  "fire-lit thicket": [
+    { cost: { tap: true }, manaAbility: true, label: "Fire-Lit Thicket — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{R/G}", tap: true }, manaAbility: true, label: "Fire-Lit Thicket — Add {R}{R}, {R}{G}, or {G}{G}", effects: [{ type: "chooseManaPairFromOptions", options: ["R", "G"] }] }
+  ],
   "grim monolith": [
     { cost: { tap: true }, manaAbility: true, label: "Grim Monolith — Add {C}{C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C", "C"] }] },
     { cost: { mana: "{4}" }, label: "Grim Monolith — untap this artifact", requiresTarget: false, effects: [{ type: "untapSelf" }] }
@@ -3093,6 +3135,24 @@ const EFFECTS = {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
     p.pendingFreeManaChoice = { amount: 1, painDamage: params.painDamage || 0 };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: params.options || [] });
+  },
+  // Filter land cycle (Mystic Gate, Graven Cairns, etc.) -- "{W/U}, {T}: Add {W}{W}, {W}{U}, or
+  // {U}{U}." The {W/U} hybrid cost is already a real cost, paid via the ability's own cost.mana
+  // before this effect ever runs (parseManaCost already supports hybrid symbols) -- this only needs
+  // to model the OUTPUT choice. Choosing one of 3 named pairs from a 2-color set is mathematically
+  // identical to choosing independently from {W,U} TWICE (every unordered pair with repetition from
+  // a 2-element set IS exactly WW/WU/UU), so this reuses chooseManaAnyColorRepeated's own
+  // "__free__"/remainingPicks flow verbatim, just narrowed to the land's own 2 colors via
+  // params.options instead of all 5 -- no new prompt UI needed.
+  chooseManaPairFromOptions(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    // remainingPicks counts the TOTAL picks still owed, including the one about to be answered by
+    // this very prompt (same convention as chooseManaAnyColorRepeated's own params.count) -- 2 here
+    // for "add a pair," not 1.
+    p.pendingFreeManaChoice = { amount: 1, remainingPicks: 2, options: params.options || [] };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: params.options || [] });
   },
@@ -9662,6 +9722,7 @@ io.on("connection", (socket) => {
       const remaining = (p.pendingFreeManaChoice.remainingPicks || 1) - 1;
       const restricted = p.pendingFreeManaChoice.restricted;
       const painDamage = p.pendingFreeManaChoice.painDamage || 0;
+      const repeatOptions = p.pendingFreeManaChoice.options;
       if (restricted) {
         if (!p.restrictedMana) p.restrictedMana = [];
         for (let i = 0; i < amount; i++) p.restrictedMana.push({ color, matches: restricted.matches, label: restricted.label, grantsUncounterable: !!restricted.grantsUncounterable });
@@ -9675,10 +9736,10 @@ io.on("connection", (socket) => {
       // Cascading Cataracts-style "N independent picks" -- re-prompt for the next one instead of
       // clearing pendingFreeManaChoice, see chooseManaAnyColorRepeated's own comment.
       if (remaining > 0) {
-        p.pendingFreeManaChoice = { amount, remainingPicks: remaining };
+        p.pendingFreeManaChoice = { amount, remainingPicks: remaining, options: repeatOptions };
         broadcastPlayers(lobby);
         const sock = io.sockets.sockets.get(socket.id);
-        if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: "Mana source", options: ["W", "U", "B", "R", "G"] });
+        if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: "Mana source", options: repeatOptions || ["W", "U", "B", "R", "G"] });
         return;
       }
       p.pendingFreeManaChoice = false;
