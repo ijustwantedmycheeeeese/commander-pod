@@ -3484,10 +3484,14 @@
         ? `Put ${pd.count} card(s) on top of your library`
         : pd.destination === "altCostExile"
         ? `Exile a ${colorLabel} card from your hand`
+        : pd.destination === "battlefieldLand"
+        ? `You may put a land onto the battlefield (Growth Spiral)`
         : `Hand size limit — discard ${pd.count} card(s)`;
       let hand = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "hand");
       if (pd.destination === "altCostExile") {
         hand = hand.filter((c) => c.id !== pd.altCostCardId && (c.colors || []).includes(pd.colorFilter));
+      } else if (pd.destination === "battlefieldLand") {
+        hand = hand.filter((c) => (c.type || "").toLowerCase().includes("land"));
       }
       document.getElementById("discard-modal-grid").innerHTML = hand.map((c) => `
         <div class="discard-card-pick ${selectedDiscardIds.has(c.id) ? "picked" : ""}" onclick="toggleDiscardPick('${c.id}')">
@@ -3495,9 +3499,14 @@
           <div class="discard-card-name">${escapeHtml(c.name || "Unknown")}</div>
         </div>
       `).join("");
-      document.getElementById("discard-modal-status").innerText = `${selectedDiscardIds.size} / ${pd.count} selected`;
-      document.getElementById("discard-modal-confirm").disabled = selectedDiscardIds.size !== pd.count;
-      document.getElementById("discard-modal-confirm").innerText = pd.destination === "libraryTop" ? "Put on Top" : pd.destination === "altCostExile" ? "Exile Selected" : "Discard Selected";
+      document.getElementById("discard-modal-status").innerText = pd.optional
+        ? `${selectedDiscardIds.size} / ${pd.count} selected (optional)`
+        : `${selectedDiscardIds.size} / ${pd.count} selected`;
+      document.getElementById("discard-modal-confirm").disabled = pd.optional ? selectedDiscardIds.size > pd.count : selectedDiscardIds.size !== pd.count;
+      document.getElementById("discard-modal-confirm").innerText = pd.destination === "libraryTop" ? "Put on Top"
+        : pd.destination === "altCostExile" ? "Exile Selected"
+        : pd.destination === "battlefieldLand" ? (selectedDiscardIds.size === 0 ? "Skip" : "Put onto Battlefield")
+        : "Discard Selected";
     }
     function toggleDiscardPick(id) {
       if (selectedDiscardIds.has(id)) selectedDiscardIds.delete(id);
