@@ -3475,7 +3475,11 @@
     function renderDiscardModal() {
       const pd = currentTurn.pendingDiscard;
       if (!pd) return;
-      document.getElementById("discard-modal-title").innerText = `Hand size limit — discard ${pd.count} card(s)`;
+      // Brainstorm-style "put N cards on top of your library" reuses this exact picker with a
+      // different destination -- swap the title only, the pick/confirm flow is identical.
+      document.getElementById("discard-modal-title").innerText = pd.destination === "libraryTop"
+        ? `Put ${pd.count} card(s) on top of your library`
+        : `Hand size limit — discard ${pd.count} card(s)`;
       const hand = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "hand");
       document.getElementById("discard-modal-grid").innerHTML = hand.map((c) => `
         <div class="discard-card-pick ${selectedDiscardIds.has(c.id) ? "picked" : ""}" onclick="toggleDiscardPick('${c.id}')">
@@ -3485,6 +3489,7 @@
       `).join("");
       document.getElementById("discard-modal-status").innerText = `${selectedDiscardIds.size} / ${pd.count} selected`;
       document.getElementById("discard-modal-confirm").disabled = selectedDiscardIds.size !== pd.count;
+      document.getElementById("discard-modal-confirm").innerText = pd.destination === "libraryTop" ? "Put on Top" : "Discard Selected";
     }
     function toggleDiscardPick(id) {
       if (selectedDiscardIds.has(id)) selectedDiscardIds.delete(id);
@@ -4190,7 +4195,10 @@
         const wantedLabel = `${pendingFetch.basicOnly ? "basic " : ""}${pendingFetch.types.join(" or ")}`;
         document.getElementById("zone-modal-title").innerText = `Search your library for a ${wantedLabel} card`;
       } else if (tutoring) {
-        const wantedLabel = pendingTutor.typeFilter ? `${pendingTutor.typeFilter} card` : "card";
+        // Mystical Tutor-style union filter (server can now send typeFilter as an array) -- same
+        // "or"-joined label shape pendingFetch.types.join(" or ") already uses above.
+        const tutorFilters = pendingTutor.typeFilter ? (Array.isArray(pendingTutor.typeFilter) ? pendingTutor.typeFilter : [pendingTutor.typeFilter]) : null;
+        const wantedLabel = tutorFilters ? `${tutorFilters.join(" or ")} card` : "card";
         document.getElementById("zone-modal-title").innerText = `Search your library for a ${wantedLabel}`;
       } else {
         document.getElementById("zone-modal-title").innerText = `${p.name}'s ${capitalize(zoneName)} (${list.length})`;
@@ -4225,7 +4233,8 @@
             if (matchesType && matchesBasic) actions = `<button class="mini-btn" onclick="fetchLand(${idx})">Fetch This</button>`;
           } else if (tutoring) {
             const typeLower = (entry.type || "").toLowerCase();
-            const matchesFilter = !pendingTutor.typeFilter || typeLower.includes(pendingTutor.typeFilter.toLowerCase());
+            const tutorFilters = pendingTutor.typeFilter ? (Array.isArray(pendingTutor.typeFilter) ? pendingTutor.typeFilter : [pendingTutor.typeFilter]) : null;
+            const matchesFilter = !tutorFilters || tutorFilters.some((f) => typeLower.includes(f.toLowerCase()));
             if (matchesFilter) actions = `<button class="mini-btn" onclick="tutorCard(${idx})">Tutor This</button>`;
           } else if (zoneName === "library" && isMine) {
             actions = `<button class="mini-btn" onclick="drawSpecific(${idx})">Draw This</button>`;

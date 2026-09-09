@@ -2008,6 +2008,9 @@ const SPELL_ABILITIES = {
   "diabolic intent": { label: "Diabolic Intent — sacrifice a creature, search for a card, put it into your hand", additionalCost: { sacrificeType: "creature" }, effects: [{ type: "tutorToHand" }] },
   "fling": { label: "Fling — sacrifice a creature, deal damage equal to its power to any target", additionalCost: { sacrificeType: "creature" }, effects: [{ type: "damageEqualToSacrificedCreaturePower" }], requiresTarget: true, targetKind: "any" },
   "utter end": { label: "Utter End — exile target nonland permanent", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "permanent" },
+  "assassin's trophy": { label: "Assassin's Trophy — destroy target permanent an opponent controls, its controller may search for a basic land", effects: [{ type: "destroyTargetThenOwnerSearchesBasicLand" }], requiresTarget: true, targetKind: "opponentPermanent" },
+  "mystical tutor": { label: "Mystical Tutor — search your library for an instant or sorcery card, put it on top", effects: [{ type: "tutorToHand", typeFilter: ["instant", "sorcery"], toTopOfLibrary: true }] },
+  "brainstorm": { label: "Brainstorm — draw three cards, then put two cards from your hand on top of your library", effects: [{ type: "brainstormDrawThenPutBack" }] },
   "deadly dispute": { label: "Deadly Dispute — sacrifice an artifact or creature, draw two cards and create a Treasure", additionalCost: { sacrificeType: ["artifact", "creature"] }, effects: [{ type: "drawCards", amount: 2 }, { type: "createTreasureToken" }] },
   "brave the elements": { label: "Brave the Elements — choose a color", modes: ["White", "Blue", "Black", "Red", "Green"].map((color) => ({
     label: `Brave the Elements — white creatures you control gain protection from ${color} until end of turn`,
@@ -3883,6 +3886,21 @@ const EFFECTS = {
     lobby.turn.pendingDiscard = { playerId, count };
     broadcastTurn(lobby);
     pushLog(lobby, `${p.name} must discard ${count} card${count === 1 ? "" : "s"}`);
+  },
+  // Brainstorm -- "Draw three cards, then put two cards from your hand on top of your library in
+  // any order." The put-back half reuses the exact same pendingDiscard/resolveDiscard picker as
+  // targetPlayerDiscards just above, routed to the library instead of the graveyard via the new
+  // destination field (see resolveDiscard's own comment).
+  brainstormDrawThenPutBack(lobby, ctx, params) {
+    drawN(lobby, ctx.controllerId, params.drawAmount || 3);
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const handCount = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "hand").length;
+    const count = Math.min(params.putBackAmount || 2, handCount);
+    if (count <= 0) return;
+    lobby.turn.pendingDiscard = { playerId: ctx.controllerId, count, destination: "libraryTop" };
+    broadcastTurn(lobby);
+    pushLog(lobby, `${p.name} must put ${count} card(s) on top of their library`);
   },
   // Connive (Ledger Shredder and any future connive card) -- "Draw a card, then discard a card. If
   // you discarded a nonland card this way, put a +1/+1 counter on this creature." The draw half is
@@ -7196,6 +7214,15 @@ function resolveChosenTarget(lobby, entry, targetId) {
   if (targetKind === "ownPermanent") {
     const c = lobby.cards[targetId];
     if (!c || c.owner !== entry.controllerId || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a permanent you control." };
+    return { ok: true };
+  }
+  // Assassin's Trophy -- "target permanent an OPPONENT controls" -- unlike ownPermanent/"permanent"
+  // above, this includes LANDS too (Assassin's Trophy's real wording has no "nonland" qualifier).
+  if (targetKind === "opponentPermanent") {
+    const c = lobby.cards[targetId];
+    if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana")) return { ok: false, error: "Choose a permanent." };
+    if (c.owner === entry.controllerId) return { ok: false, error: "Choose a permanent an opponent controls." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
   if (targetKind === "cardType") {
@@ -10742,9 +10769,15 @@ io.on("connection", (socket) => {
     if (!p || !p.pendingTutor || !p.library[index]) return;
     const entry = p.library[index];
     const typeLower = (entry.type || "").toLowerCase();
-    if (p.pendingTutor.typeFilter && !typeLower.includes(p.pendingTutor.typeFilter.toLowerCase())) {
-      socket.emit("actionError", `${entry.name || "That card"} doesn't match what you're searching for.`);
-      return;
+    // Mystical Tutor -- "an instant OR sorcery card," a real union. typeFilter can now be an array
+    // (matches if ANY entry is a substring of the type line); a plain string (every existing single-
+    // type caller) still works unchanged via the wrap below.
+    if (p.pendingTutor.typeFilter) {
+      const filters = Array.isArray(p.pendingTutor.typeFilter) ? p.pendingTutor.typeFilter : [p.pendingTutor.typeFilter];
+      if (!filters.some((f) => typeLower.includes(f.toLowerCase()))) {
+        socket.emit("actionError", `${entry.name || "That card"} doesn't match what you're searching for.`);
+        return;
+      }
     }
     p.library.splice(index, 1);
     const { toTopOfLibrary: toTop, toGraveyard, thenEffects, sourceCardId } = p.pendingTutor;
@@ -11313,8 +11346,29 @@ io.on("connection", (socket) => {
     const p = lobby.players[socket.id];
     const advanceAfter = pd.advanceAfter;
     const discardedCards = ids.map((id) => lobby.cards[id]);
-    discardedCards.forEach((card) => sendToGraveyardInternal(lobby, card));
-    pushLog(lobby, `${p.name} discarded ${ids.length} card(s)${advanceAfter ? " to hand size" : ""}`);
+    // Brainstorm -- "put two cards from your hand on top of your library IN ANY ORDER." Reuses this
+    // exact same "select N cards from hand" picker (same UI, same resolveDiscard message) rather
+    // than building a parallel mechanism, just routed to a different destination -- the chosen
+    // order comes from the array order the client already sends (its own selection sequence), same
+    // "the player's own click order IS the order" precedent used nowhere else needing a real
+    // reorder UI. Default (no destination) keeps every existing discard caller unchanged.
+    if (pd.destination === "libraryTop") {
+      discardedCards.forEach((card) => {
+        delete lobby.cards[card.id];
+        if (lobby.targets[card.id]) delete lobby.targets[card.id];
+        io.to(lobby.id).emit("cardRemove", card.id);
+        p.library.unshift(toEntry(card));
+      });
+      // Unlike the graveyard branch (whose length change other UI reads separately/later), a
+      // library-count change has no other broadcast path pointing at it -- without this, the
+      // client's own local player state silently goes stale on library size even though the real
+      // server-side data (confirmed by direct inspection) was already correct all along.
+      broadcastPlayers(lobby);
+      pushLog(lobby, `${p.name} put ${ids.length} card(s) on top of their library`);
+    } else {
+      discardedCards.forEach((card) => sendToGraveyardInternal(lobby, card));
+      pushLog(lobby, `${p.name} discarded ${ids.length} card(s)${advanceAfter ? " to hand size" : ""}`);
+    }
     // Archfiend of Ifnir-style "whenever you discard a card" -- fired once per card (a multi-card
     // discard, e.g. hand-size cleanup or Mind Rot, is really N separate discard events), covers both
     // this hand-size/pendingDiscard path and any spell/ability-driven discard (they all route
