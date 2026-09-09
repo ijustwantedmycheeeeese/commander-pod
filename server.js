@@ -250,6 +250,12 @@ const CARD_ABILITIES = {
   "nekrataal": [{ trigger: "etb", label: "Nekrataal — destroy target creature", requiresTarget: true, effects: [{ type: "destroyTarget" }] }],
   "ravenous chupacabra": [{ trigger: "etb", label: "Ravenous Chupacabra — destroy target creature", requiresTarget: true, effects: [{ type: "destroyTarget" }] }],
   "man-o'-war": [{ trigger: "etb", label: "Man-o'-War — bounce target creature", requiresTarget: true, effects: [{ type: "bounceTargetToHand" }] }],
+  // Marang River Regent -- "return up to two OTHER target nonland permanents," narrowed to one
+  // target, same disclosed "up to two -> one" simplification as Angel of the Ruins above.
+  // targetKind "permanent" is already hardcoded to creature/artifact zoneTypes only (this engine
+  // lumps every non-creature, non-land permanent into "artifact"), so it's already exactly
+  // "nonland permanent" with zero extra filtering needed; excludeSelf covers the real text's "other".
+  "marang river regent": [{ trigger: "etb", label: "Marang River Regent — return target nonland permanent to its owner's hand", requiresTarget: true, targetKind: "permanent", excludeSelf: true, effects: [{ type: "bounceTargetToHand" }] }],
   // First three seeded examples of the non-self-referential trigger types (see fireGlobalTrigger) --
   // "deathYouControl"/"selfGainsLife"/"youCastSpell" fire for a permanent's controller off an event
   // on any of their OTHER permanents/actions, not just this card's own name.
