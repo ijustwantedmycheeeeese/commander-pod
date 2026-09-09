@@ -366,6 +366,11 @@ const CARD_ABILITIES = {
   // fireTrigger, since the choice here belongs to the OPPONENT, not this card's controller -- see
   // queueOptionalPayment.
   "smothering tithe": [{ trigger: "opponentDraws", label: "Smothering Tithe — pay {2} or its controller creates a Treasure", costLabel: "{2}", cost: { mana: "{2}" }, declinedEffects: [{ type: "createTreasureToken" }] }],
+  // Consecrated Sphinx -- a different trigger NAME ("opponentDrawsCard", not "opponentDraws") from
+  // Smothering Tithe just above -- that one is dispatched via queueOptionalPayment (the drawing
+  // opponent's own choice), this one via the normal fireTrigger/stack path (the ability's
+  // controller's own choice) -- see fireGlobalTriggerForOpponentDraw's own comment.
+  "consecrated sphinx": [{ trigger: "opponentDrawsCard", label: "Consecrated Sphinx — you may draw two cards", requiresTarget: false, effects: [{ type: "drawCards", amount: 2 }] }],
   "esper sentinel": [{ trigger: "opponentFirstNoncreatureSpell", label: "Esper Sentinel — pay {X} or its controller draws a card", xFromPower: true, declinedEffects: [{ type: "drawCards", amount: 1 }] }],
   "rhystic study": [{ trigger: "opponentCastsSpell", label: "Rhystic Study — pay {1} or its controller draws a card", cost: { mana: "{1}" }, costLabel: "{1}", declinedEffects: [{ type: "drawCards", amount: 1 }] }],
   // "Other creatures you control have haste" needs no table entry (already generic). The graveyard-
@@ -5492,7 +5497,25 @@ function drawN(lobby, ownerId, n) {
     drawn++;
   }
   fireGlobalOpponentDrawTriggers(lobby, ownerId, drawn);
+  fireGlobalTriggerForOpponentDraw(lobby, ownerId, drawn);
   return drawn;
+}
+// Consecrated Sphinx -- "Whenever an opponent draws a card, you may draw two cards." Same
+// scan shape as fireGlobalOpponentDrawTriggers just below (every OTHER player's permanents), but
+// dispatched through the normal fireTrigger/stack path instead of queueOptionalPayment -- this is
+// the ability's CONTROLLER choosing to draw, not the drawing opponent paying a cost. No real
+// downside to drawing more cards, so (like every other undisclosed "may" in this file) it just
+// always resolves once triggered -- there's no target to decline via cancelTargetChoice here.
+// Fires once per card actually drawn, same as fireGlobalOpponentDrawTriggers.
+function fireGlobalTriggerForOpponentDraw(lobby, drawingPlayerId, count) {
+  if (!lobby.turn.started || count <= 0) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === drawingPlayerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "opponentDrawsCard").forEach((ability) => {
+      for (let i = 0; i < count; i++) fireTrigger(lobby, c, ability);
+    });
+  }
 }
 // Smothering Tithe: "Whenever an OPPONENT draws a card, that player may pay {2}. If they don't,
 // you create a Treasure." Fires once per card actually drawn (a "draw 2" effect offers the payment
