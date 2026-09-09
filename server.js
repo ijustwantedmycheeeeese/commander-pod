@@ -399,6 +399,10 @@ const CARD_ABILITIES = {
   "thriving moor": [{ trigger: "etb", label: "Thriving Moor — choose a color other than black", requiresTarget: false, effects: [{ type: "chooseColorOtherThan", excludeColor: "B" }] }],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "commercial district": [{ trigger: "etb", label: "Commercial District — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
+  // MID/VOW "Surveil land" cycle -- same "enters tapped" + "surveil 1" shape as Commercial
+  // District just above (entersTapped itself needs no table entry, already generic).
+  "hedge maze": [{ trigger: "etb", label: "Hedge Maze — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
+  "thundering falls": [{ trigger: "etb", label: "Thundering Falls — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
   "izzet boilerworks": [{ trigger: "etb", label: "Izzet Boilerworks — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
   // "When this land enters UNTAPPED" -- checked against the card's own real tapped state at ETB
   // time (whatever entersTapped already decided, including its own "unless you control..."
