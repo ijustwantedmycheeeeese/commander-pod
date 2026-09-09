@@ -501,6 +501,19 @@ const CARD_ABILITIES = {
   // same free-tap dual-land shortcut as every other basic-type dual land.
   "undercity sewers": [{ trigger: "etb", label: "Undercity Sewers — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
   "izzet boilerworks": [{ trigger: "etb", label: "Izzet Boilerworks — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  // The rest of the "Karoo"/bounce-land cycle -- identical shape to Izzet Boilerworks (enters
+  // tapped needs no table entry; the ETB bounce is the same targetKind/effect on every one; the
+  // fixed-pair "{T}: Add {X}{Y}" mana ability needs its own ACTIVATED_ABILITIES entry for every card
+  // in the cycle, including Izzet Boilerworks itself -- see the batch just below this table).
+  "dimir aqueduct": [{ trigger: "etb", label: "Dimir Aqueduct — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  "golgari rot farm": [{ trigger: "etb", label: "Golgari Rot Farm — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  "boros garrison": [{ trigger: "etb", label: "Boros Garrison — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  "selesnya sanctuary": [{ trigger: "etb", label: "Selesnya Sanctuary — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  "orzhov basilica": [{ trigger: "etb", label: "Orzhov Basilica — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  "rakdos carnarium": [{ trigger: "etb", label: "Rakdos Carnarium — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  "gruul turf": [{ trigger: "etb", label: "Gruul Turf — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  "azorius chancery": [{ trigger: "etb", label: "Azorius Chancery — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
+  "simic growth chamber": [{ trigger: "etb", label: "Simic Growth Chamber — return a land you control to its owner's hand", requiresTarget: true, targetKind: "ownLand", effects: [{ type: "bounceTargetToHand" }] }],
   // "When this land enters UNTAPPED" -- checked against the card's own real tapped state at ETB
   // time (whatever entersTapped already decided, including its own "unless you control..."
   // simplification for the conditional-tapped clause just above this in Idyllic Grange's real
@@ -978,6 +991,22 @@ const ACTIVATED_ABILITIES = {
   "jungle basin": [{ cost: { tap: true }, manaAbility: true, label: "Jungle Basin — Add {C}{G}", effects: [{ type: "addFixedMana", colors: ["C", "G"] }] }],
   "throne of the high city": [{ cost: { mana: "{4}", tap: true, sacrifice: true }, label: "Throne of the High City — you become the monarch", requiresTarget: false, effects: [{ type: "becomeMonarch" }] }],
   "coral atoll": [{ cost: { tap: true }, manaAbility: true, label: "Coral Atoll — Add {C}{U}", effects: [{ type: "addFixedMana", colors: ["C", "U"] }] }],
+  // The "Karoo"/bounce-land cycle's own fixed-pair mana ability -- same shape as Jungle Basin/Coral
+  // Atoll (both colors from one tap, not a choice), needed for every card in the cycle including
+  // Izzet Boilerworks itself, which had shipped WITHOUT this and so silently fell back to the
+  // free-tap shortcut's "producedMana.length > 1 -> choose one" behavior instead of adding both --
+  // the same bug class just fixed for Escape Tunnel's power cap in the previous PR, caught here by
+  // checking every sibling in a cycle before assuming an already-shipped card's own mana half works.
+  "izzet boilerworks": [{ cost: { tap: true }, manaAbility: true, label: "Izzet Boilerworks — Add {U}{R}", effects: [{ type: "addFixedMana", colors: ["U", "R"] }] }],
+  "dimir aqueduct": [{ cost: { tap: true }, manaAbility: true, label: "Dimir Aqueduct — Add {U}{B}", effects: [{ type: "addFixedMana", colors: ["U", "B"] }] }],
+  "golgari rot farm": [{ cost: { tap: true }, manaAbility: true, label: "Golgari Rot Farm — Add {B}{G}", effects: [{ type: "addFixedMana", colors: ["B", "G"] }] }],
+  "boros garrison": [{ cost: { tap: true }, manaAbility: true, label: "Boros Garrison — Add {R}{W}", effects: [{ type: "addFixedMana", colors: ["R", "W"] }] }],
+  "selesnya sanctuary": [{ cost: { tap: true }, manaAbility: true, label: "Selesnya Sanctuary — Add {G}{W}", effects: [{ type: "addFixedMana", colors: ["G", "W"] }] }],
+  "orzhov basilica": [{ cost: { tap: true }, manaAbility: true, label: "Orzhov Basilica — Add {W}{B}", effects: [{ type: "addFixedMana", colors: ["W", "B"] }] }],
+  "rakdos carnarium": [{ cost: { tap: true }, manaAbility: true, label: "Rakdos Carnarium — Add {B}{R}", effects: [{ type: "addFixedMana", colors: ["B", "R"] }] }],
+  "gruul turf": [{ cost: { tap: true }, manaAbility: true, label: "Gruul Turf — Add {R}{G}", effects: [{ type: "addFixedMana", colors: ["R", "G"] }] }],
+  "azorius chancery": [{ cost: { tap: true }, manaAbility: true, label: "Azorius Chancery — Add {W}{U}", effects: [{ type: "addFixedMana", colors: ["W", "U"] }] }],
+  "simic growth chamber": [{ cost: { tap: true }, manaAbility: true, label: "Simic Growth Chamber — Add {G}{U}", effects: [{ type: "addFixedMana", colors: ["G", "U"] }] }],
   "grim monolith": [
     { cost: { tap: true }, manaAbility: true, label: "Grim Monolith — Add {C}{C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C", "C"] }] },
     { cost: { mana: "{4}" }, label: "Grim Monolith — untap this artifact", requiresTarget: false, effects: [{ type: "untapSelf" }] }
