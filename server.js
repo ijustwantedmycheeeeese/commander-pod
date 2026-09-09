@@ -880,6 +880,25 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true, life: 1 }, manaAbility: true, label: "Silent Clearing — {T}, Pay 1 life: Add W or B", effects: [{ type: "chooseManaFromColors", colors: ["W", "B"], sourceName: "Silent Clearing" }] },
     { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Silent Clearing — {1}, {T}, Sacrifice this land: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }
   ],
+  // Rest of the "Horizon land" cycle -- same exact shape as Horizon Canopy/Silent Clearing above
+  // (found missing while auditing this cycle for completeness, same "check every sibling" precedent
+  // as the Karoo/Talisman/painland finds).
+  "nurturing peatland": [
+    { cost: { tap: true, life: 1 }, manaAbility: true, label: "Nurturing Peatland — {T}, Pay 1 life: Add B or G", effects: [{ type: "chooseManaFromColors", colors: ["B", "G"], sourceName: "Nurturing Peatland" }] },
+    { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Nurturing Peatland — {1}, {T}, Sacrifice this land: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }
+  ],
+  "sunbaked canyon": [
+    { cost: { tap: true, life: 1 }, manaAbility: true, label: "Sunbaked Canyon — {T}, Pay 1 life: Add R or W", effects: [{ type: "chooseManaFromColors", colors: ["R", "W"], sourceName: "Sunbaked Canyon" }] },
+    { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Sunbaked Canyon — {1}, {T}, Sacrifice this land: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }
+  ],
+  "fiery islet": [
+    { cost: { tap: true, life: 1 }, manaAbility: true, label: "Fiery Islet — {T}, Pay 1 life: Add U or R", effects: [{ type: "chooseManaFromColors", colors: ["U", "R"], sourceName: "Fiery Islet" }] },
+    { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Fiery Islet — {1}, {T}, Sacrifice this land: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }
+  ],
+  "waterlogged grove": [
+    { cost: { tap: true, life: 1 }, manaAbility: true, label: "Waterlogged Grove — {T}, Pay 1 life: Add G or U", effects: [{ type: "chooseManaFromColors", colors: ["G", "U"], sourceName: "Waterlogged Grove" }] },
+    { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Waterlogged Grove — {1}, {T}, Sacrifice this land: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }
+  ],
   // Wave 23 -- both halves need real table entries once EITHER does (adding a manaAbility entry
   // for the conditional half disqualifies the plain "{T}: Add {C}" half from the free-tap
   // shortcut too -- see the "tap" handler's own comment on why). "control a Swamp" mirrors Temple
