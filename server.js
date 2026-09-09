@@ -921,6 +921,10 @@ const ACTIVATED_ABILITIES = {
   // land is handled generically by getGrantedActivatedAbilities/grantedAbilityGrantMatches, no
   // table entry needed for that half at all.
   "chromatic lantern": [{ cost: { tap: true }, manaAbility: true, label: "Chromatic Lantern — Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }],
+  // Prophetic Prism's own ETB "draw a card" needs no entry (drawCardsOnEtbFromText's generic
+  // text-scan already covers it) -- only the real mana ability (a genuine {1} cost, unlike
+  // Chromatic Lantern's free tap) needs one.
+  "prophetic prism": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Prophetic Prism — Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }],
   "torch courier": [{ cost: { sacrifice: true }, label: "Torch Courier — another target creature gains haste until end of turn", requiresTarget: true, targetKind: "otherCreature", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Haste" }] }],
   "vault of the archangel": [
     { cost: { tap: true }, manaAbility: true, label: "Vault of the Archangel — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
@@ -1503,7 +1507,8 @@ function getActivatedAbilities(card, lobby) {
 // cost-payment and source-card handling differ.
 const CHANNEL_ABILITIES = {
   "otawara, soaring city": { cost: { mana: "{3}{U}" }, requiresTarget: true, targetKind: "permanent", label: "Otawara, Soaring City — Channel: return target artifact, creature, enchantment, or planeswalker to its owner's hand", effects: [{ type: "bounceTargetToHand" }] },
-  "eiganjo, seat of the empire": { cost: { mana: "{2}{W}" }, requiresTarget: true, targetKind: "attackingOrBlockingCreature", label: "Eiganjo, Seat of the Empire — Channel: deal 4 damage to target attacking or blocking creature", effects: [{ type: "damageTarget", amount: 4 }] }
+  "eiganjo, seat of the empire": { cost: { mana: "{2}{W}" }, requiresTarget: true, targetKind: "attackingOrBlockingCreature", label: "Eiganjo, Seat of the Empire — Channel: deal 4 damage to target attacking or blocking creature", effects: [{ type: "damageTarget", amount: 4 }] },
+  "boseiju, who endures": { cost: { mana: "{1}{G}" }, requiresTarget: true, targetKind: "opponentArtifactEnchantmentNonbasicLand", label: "Boseiju, Who Endures — Channel: destroy target artifact, enchantment, or nonbasic land an opponent controls, then that player may search for a basic land", effects: [{ type: "destroyTargetThenOwnerSearchesBasicLand" }] }
 };
 function getChannelAbility(cardName) {
   return CHANNEL_ABILITIES[archiveKey(cardName)] || null;
@@ -1643,6 +1648,10 @@ const SPELL_ABILITIES = {
   "quick study": { label: "Quick Study — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] },
   "ritual of rejuvenation": { label: "Ritual of Rejuvenation — gain 4 life, draw a card", effects: [{ type: "gainLife", target: "controller", amount: 4 }, { type: "drawCards", amount: 1 }] },
   "cancel": { label: "Cancel — counter target spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spell" },
+  // Forceful Denial's own Cascade half needs no entry at all (pure text-scan on the card's own
+  // text, same as every other Cascade card) -- only "Counter target spell" needs one, same shape
+  // as Cancel just above.
+  "forceful denial": { label: "Forceful Denial — counter target spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spell" },
   "harmonize": { label: "Harmonize — draw 3 cards", effects: [{ type: "drawCards", amount: 3 }] },
   "unsummon": { label: "Unsummon — bounce target creature", effects: [{ type: "bounceTargetToHand" }], requiresTarget: true, targetKind: "creature" },
   "open fire": { label: "Open Fire — deal 3 damage", effects: [{ type: "damageTarget", amount: 3 }], requiresTarget: true, targetKind: "any" },
@@ -2465,6 +2474,19 @@ const EFFECTS = {
     EFFECTS.destroyTarget(lobby, ctx, params);
     const flyingCount = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying")).length;
     if (flyingCount > 0) applyLifeGain(lobby, ctx.controllerId, flyingCount);
+  },
+  // Boseiju, Who Endures -- destroy the target, then THAT PLAYER (the destroyed permanent's own
+  // owner, not the caster) searches their library for a basic land to put onto the battlefield.
+  // Looked up BEFORE destroying (sendToGraveyardInternal doesn't clear card.owner, but reading it
+  // first is simplest/clearest). Reuses searchLandTypes with a different controllerId -- same
+  // precedent Field of Ruin's own eachPlayerSearchesForBasicLand already established -- so this is
+  // a real search PROMPT sent to the affected player, not an auto-resolved choice.
+  destroyTargetThenOwnerSearchesBasicLand(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const ownerId = card.owner;
+    EFFECTS.destroyTarget(lobby, ctx, params);
+    EFFECTS.searchLandTypes(lobby, { controllerId: ownerId, sourceCard: ctx.sourceCard }, { types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true });
   },
   // Thousand-Year Elixir's activated ability -- a plain targeted untap, no card in this app's
   // vocabulary needed one before now.
@@ -6683,6 +6705,19 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
+  // Boseiju, Who Endures -- "target artifact, enchantment, or nonbasic land AN OPPONENT controls."
+  // Same shape as typeList, plus an opponent-controller restriction and an explicit basic-land
+  // exclusion (checked the same "type line includes 'basic'" way fetchLand's own basicOnly filter
+  // already does).
+  if (targetKind === "opponentArtifactEnchantmentNonbasicLand") {
+    const c = lobby.cards[targetId];
+    if (!c || c.owner === entry.controllerId) return { ok: false, error: "Choose a permanent an opponent controls." };
+    const type = (c.type || "").toLowerCase();
+    const isNonbasicLand = c.zoneType === "mana" && !type.includes("basic");
+    if (!(c.zoneType === "artifact" || isNonbasicLand)) return { ok: false, error: "Choose an artifact, enchantment, or nonbasic land." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
   // Astral Dragon -- "target NONCREATURE permanent." The inverse of "permanent" (which allows
   // creature OR artifact) -- artifact/enchantment/planeswalker (all "artifact" zoneType in this
   // engine) or a land, explicitly excluding creatures.
@@ -9753,6 +9788,10 @@ io.on("connection", (socket) => {
       const blockingIds = new Set(Object.values(lobby.combat.blocks || {}).flat());
       const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && (lobby.combat.attackers[c.id] || blockingIds.has(c.id)));
       if (!hasMatch) { socket.emit("actionError", "There's no attacking or blocking creature to target."); return; }
+    }
+    if (ability.targetKind === "opponentArtifactEnchantmentNonbasicLand") {
+      const hasMatch = Object.values(lobby.cards).some((c) => c.owner !== socket.id && (c.zoneType === "artifact" || (c.zoneType === "mana" && !(c.type || "").toLowerCase().includes("basic"))));
+      if (!hasMatch) { socket.emit("actionError", "There's no legal target to destroy."); return; }
     }
     const cost = parseManaCost(ability.cost.mana);
     const reduction = channelCostReductionFor(lobby, socket.id, card);
