@@ -530,6 +530,12 @@ const CARD_ABILITIES = {
   // table entry. Reuses searchLandTypes verbatim, the same "may search, put onto the battlefield
   // tapped, then shuffle" fetchland effect already covering the whole fetchland cycle.
   "flagstones of trokair": [{ trigger: "death", label: "Flagstones of Trokair — search for a Plains", requiresTarget: false, effects: [{ type: "searchLandTypes", types: ["Plains"], entersTapped: true }] }],
+  // Golos, Tireless Pilgrim -- "you may search" is naturally satisfied by searchLibrary's own
+  // real cancel option (cancelFetch), same as every other optional search in this engine -- no
+  // extra "may" plumbing needed. Its own 5-color "exile top 3, play them free" activated ability is
+  // deliberately deferred (a genuinely new "play from a temporary exile zone" mechanism).
+  "golos, tireless pilgrim": [{ trigger: "etb", label: "Golos, Tireless Pilgrim — search your library for a land card, put it onto the battlefield tapped", requiresTarget: false, effects: [{ type: "searchLandTypes", types: ["land"], basicOnly: false, entersTapped: true }] }],
+  "eternal witness": [{ trigger: "etb", label: "Eternal Witness — return target card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyard", effects: [{ type: "returnGraveyardCardToHand" }] }],
   "hellkite courser": [{ trigger: "etb", label: "Hellkite Courser — put a commander from the Command Zone onto the battlefield with haste", requiresTarget: true, targetKind: "ownCommanderInZone", effects: [{ type: "putCommanderFromZoneWithHaste" }] }],
   // Kardur's "attack each combat if able and attack a player other than you if able" half is
   // enforced as a declareAttackers validation (see lobby.kardurForcedAttackControllers), not a
@@ -1280,6 +1286,9 @@ const ACTIVATED_ABILITIES = {
   "oscorp research team": [{ cost: { mana: "{6}{U}" }, label: "Oscorp Research Team — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
   "silent attendant": [{ cost: { tap: true }, label: "Silent Attendant — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
   "bottle gnomes": [{ cost: { sacrifice: true }, label: "Bottle Gnomes — gain 3 life", effects: [{ type: "gainLife", target: "controller", amount: 3 }] }],
+  "sakura-tribe elder": [{ cost: { sacrifice: true }, label: "Sakura-Tribe Elder — search your library for a basic land card, put it onto the battlefield tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }],
+  "expedition map": [{ cost: { mana: "{2}", tap: true, sacrifice: true }, label: "Expedition Map — search your library for a land card, put it into your hand", effects: [{ type: "tutorToHand", typeFilter: "land" }] }],
+  "traveler's amulet": [{ cost: { mana: "{1}", sacrifice: true }, label: "Traveler's Amulet — search your library for a basic land card, put it into your hand", effects: [{ type: "tutorToHand", typeFilter: "basic land" }] }],
   "combat courier": [{ cost: { mana: "{2}", sacrifice: true }, label: "Combat Courier — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "crystalline crawler": [{ cost: { tap: true }, label: "Crystalline Crawler — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
   "third path savant": [{ cost: { mana: "{7}" }, label: "Third Path Savant — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
@@ -1857,6 +1866,11 @@ const SPELL_ABILITIES = {
   "lightning blast": { label: "Lightning Blast — deal 4 damage", effects: [{ type: "damageTarget", amount: 4 }], requiresTarget: true, targetKind: "any" },
   "scorching spear": { label: "Scorching Spear — deal 1 damage", effects: [{ type: "damageTarget", amount: 1 }], requiresTarget: true, targetKind: "any" },
   "murder": { label: "Murder — destroy target creature", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "creature" },
+  "terminate": { label: "Terminate — destroy target creature, it can't be regenerated", effects: [{ type: "destroyTarget", noRegen: true }], requiresTarget: true, targetKind: "creature" },
+  "pongify": { label: "Pongify — destroy target creature, its controller creates a 3/3 Ape token", effects: [{ type: "destroyTargetCreateTokenForOwner", name: "Ape", tokenType: "Token Creature — Ape", power: "3", toughness: "3", colors: ["G"] }], requiresTarget: true, targetKind: "creature" },
+  "rapid hybridization": { label: "Rapid Hybridization — destroy target creature, its controller creates a 3/3 Frog Lizard token", effects: [{ type: "destroyTargetCreateTokenForOwner", name: "Frog Lizard", tokenType: "Token Creature — Frog Lizard", power: "3", toughness: "3", colors: ["G"] }], requiresTarget: true, targetKind: "creature" },
+  "explore": { label: "Explore — you may play an additional land this turn, draw a card", effects: [{ type: "grantExtraLandDrop" }, { type: "drawCards", amount: 1 }] },
+  "urban evolution": { label: "Urban Evolution — draw three cards, you may play an additional land this turn", effects: [{ type: "drawCards", amount: 3 }, { type: "grantExtraLandDrop" }] },
   // Real text: "Exile target creature. Its controller may search their library for a basic land
   // card, put that card onto the battlefield tapped, then shuffle." The optional land-search isn't
   // modeled -- same "may" abilities aren't automated precedent used everywhere else in this app.
@@ -2149,24 +2163,44 @@ const SPELL_ABILITIES = {
   "hive stirrings": { label: "Hive Stirrings — create two Sliver tokens", effects: [{ type: "createToken", amount: 2, name: "Sliver", tokenType: "Token Creature — Sliver", power: "1", toughness: "1", colors: [] }] },
   // Identical shape to Cultivate (search two basics, one to battlefield tapped, the other to hand).
   "kodama's reach": { label: "Kodama's Reach — search for a basic land tapped, then another to hand", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "tutorToHand", typeFilter: "basic land" }] }] },
+  // Land-search ramp batch -- Forest search (any land with the Forest type, not basic-only, per
+  // real Magic wording) reuses searchLandTypes as-is.
+  "three visits": { label: "Three Visits — search your library for a Forest card, put it onto the battlefield", effects: [{ type: "searchLandTypes", types: ["forest"], basicOnly: false }] },
+  "nature's lore": { label: "Nature's Lore — search your library for a Forest card, put it onto the battlefield", effects: [{ type: "searchLandTypes", types: ["forest"], basicOnly: false }] },
+  "fabricate": { label: "Fabricate — search your library for an artifact card, put it into your hand", effects: [{ type: "tutorToHand", typeFilter: "artifact" }] },
   // "Look at target player's hand" isn't modeled -- no "temporarily reveal a hand to one viewer" UI
   // exists anywhere in this engine, a disclosed narrowing; the draw half is unconditional and real.
   "gitaxian probe": { label: "Gitaxian Probe — draw a card", effects: [{ type: "drawCards", amount: 1 }] },
   // Reuses grantIndestructibleToAllYours' newly-generalized keywords param (see its own comment) --
   // already permanent-wide, not creature-restricted, so no other change was needed for this card.
-  "heroic intervention": { label: "Heroic Intervention — permanents you control gain hexproof and indestructible until end of turn", effects: [{ type: "grantIndestructibleToAllYours", keywords: ["Hexproof", "Indestructible"] }] }
+  "heroic intervention": { label: "Heroic Intervention — permanents you control gain hexproof and indestructible until end of turn", effects: [{ type: "grantIndestructibleToAllYours", keywords: ["Hexproof", "Indestructible"] }] },
+  // "Commander tax" free-cast cycle -- see ALT_COSTS/castWithAltCost's own comment for the
+  // alternative-cost half; these SPELL_ABILITIES entries are what the spell actually DOES once
+  // cast (through either the normal mana-cost path or the free alt-cost path, same as any spell).
+  "fierce guardianship": { label: "Fierce Guardianship — counter target noncreature spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "nonCreatureSpell" },
+  "flawless maneuver": { label: "Flawless Maneuver — creatures you control gain indestructible until end of turn", effects: [{ type: "grantIndestructibleToAllYours", keywords: ["Indestructible"], creaturesOnly: true }] }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
 }
 // Alternative costs for casting FROM HAND ("you may pay X rather than pay this spell's mana
 // cost") -- a genuinely different shape from SPELL_ABILITIES (which is about what a spell DOES
-// once cast, not how it's paid for). Scoped to the one real pattern this deck needed: a flat mana
-// amount plus tapping N untapped creatures matching a keyword. Which specific creatures get tapped
-// isn't a real choice worth prompting for (they're interchangeable as a cost) -- the server just
-// tapstype the first N that qualify, a disclosed simplification. See castWithAltCost.
+// once cast, not how it's paid for). `kind` dispatches castWithAltCost to the right cost-check/
+// payment logic; entries with no `kind` default to Sephara's original "tapCreatures" shape (flat
+// mana amount plus tapping N untapped creatures matching a keyword -- WHICH specific creatures get
+// tapped isn't a real choice worth prompting for, the server just taps the first N that qualify, a
+// disclosed simplification).
+// "commanderFree" (the real "pod tax" cycle -- Fierce Guardianship, Flawless Maneuver) -- free IF
+// you control a commander (checked via controlsCommander, the same battlefieldId-tracking the
+// command zone already uses), no cost at all otherwise, since neither has a real non-commander
+// fallback cost worth modeling separately (both are cast at full price through the normal
+// changeZone path when the condition fails, exactly like today). Deflecting Swat (same cost shape)
+// is deliberately deferred -- its own effect ("choose new targets for target spell or ability")
+// needs a real target-redirect mechanism this engine doesn't have yet, a separate future item.
 const ALT_COSTS = {
-  "sephara, sky's blade": { label: "Sephara, Sky's Blade — pay {W} and tap four untapped creatures you control with flying, rather than pay its mana cost", mana: "{W}", tapCount: 4, tapKeyword: "flying" }
+  "sephara, sky's blade": { label: "Sephara, Sky's Blade — pay {W} and tap four untapped creatures you control with flying, rather than pay its mana cost", mana: "{W}", tapCount: 4, tapKeyword: "flying" },
+  "fierce guardianship": { kind: "commanderFree", label: "Fierce Guardianship — cast for free if you control a commander" },
+  "flawless maneuver": { kind: "commanderFree", label: "Flawless Maneuver — cast for free if you control a commander" }
 };
 function getAltCost(cardName) {
   return ALT_COSTS[archiveKey(cardName)] || null;
@@ -2209,6 +2243,16 @@ function effectTargets(lobby, controllerId, target) {
 }
 const EFFECTS = {
   drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
+  // Explore/Urban Evolution-style "you may play an additional land this turn" -- reuses the
+  // existing p.landDropBonus field (already respected by the real play-a-land check and already
+  // reset to 0 every turn) rather than the manual landDropBonus socket event, which is the
+  // player's own free-form +/- button, not a real card effect.
+  grantExtraLandDrop(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.landDropBonus = (p.landDropBonus || 0) + (params.amount || 1);
+    broadcastPlayers(lobby);
+  },
   // Body of Knowledge -- "draw that many cards," the dynamic-amount sibling of drawCards just
   // above. damageDealtAmount is baked in by fireCreatureDamagedTrigger at fire time.
   drawCardsEqualToDamageDealt(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.damageDealtAmount || 0); },
@@ -2649,8 +2693,10 @@ const EFFECTS = {
     // dealtLethal uses for combat.
     if (effectiveKeywords(lobby, card).some((k) => (k || "").toLowerCase() === "indestructible")) return;
     // CR 701.16d -- regeneration REPLACES destruction (not just combat lethal damage). Same shield
-    // consumed by the combat-lethal check in resolveCombatDamage's processDeaths.
-    if (card.regenerationShield > 0) {
+    // consumed by the combat-lethal check in resolveCombatDamage's processDeaths. params.noRegen
+    // (Pongify/Rapid Hybridization's own "it can't be regenerated") skips this, same precedent as
+    // destroyAllCreatures' own noRegen flag.
+    if (!params.noRegen && card.regenerationShield > 0) {
       card.regenerationShield -= 1;
       card.tapped = true;
       broadcastCard(lobby, card);
@@ -2659,6 +2705,19 @@ const EFFECTS = {
     }
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
+  },
+  // Pongify / Rapid Hybridization -- "Destroy target creature. It can't be regenerated. Its
+  // controller creates a 3/3 [type] token." The target's owner is captured BEFORE destroying it
+  // (sendToGraveyardInternal doesn't clear card.owner, but reading it first is simplest/clearest,
+  // same "read the owner before destroying" precedent as Boseiju's own destroyTargetThen... effect)
+  // -- the token goes to THAT player, not the caster, matching real "its controller" wording.
+  destroyTargetCreateTokenForOwner(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const ownerId = card.owner;
+    EFFECTS.destroyTarget(lobby, ctx, { ...params, noRegen: true });
+    if (!lobby.players[ownerId]) return;
+    EFFECTS.createToken(lobby, { controllerId: ownerId, sourceCard: ctx.sourceCard }, { amount: 1, name: params.name, tokenType: params.tokenType, power: params.power, toughness: params.toughness, colors: params.colors });
   },
   // Aerial Assault -- "Destroy target tapped creature. You gain 1 life for each creature you
   // control with flying." The life gain is unconditional (not "if it was destroyed"), so this just
@@ -2735,7 +2794,12 @@ const EFFECTS = {
   grantIndestructibleToAllYours(lobby, ctx, params) {
     const keywords = params.keywords || ["Indestructible"];
     Object.values(lobby.cards).forEach((c) => {
-      if (c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack") keywords.forEach((k) => grantTemporaryKeyword(lobby, c, k));
+      if (c.owner !== ctx.controllerId || c.zoneType === "hand" || c.zoneType === "stack") return;
+      // Flawless Maneuver -- "CREATURES you control gain indestructible," narrower than Heroic
+      // Intervention's own "permanents you control" -- params.creaturesOnly scopes it, default
+      // false keeps every existing all-permanents caller unaffected.
+      if (params.creaturesOnly && c.zoneType !== "creature") return;
+      keywords.forEach((k) => grantTemporaryKeyword(lobby, c, k));
     });
   },
   // The single-target counterpart to grantIndestructibleToAllYours -- "target creature gains X until
@@ -5058,6 +5122,15 @@ function dependsOnOpponentLands(card) {
 function dependsOnCommanderColorIdentity(card) {
   return (card.text || "").toLowerCase().includes("commander's color identity");
 }
+// "If you control a commander" (Fierce Guardianship/Flawless Maneuver's own alt-cost condition,
+// and any future card needing the same check) -- a commander is "controlled" once it's actually on
+// the battlefield, tracked via p.commanders[slot].battlefieldId (set when cast from the command
+// zone, cleared back to null if it leaves) -- same field the command-zone UI itself already reads.
+function controlsCommander(lobby, playerId) {
+  const p = lobby.players[playerId];
+  if (!p) return false;
+  return (p.commanders || []).some((cmd) => cmd && cmd.battlefieldId && lobby.cards[cmd.battlefieldId] && lobby.cards[cmd.battlefieldId].zoneType !== "hand");
+}
 function commanderColorIdentity(lobby, ownerId) {
   const p = lobby.players[ownerId];
   const colors = new Set();
@@ -6896,6 +6969,17 @@ function resolveChosenTarget(lobby, entry, targetId) {
   }
   if (targetKind === "spell") {
     if (!lobby.stack.some((s) => s.id === targetId)) return { ok: false, error: "Choose a spell or ability on the stack." };
+    return { ok: true };
+  }
+  // Fierce Guardianship -- "counter target NONcreature spell" -- same stack lookup as "spell"
+  // above, narrowed by the stack item's own printed type line (a real triggered/activated ability
+  // sitting on the stack has no "creature" in its type either, so it's still a legal target here,
+  // matching "noncreature spell" not excluding abilities -- abilities aren't spells at all, but
+  // this app's stack doesn't distinguish the two for targeting purposes anywhere else either).
+  if (targetKind === "nonCreatureSpell") {
+    const s = lobby.stack.find((s) => s.id === targetId);
+    if (!s) return { ok: false, error: "Choose a spell on the stack." };
+    if ((s.type || "").toLowerCase().includes("creature")) return { ok: false, error: "Choose a NONcreature spell." };
     return { ok: true };
   }
   if (targetKind === "any") {
@@ -9637,6 +9721,13 @@ io.on("connection", (socket) => {
     if (!timing.ok) { socket.emit("actionError", timing.error); return; }
     const castCheck = canCastSpells(lobby, socket.id, card);
     if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
+    // "commanderFree" (Fierce Guardianship/Flawless Maneuver) -- a real condition check, no cost of
+    // any kind to pay once it's met, unlike the tapCreatures shape below.
+    if (alt.kind === "commanderFree") {
+      if (!controlsCommander(lobby, socket.id)) { socket.emit("actionError", `You need to control a commander to cast ${card.name} for free.`); return; }
+      castSpell(lobby, card, socket.id, " for free (commander in play)");
+      return;
+    }
     const qualifying = Object.values(lobby.cards).filter((c) =>
       c.owner === socket.id && c.zoneType === "creature" && !c.tapped &&
       effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === alt.tapKeyword)
