@@ -1007,6 +1007,52 @@ const ACTIVATED_ABILITIES = {
   "gruul turf": [{ cost: { tap: true }, manaAbility: true, label: "Gruul Turf — Add {R}{G}", effects: [{ type: "addFixedMana", colors: ["R", "G"] }] }],
   "azorius chancery": [{ cost: { tap: true }, manaAbility: true, label: "Azorius Chancery — Add {W}{U}", effects: [{ type: "addFixedMana", colors: ["W", "U"] }] }],
   "simic growth chamber": [{ cost: { tap: true }, manaAbility: true, label: "Simic Growth Chamber — Add {G}{U}", effects: [{ type: "addFixedMana", colors: ["G", "U"] }] }],
+  // Talisman cycle -- "{T}: Add {C}." (free) is a plain second ability, same shape as every other
+  // free-colorless-plus-something source; "{T}: Add {W} or {U}. This artifact deals 1 damage to
+  // you." needed chooseManaFromOptionsWithPain (see its own comment) since the free-tap shortcut's
+  // painland regex only matches "this land"/"this creature", never "this artifact" -- these had NO
+  // table entry at all before this, so the shortcut silently offered {C} bundled into the SAME
+  // choice as the colored options with no pain ever applied to any of them.
+  "talisman of progress": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Progress — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Progress — Add {W} or {U}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["W", "U"], painDamage: 1 }] }
+  ],
+  "talisman of dominance": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Dominance — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Dominance — Add {U} or {B}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["U", "B"], painDamage: 1 }] }
+  ],
+  "talisman of indulgence": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Indulgence — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Indulgence — Add {B} or {R}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["B", "R"], painDamage: 1 }] }
+  ],
+  "talisman of ferocity": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Ferocity — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Ferocity — Add {R} or {G}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["R", "G"], painDamage: 1 }] }
+  ],
+  "talisman of unity": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Unity — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Unity — Add {G} or {W}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["G", "W"], painDamage: 1 }] }
+  ],
+  "talisman of hierarchy": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Hierarchy — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Hierarchy — Add {W} or {B}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["W", "B"], painDamage: 1 }] }
+  ],
+  "talisman of creativity": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Creativity — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Creativity — Add {U} or {R}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["U", "R"], painDamage: 1 }] }
+  ],
+  "talisman of resilience": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Resilience — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Resilience — Add {B} or {G}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["B", "G"], painDamage: 1 }] }
+  ],
+  "talisman of conviction": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Conviction — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Conviction — Add {R} or {W}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["R", "W"], painDamage: 1 }] }
+  ],
+  "talisman of curiosity": [
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Curiosity — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, label: "Talisman of Curiosity — Add {G} or {U}; deals 1 damage to you", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["G", "U"], painDamage: 1 }] }
+  ],
   "grim monolith": [
     { cost: { tap: true }, manaAbility: true, label: "Grim Monolith — Add {C}{C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C", "C"] }] },
     { cost: { mana: "{4}" }, label: "Grim Monolith — untap this artifact", requiresTarget: false, effects: [{ type: "untapSelf" }] }
@@ -2989,6 +3035,19 @@ const EFFECTS = {
     p.pendingFreeManaChoice = { amount: upgraded ? 2 : 1 };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: ["W", "U", "B", "R", "G"] });
+  },
+  // Talisman cycle -- "{T}: Add {C}." (free, a separate plain addFixedMana ability) OR "{T}: Add
+  // {W} or {U}. This artifact deals 1 damage to you." The free-tap shortcut (built for a single
+  // producedMana-driven choice) can't express "some options are free, this OTHER option costs
+  // life" -- reuses chooseManaAnyColor's own "__free__" sentinel pending-choice flow, narrowed to a
+  // fixed color list via params.options, with params.painDamage applied once the choice actually
+  // resolves in resolveManaChoice (not here -- no color has been picked yet).
+  chooseManaFromOptionsWithPain(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.pendingFreeManaChoice = { amount: 1, painDamage: params.painDamage || 0 };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: params.options || [] });
   },
   // Jeweled Lotus / Delighted Halfling / Omen Hawker / Plaza of Heroes / Giada / Maelstrom of the
   // Spirit Dragon-style "Spend this mana only to cast/activate X" -- same "__free__" sentinel
@@ -9555,6 +9614,7 @@ io.on("connection", (socket) => {
       const amount = p.pendingFreeManaChoice.amount || 1;
       const remaining = (p.pendingFreeManaChoice.remainingPicks || 1) - 1;
       const restricted = p.pendingFreeManaChoice.restricted;
+      const painDamage = p.pendingFreeManaChoice.painDamage || 0;
       if (restricted) {
         if (!p.restrictedMana) p.restrictedMana = [];
         for (let i = 0; i < amount; i++) p.restrictedMana.push({ color, matches: restricted.matches, label: restricted.label, grantsUncounterable: !!restricted.grantsUncounterable });
@@ -9563,6 +9623,8 @@ io.on("connection", (socket) => {
         p.mana[color] = (p.mana[color] || 0) + amount;
         pushLog(lobby, `${p.name} adds {${color}}${amount > 1 ? ` x${amount}` : ""}`);
       }
+      // Talisman cycle's own pain -- chooseManaFromOptionsWithPain's own comment.
+      if (painDamage) { applyLifeLoss(lobby, socket.id, painDamage); checkEliminations(lobby); }
       // Cascading Cataracts-style "N independent picks" -- re-prompt for the next one instead of
       // clearing pendingFreeManaChoice, see chooseManaAnyColorRepeated's own comment.
       if (remaining > 0) {
