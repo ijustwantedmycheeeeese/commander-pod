@@ -338,6 +338,45 @@ const CARD_ABILITIES = {
   "demon of loathing": [{ trigger: "combatDamageToPlayer", label: "Demon of Loathing — they sacrifice a creature", effects: [{ type: "sacrificeACreatureOfPlayer" }] }],
   "ancient copper dragon": [{ trigger: "combatDamageToPlayer", label: "Ancient Copper Dragon — roll a d20, create that many Treasures", effects: [{ type: "rollD20CreateTreasures" }] }],
   "warren instigator": [{ trigger: "combatDamageToPlayer", label: "Warren Instigator — put a Goblin creature card from your hand onto the battlefield", requiresTarget: true, targetKind: "handCard", handTypeFilter: ["goblin"], effects: [{ type: "putHandCardOntoBattlefield" }] }],
+  // Proliferate / rad-counter batch (item 6) -- every card below has at least one OTHER real clause
+  // deliberately left unautomated (mill-triggered abilities, Vehicle/Crew, Saga chapters, Vanishing,
+  // Ward, static combat restrictions, "can't be blocked while..." -- none of those have an existing
+  // mechanism to reuse and each would be its own separate wave), noted per-entry; only the
+  // proliferate/rad-counter clause itself ships here, same "automate what reuses, defer what needs a
+  // whole new mechanism" precedent as every earlier partial-card wave this session.
+  "thrummingbird": [{ trigger: "combatDamageToPlayer", label: "Thrummingbird — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
+  "glowing one": [{ trigger: "combatDamageToPlayer", label: "Glowing One — they get four rad counters", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 4 }] }],
+  // Infesting Radroach's "can't block" and graveyard-return-on-opponent-mill halves are separate,
+  // unautomated (no generic mill-tracking-per-player exists) -- just the rad-counter clause here.
+  "infesting radroach": [{ trigger: "combatDamageToPlayer", label: "Infesting Radroach — they get that many rad counters", requiresTarget: false, effects: [{ type: "giveRadCounters", amountFromDealtDamage: true }] }],
+  // Screeching Scorchbeast's mill-triggered token half is separate/unautomated.
+  "screeching scorchbeast": [{ trigger: "attack", label: "Screeching Scorchbeast — each player gets two rad counters", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 2, target: "eachPlayer" }] }],
+  // The Wise Mothman's mill-triggered +1/+1 counter half is separate/unautomated.
+  "the wise mothman": [
+    { trigger: "etb", label: "The Wise Mothman — each player gets a rad counter", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 1, target: "eachPlayer" }] },
+    { trigger: "attack", label: "The Wise Mothman — each player gets a rad counter", requiresTarget: false, effects: [{ type: "giveRadCounters", amount: 1, target: "eachPlayer" }] }
+  ],
+  // Agent Frank Horrigan's "indestructible as long as it attacked this turn" static ability is
+  // separate/unautomated (no generic "has X as long as Y happened this turn" tracking exists).
+  "agent frank horrigan": [
+    { trigger: "etb", label: "Agent Frank Horrigan — proliferate twice", requiresTarget: false, effects: [{ type: "proliferateAll", times: 2 }] },
+    { trigger: "attack", label: "Agent Frank Horrigan — proliferate twice", requiresTarget: false, effects: [{ type: "proliferateAll", times: 2 }] }
+  ],
+  // The Master, Transcendent's mill-reanimation activated ability is separate/unautomated (needs
+  // "graveyard card milled this turn" tracking, which doesn't exist).
+  "the master, transcendent": [{ trigger: "etb", label: "The Master, Transcendent — target player gets two rad counters", requiresTarget: true, targetKind: "player", effects: [{ type: "giveRadCounters", amount: 2 }] }],
+  // Mirelurk Queen's mill-triggered draw+counter half is separate/unautomated.
+  "mirelurk queen": [{ trigger: "etb", label: "Mirelurk Queen — target player gets two rad counters", requiresTarget: true, targetKind: "player", effects: [{ type: "giveRadCounters", amount: 2 }] }],
+  // Nightkin Ambusher's Ward and "can't be blocked while defender has a rad counter" halves are
+  // separate/unautomated (Ward is a cosmetic badge in this engine's trust model; the block
+  // restriction has no generic hook).
+  "nightkin ambusher": [{ trigger: "etb", label: "Nightkin Ambusher — target player gets four rad counters", requiresTarget: true, targetKind: "player", effects: [{ type: "giveRadCounters", amount: 4 }] }],
+  "blightbelly rat": [{ trigger: "death", label: "Blightbelly Rat — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
+  // Dreamtide Whale's Vanishing (time-counter self-sacrifice) half is separate/unautomated (no
+  // upkeep time-counter-removal mechanic exists). Reuses the exact secondSpellCastByAPlayer event
+  // built for Ledger Shredder's connive.
+  "dreamtide whale": [{ trigger: "secondSpellCastByAPlayer", label: "Dreamtide Whale — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
+  "inexorable tide": [{ trigger: "youCastSpell", label: "Inexorable Tide — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
   // Wave 25 -- "a creature you control" (not "this creature") needs the new global variant
   // (fireGlobalCombatDamageToPlayerTrigger/"anyCreatureCombatDamageToPlayer"), not the self-only
   // "combatDamageToPlayer" trigger the entries just above use.
@@ -1223,6 +1262,14 @@ const ACTIVATED_ABILITIES = {
   "bonders' enclave": [{ cost: { mana: "{3}", tap: true }, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 4), conditionError: "You need a creature with power 4 or greater to activate this.", label: "Bonders' Enclave — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   // Wave 15 gap-analysis batch.
   "contagion clasp": [{ cost: { mana: "{4}", tap: true }, label: "Contagion Clasp — Proliferate", effects: [{ type: "proliferateAll" }] }],
+  "contagion engine": [{ cost: { mana: "{4}", tap: true }, label: "Contagion Engine — Proliferate twice", effects: [{ type: "proliferateAll", times: 2 }] }],
+  "karn's bastion": [{ cost: { mana: "{4}", tap: true }, label: "Karn's Bastion — Proliferate", effects: [{ type: "proliferateAll" }] }],
+  // Throne of Geth's own text doesn't say "another artifact" -- sacrificing itself is a legal
+  // candidate like any other match, same as Scavenger Grounds' own autoSacrificeLandFilter and
+  // Pashalik Mons' autoSacrificeFilter (no "excludeSelf") precedent. Uses the new
+  // autoSacrificeArtifactFilter (not the plain autoSacrificeFilter, which is hardcoded to
+  // zoneType "creature" and would never find an artifact at all).
+  "throne of geth": [{ cost: { tap: true, autoSacrificeArtifactFilter: "artifact" }, label: "Throne of Geth — Proliferate", effects: [{ type: "proliferateAll" }] }],
   // "Activate only if you control three or more lands with the same name" -- a real activation
   // condition (same (card, lobby) convention as Bonders' Enclave/Temple of the False God above).
   "endless atlas": [{ cost: { mana: "{2}", tap: true }, condition: (card, lobby) => {
@@ -1477,6 +1524,14 @@ const ATTACK_ALONE_CARDS = ["master of cruelties"];
 // planeswalker), or "spell" (anything currently on the stack, for counters).
 const SPELL_ABILITIES = {
   "armageddon": { label: "Armageddon — destroy all lands", effects: [{ type: "destroyAllLands" }] },
+  // Proliferate spell batch (item 6) -- reuses the pre-existing proliferateAll effect (built for
+  // Atomize/Contagion Clasp) unchanged.
+  "contentious plan": { label: "Contentious Plan — proliferate, draw a card", effects: [{ type: "proliferateAll" }, { type: "drawCards", amount: 1 }] },
+  "grim affliction": { label: "Grim Affliction — put a -1/-1 counter on target creature, proliferate", effects: [{ type: "addNegativeCounterTarget" }, { type: "proliferateAll" }], requiresTarget: true, targetKind: "creature" },
+  "drown in ichor": { label: "Drown in Ichor — target creature gets -4/-4 until end of turn, proliferate", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", power: -4, toughness: -4 }, { type: "proliferateAll" }], requiresTarget: true, targetKind: "creature" },
+  "tezzeret's gambit": { label: "Tezzeret's Gambit — draw two cards, proliferate", effects: [{ type: "drawCards", amount: 2 }, { type: "proliferateAll" }] },
+  // Storm isn't modeled (no copy-per-prior-spell mechanic exists) -- only the Proliferate half ships.
+  "radstorm": { label: "Radstorm — proliferate", effects: [{ type: "proliferateAll" }] },
   // Wave 28 -- "Exile up to two target artifacts and/or enchantments," same disclosed one-target
   // narrowing as Angel of the Ruins' identical "up to two" clause (this app's target-choice queue
   // takes one target per queued choice). Basic landcycling needs no entry -- cyclingCostFromText.
@@ -2190,14 +2245,45 @@ const EFFECTS = {
   // Atomize -- "Proliferate." Real Magic lets you choose WHICH permanents/players with a counter
   // already on them get another (and skip the rest, e.g. to avoid also boosting an opponent's own
   // +1/+1 counters) -- this app has no per-choice multi-select UI for that, so it auto-affects EVERY
-  // card with any counters and every player with any poison, a disclosed simplification (the
+  // card with any counters and every player with any poison/rad, a disclosed simplification (the
   // opposite-of-favorable case -- proliferating an opponent's counters too -- is rare enough in
-  // practice not to block shipping this on its own). Only `counters` (this app's one generic bucket,
-  // covering +1/+1 and Atomize/The One Ring's own burden counters alike) and `poison` are anything
-  // this app actually tracks as a "counter" -- no loyalty-ability system exists yet to proliferate.
-  proliferateAll(lobby) {
-    Object.values(lobby.cards).forEach((c) => { if (c.counters > 0) { c.counters += 1; broadcastCard(lobby, c); } });
-    Object.values(lobby.players).forEach((p) => { if (p.poison > 0) p.poison += 1; });
+  // practice not to block shipping this on its own). `counters` (this app's one generic signed
+  // bucket, covering +1/+1 AND -1/-1 alike -- a NEGATIVE count gets another -1/-1, not skipped, same
+  // "another counter of each kind already there" real Magic wording) plus `poison`/`radCounters` are
+  // everything this app actually tracks as a "counter" -- no loyalty-ability system exists yet to
+  // proliferate. Repeatable via params.times (Agent Frank Horrigan/Contagion Engine's "proliferate
+  // twice", Tekuthal's doubling) instead of calling this twice, so a single broadcast covers it.
+  proliferateAll(lobby, ctx, params) {
+    const times = (params && params.times) || 1;
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.counters > 0) c.counters += times;
+      else if (c.counters < 0) c.counters -= times;
+      else return;
+      broadcastCard(lobby, c);
+    });
+    Object.values(lobby.players).forEach((p) => {
+      if (p.poison > 0) p.poison += times;
+      if (p.radCounters > 0) p.radCounters += times;
+    });
+    broadcastPlayers(lobby);
+  },
+  // Fallout's rad counters -- a player-level scalar (p.radCounters, same shape as p.poison) with no
+  // real rules consequence modeled (real Magic's "at 10+ rad counters, mill 10 and lose a permanent
+  // for each" isn't automated -- no card in the real pod's decks depends on the mill-loss half
+  // firing for the rad-granting cards themselves to work, so it's a disclosed, deliberate gap
+  // rather than blocking every rad-counter card on building that too). Reads `chosenTargetId` (a
+  // real target choice) first, then `dealtToPlayerId` (baked in by fireCombatDamageToPlayerTriggers
+  // for "whenever this deals combat damage to a player, THEY get..." cards), then falls back to
+  // effectTargets' controller/eachOpponent/eachPlayer for untargeted cards -- same target-resolution
+  // order every other player-affecting effect in this file already follows.
+  giveRadCounters(lobby, ctx, params) {
+    const amount = params.amountFromDealtDamage ? (params.dealtToPlayerAmount || 0) : (params.amount || 1);
+    if (amount <= 0) return;
+    let ids;
+    if (params.chosenTargetId) ids = [params.chosenTargetId];
+    else if (params.dealtToPlayerId) ids = [params.dealtToPlayerId];
+    else ids = effectTargets(lobby, ctx.controllerId, params.target);
+    ids.forEach((id) => { const p = lobby.players[id]; if (p) p.radCounters = (p.radCounters || 0) + amount; });
     broadcastPlayers(lobby);
   },
   // The One Ring -- "{T}: Put a burden counter on The One Ring, then draw a card for each burden
@@ -5710,6 +5796,7 @@ function playersView(lobby, viewerId) {
       cmdrDamage: p.cmdrDamage || {},
       eliminated: !!p.eliminated,
       poison: p.poison,
+      radCounters: p.radCounters || 0,
       protectionFromCardType: p.protectionFromCardType || null,
       cantCastSpells: !!p.cantCastSpells,
       lifeLocked: !!p.lifeLocked,
@@ -8398,7 +8485,7 @@ io.on("connection", (socket) => {
       username,
       name: acctDefaults.defaultName || username,
       color: nextColor(),
-      life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0,
+      life: 40, cmdr: 0, cmdrDamage: {}, eliminated: false, poison: 0, radCounters: 0,
       protectionFromCardType: null, // Serra's Emissary -- "you and creatures you control have protection from the chosen card type"
       lifeLocked: false, protectionFromEverything: false, phasedOut: [], // Teferi's Protection
       deflectingPalmSource: null, // Deflecting Palm -- id of the chosen source, cleared on first hit or at cleanup
@@ -9209,6 +9296,17 @@ io.on("connection", (socket) => {
       autoSacrificeLand = candidates[0] || null;
       if (!autoSacrificeLand) { socket.emit("actionError", `You have no ${filter} to sacrifice.`); return; }
     }
+    // Throne of Geth-style "Sacrifice an artifact" -- same auto-pick-first-qualifying shape as
+    // autoSacrificeLandFilter just above, scoped to zoneType "artifact" instead of "mana" (needed
+    // separately from the plain autoSacrificeFilter above, which is hardcoded to zoneType
+    // "creature" only). No "another" in the real text, so sacrificing itself is a legal candidate.
+    let autoSacrificeArtifact = null;
+    if (cost.autoSacrificeArtifactFilter) {
+      const filter = cost.autoSacrificeArtifactFilter;
+      const candidates = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "artifact" && (filter === "artifact" || (c.type || "").toLowerCase().includes(filter)));
+      autoSacrificeArtifact = candidates[0] || null;
+      if (!autoSacrificeArtifact) { socket.emit("actionError", `You have no ${filter} to sacrifice.`); return; }
+    }
     // Tortured Existence-style "Discard a creature card" / Hollowhead Sliver-style "Discard a
     // card" -- same auto-pick-the-first-qualifying-card shape as autoSacrificeFilter just above,
     // for hand cards instead of battlefield creatures. "card" (not a real type substring) matches
@@ -9285,6 +9383,11 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} sacrifices ${autoSacrificeLand.name || "a land"} to pay the cost`);
       fireDeathTriggers(lobby, autoSacrificeLand);
       sendToGraveyardInternal(lobby, autoSacrificeLand);
+    }
+    if (autoSacrificeArtifact) {
+      pushLog(lobby, `${p.name} sacrifices ${autoSacrificeArtifact.name || "an artifact"} to pay the cost`);
+      fireDeathTriggers(lobby, autoSacrificeArtifact);
+      sendToGraveyardInternal(lobby, autoSacrificeArtifact);
     }
     if (autoDiscardCard) {
       pushLog(lobby, `${p.name} discards ${autoDiscardCard.name || "a card"} to pay the cost`);
@@ -10862,7 +10965,7 @@ io.on("connection", (socket) => {
       p.graveyard = [];
       p.exile = [];
       shuffle(p.library);
-      p.life = 40; p.cmdr = 0; p.cmdrDamage = {}; p.eliminated = false; p.poison = 0;
+      p.life = 40; p.cmdr = 0; p.cmdrDamage = {}; p.eliminated = false; p.poison = 0; p.radCounters = 0;
       p.commanders.forEach((c) => { if (c) { c.tax = 0; c.battlefieldId = null; } });
       p.mulligans = 0;
       p.handKept = false;
