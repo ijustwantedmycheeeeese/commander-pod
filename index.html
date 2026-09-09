@@ -678,6 +678,7 @@
       <button data-action="freeCast" title="Represents an effect like Cascade -- cast without paying its mana cost">Free Cast (no cost)</button>
       <button id="context-menu-altcost" style="display:none;"></button>
       <button id="context-menu-cycle" style="display:none;"></button>
+      <button id="context-menu-channel" style="display:none;"></button>
       <button data-action="toHand">Return to Hand</button>
       <button data-action="tap">Tap</button>
       <button data-action="flip">Flip Face Up/Down</button>
@@ -6009,6 +6010,18 @@
         cycleEl.onclick = () => { socket.emit("cycleCard", card.id); contextMenu.style.display = "none"; };
       } else {
         cycleEl.style.display = "none";
+      }
+      // Channel (Otawara, Eiganjo) -- same "only shown when the server says a real option exists"
+      // pattern as altCostOption/cycleOption above. The ability itself needs a real TARGET, which
+      // this app always collects via the normal chooseTargetFor prompt (queued server-side once the
+      // cost is paid and the card discarded), not a client-side picker.
+      const channelEl = document.getElementById("context-menu-channel");
+      if (isMine && card.zoneType === "hand" && card.channelOption) {
+        channelEl.style.display = "block";
+        channelEl.textContent = card.channelOption.label;
+        channelEl.onclick = () => { socket.emit("channelAbility", { cardId: card.id }); contextMenu.style.display = "none"; };
+      } else {
+        channelEl.style.display = "none";
       }
     }
 
