@@ -4176,6 +4176,15 @@ function gainLifeOnEtbFromText(text) {
   const m = (text || "").match(/when this (?:land|permanent|creature) enters,\s*you gain (\d+) life\b/i);
   return m ? parseInt(m[1], 10) : null;
 }
+// The draw sibling of scryOnEtbFromText/gainLifeOnEtbFromText -- same real, common,
+// name-independent ETB template (Baleful Strix, Prophetic Prism), same "resolve inline, no table
+// entry" approach. Deliberately excludes "you may draw..." phrasing (an optional draw is a
+// different, less common template not covered here) to stay as narrowly scoped as its siblings.
+function drawCardsOnEtbFromText(text) {
+  const m = (text || "").match(/when this (?:artifact|creature|permanent) enters,\s*draw (a|\d+) cards?\b/i);
+  if (!m) return null;
+  return m[1].toLowerCase() === "a" ? 1 : parseInt(m[1], 10);
+}
 
 // Exotic Orchard / Reflecting Pool-style sources derive their color from OTHER permanents on the
 // battlefield rather than having a fixed set of their own -- detected via oracle text since
@@ -6159,6 +6168,8 @@ function fireEtbTriggers(lobby, card) {
   // executeSpellEffectsNow, etc.) -- a real, silent bug caught here since this is the first call
   // site with nothing else after it to accidentally cover for the missing broadcast.
   if (gainLifeAmount) { applyLifeGain(lobby, card.owner, gainLifeAmount); broadcastPlayers(lobby); }
+  const drawAmount = drawCardsOnEtbFromText(card.text);
+  if (drawAmount) drawN(lobby, card.owner, drawAmount);
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
   fireOpponentCreatureEtbTriggers(lobby, card);
   // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
