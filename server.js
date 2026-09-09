@@ -383,6 +383,12 @@ const CARD_ABILITIES = {
   // built for Ledger Shredder's connive.
   "dreamtide whale": [{ trigger: "secondSpellCastByAPlayer", label: "Dreamtide Whale — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
   "inexorable tide": [{ trigger: "youCastSpell", label: "Inexorable Tide — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
+  "flux channeler": [{ trigger: "youCastSpell", excludeTypeFilter: ["creature"], label: "Flux Channeler — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
+  // Glistening Sphere -- "This artifact enters tapped" needs no extra work (entersTapped's own
+  // generic unconditional-tapped scan already covers it); the {T}: Add one mana of any color
+  // ability is a separate ACTIVATED_ABILITIES entry (see there). The Corrupted mana ability
+  // (conditional on an opponent's poison count) is separate/unautomated.
+  "glistening sphere": [{ trigger: "etb", label: "Glistening Sphere — proliferate", requiresTarget: false, effects: [{ type: "proliferateAll" }] }],
   // Wave 25 -- "a creature you control" (not "this creature") needs the new global variant
   // (fireGlobalCombatDamageToPlayerTrigger/"anyCreatureCombatDamageToPlayer"), not the self-only
   // "combatDamageToPlayer" trigger the entries just above use.
@@ -1276,6 +1282,16 @@ const ACTIVATED_ABILITIES = {
   // autoSacrificeArtifactFilter (not the plain autoSacrificeFilter, which is hardcoded to
   // zoneType "creature" and would never find an artifact at all).
   "throne of geth": [{ cost: { tap: true, autoSacrificeArtifactFilter: "artifact" }, label: "Throne of Geth — Proliferate", effects: [{ type: "proliferateAll" }] }],
+  // Lulu, Stern Guardian's own stun-counter trigger ("whenever an opponent attacks you...") is
+  // separate/unautomated (stun counters aren't a distinct counter type in this app's model) --
+  // just the activated Proliferate ability here.
+  "lulu, stern guardian": [{ cost: { mana: "{3}{U}" }, label: "Lulu, Stern Guardian — Proliferate", effects: [{ type: "proliferateAll" }] }],
+  "glistening sphere": [{ cost: { tap: true }, manaAbility: true, label: "Glistening Sphere — Add one mana of any color", effects: [{ type: "chooseManaAnyColor" }] }],
+  // Yawgmoth's own "Pay 1 life, Sacrifice another creature: put a -1/-1 counter on up to one
+  // target creature and draw a card" ability is separate/unautomated (a real "up to one" optional
+  // target, no existing shape for that) -- just the Proliferate ability here, reusing the existing
+  // autoDiscardFilter cost primitive.
+  "yawgmoth, thran physician": [{ cost: { mana: "{B}{B}", autoDiscardFilter: "card" }, label: "Yawgmoth, Thran Physician — Proliferate", effects: [{ type: "proliferateAll" }] }],
   // "Activate only if you control three or more lands with the same name" -- a real activation
   // condition (same (card, lobby) convention as Bonders' Enclave/Temple of the False God above).
   "endless atlas": [{ cost: { mana: "{2}", tap: true }, condition: (card, lobby) => {
@@ -2263,7 +2279,14 @@ const EFFECTS = {
   // proliferate. Repeatable via params.times (Agent Frank Horrigan/Contagion Engine's "proliferate
   // twice", Tekuthal's doubling) instead of calling this twice, so a single broadcast covers it.
   proliferateAll(lobby, ctx, params) {
-    const times = (params && params.times) || 1;
+    // Tekuthal, Inquiry Dominus -- "If you would proliferate, proliferate twice instead." A real
+    // replacement effect on the ACTING player's own proliferate actions -- checked here (the one
+    // real choke point every proliferate effect already funnels through) rather than requiring
+    // every proliferate-producing card to know about it. Self-referential text-scan on the
+    // controller's own battlefield, same "no table entry, no special-casing at each call site"
+    // precedent as every other continuous replacement effect in this file.
+    const doubler = ctx && ctx.controllerId && Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && /if you would proliferate, proliferate twice instead/i.test(c.text || "")) ? 2 : 1;
+    const times = ((params && params.times) || 1) * doubler;
     Object.values(lobby.cards).forEach((c) => {
       if (c.counters > 0) c.counters += times;
       else if (c.counters < 0) c.counters -= times;
@@ -7199,6 +7222,9 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       // Guttersnipe-style "whenever you cast an INSTANT OR SORCERY spell" -- same shape as
       // colorFilter just above, checked against the cast card's own type line instead of its colors.
       if (ability.spellTypeFilter && !(eventCard && ability.spellTypeFilter.some((t) => (eventCard.type || "").toLowerCase().includes(t)))) return;
+      // Flux Channeler-style "whenever you cast a NONcreature spell" -- the inverse of
+      // spellTypeFilter just above (must NOT match, instead of must match).
+      if (ability.excludeTypeFilter && eventCard && ability.excludeTypeFilter.some((t) => (eventCard.type || "").toLowerCase().includes(t))) return;
       // Tireless Tracker-style "whenever you sacrifice a Clue" -- a deathYouControl entry narrowed
       // to one specific dying card BY NAME, rather than any death table-wide. Reusable for any
       // future "whenever you sacrifice/lose a [specific token name]" card, not just this one.
