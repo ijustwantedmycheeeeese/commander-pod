@@ -2633,8 +2633,9 @@ const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "c
 // automated" locally and instantly as a deck is built/imported, without a round trip per change.
 // NOTE: mechanisms detected by TEXT PATTERN rather than by name (shocklands' pay-life choice,
 // Command Tower-style commander-color-identity mana, Exotic Orchard-style opponent-land mana) are
-// NOT included here -- there's no fixed name list to enumerate for those, so a deck's real
-// automation coverage is always at least as high as this count suggests, never lower.
+// NOT included here -- there's no fixed name list to enumerate for those. The deck editor's own
+// coverage count no longer undercounts these, though: it also runs isCardGenericallyAutomated
+// (below) against each card's own text, client-side, using this same set only as a fast-path.
 function getAllAutomatedCardNames() {
   return [...new Set([
     ...Object.keys(CARD_ABILITIES), ...Object.keys(ACTIVATED_ABILITIES), ...Object.keys(SPELL_ABILITIES),
@@ -2653,6 +2654,114 @@ function isCardAutomated(cardName) {
     // function forgot to look at" shape as tokenMultiplierFor's wave-1 classifier gap.
     || !!ATTACK_TAX_EFFECTS[key]
     || GRAVEYARD_REDIRECT_ALL_PLAYERS.includes(key));
+}
+
+// Whether a card's own PRINTED TEXT is 100% covered by generic, name-independent automation --
+// dual-land ETB logic, vanilla keyword lines, the anthem/token-doubling scanner, cumulative upkeep,
+// cascade, proliferate, the mana-rock/dork {T}: Add shortcut, and everything else this file
+// automates off a card's TEXT rather than its NAME. isCardAutomated just above only ever checks the
+// name-keyed tables (CARD_ABILITIES etc.), so a card automated ENTIRELY this way -- Command Tower,
+// every shockland/checkland/triome, Llanowar Elves, Avacyn Angel of Hope, Anointed Procession -- is
+// invisible to it, which is exactly the gap getAllAutomatedCardNames' own comment already discloses.
+// This is the canonical list (built by working through the real pod's own card pool and confirming
+// each pattern against the actual mechanism it describes) -- reused as-is by
+// scratchpad/coverage/rescore_pod.js via build_extract.js's export list, and MIRRORED BY HAND in
+// index.html's own client-side copy (see updateDeckAutomationCoverage's comment there for why that
+// duplication exists rather than a server round-trip). Keep both in sync when either changes.
+function stripReminderText(text) { return (text || "").replace(/\([^)]*\)/g, "").trim(); }
+const GENERIC_VANILLA_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect", "Unblockable"];
+function isVanillaKeywordLine(low) {
+  const parts = low.replace(/\.$/, "").split(",").map((s) => s.trim());
+  if (!parts.length) return false;
+  return parts.every((p) => {
+    const base = p.replace(/^protection from .+$/, "protection");
+    return GENERIC_VANILLA_KEYWORDS.some((k) => k.toLowerCase() === base);
+  });
+}
+function isSentenceGenericallyAutomated(sentence) {
+  const low = sentence.toLowerCase();
+  if (isVanillaKeywordLine(low)) return true;
+  if (/^(this (land|artifact) )?enters( the battlefield)? tapped\b/.test(low)) return true;
+  if (/^\{t\}[^:]*:\s*add\b/.test(low)) return true;
+  if (/whenever this (land|artifact) becomes tapped, it deals \d+ damage to you\.?$/.test(low)) return true;
+  if (/^as this (land|artifact) enters, you may pay \d+ life\b/.test(low)) return true;
+  if (/^if you don'?t, it enters tapped\.?$/.test(low)) return true;
+  if (/^this (land|artifact) deals \d+ damage to you\.?$/.test(low)) return true;
+  if (/^\{t\}, pay \d+ life:\s*add\b/.test(low)) return true;
+  if (/^(basic landcycling|cycling) \{[^}]+\}\.?$/.test(low)) return true;
+  if (/^enchant creature$/.test(low)) return true;
+  if (/^equip \{?[\dwubrgc]+\}?$/.test(low)) return true;
+  if (/^you may cast this spell as though it had flash/.test(low)) return true;
+  if (/^(equipped|enchanted) creature gets [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
+  if (/^whenever equipped creature dies, draw (a|an|\d+|one|two|three|four|five|six) cards?\.?$/.test(low)) return true;
+  if (/^(equipped|enchanted) creature (gets [+-]\d+\/[+-]\d+ and )?has [a-z, ]+\.?$/.test(low)) {
+    const named = low.replace(/^(equipped|enchanted) creature (gets [+-]\d+\/[+-]\d+ and )?has /, "").replace(/\.?$/, "");
+    if (named.split(/,| and /).map((x) => x.trim()).every((kw) => GENERIC_VANILLA_KEYWORDS.some((k) => k.toLowerCase() === kw))) return true;
+  }
+  const s2 = sentence.endsWith(".") ? sentence : sentence + ".";
+  const anthem = anthemKeywordsFromText(s2);
+  if (anthem && anthem.keywords && anthem.keywords.length > 0) return true;
+  const eff = anthemEffectsFromText(s2);
+  if (Array.isArray(eff) && eff.length > 0) return true;
+  if (/^\w+ spells you cast cost \{\d+\} less to cast\.?$/.test(low)) return true;
+  if (/^creature spells you control can'?t be countered\.?$/.test(low)) return true;
+  if (/^nontoken creatures you control have riot\.?$/.test(low)) return true;
+  if (/^whenever a creature you control attacks, it gets \+1\/\+0 until end of turn for each other attacking creature that shares a creature type with it\.?$/.test(low)) return true;
+  if (/^battle cry \(.*\)$/.test(low) || low === "battle cry") return true;
+  if (/^exalted \(.*\)$/.test(low) || low === "exalted") return true;
+  if (/^surveil \d+\.?( \(.*\))?$/.test(low)) return true;
+  if (/^whenever this creature attacks, it gets \+\d+\/\+0 until end of turn for each other attacking \w+\.?$/.test(low)) return true;
+  if (/^when this (land|permanent|creature) enters,\s*scry \d+\.?$/.test(low)) return true;
+  if (gainLifeOnEtbFromText(s2)) return true;
+  if (/^you have no maximum hand size\.?$/.test(low)) return true;
+  if (equipCombatDamageDrawFromText(s2)) return true;
+  if (equipDeathTokenFromText(s2)) return true;
+  const grantMatches = grantedAbilityGrantMatches(s2);
+  if (grantMatches.some((g) => grantedAbilityFromText(g.abilityText) || grantedTriggeredAbilityFromText(g.abilityText))) return true;
+  if (/^when this (?:artifact|creature|permanent) enters,\s*draw (a|\d+) cards?\.?$/.test(low)) return true;
+  if (/^whenever you tap this land for mana, target opponent creates an? \d+\/\d+ \w+ \w+ creature tokens?\.?$/.test(low)) return true;
+  if (/^whenever another artifact or creature is put into a graveyard from the battlefield, put a \+1\/\+1 counter on equipped creature\.?$/.test(low)) return true;
+  if (/^(equipped|enchanted) creature can'?t be blocked( and has [a-z, ]+)?\.?$/.test(low)) return true;
+  if (/^channel\s*—\s*\{[^}]+\}(?:\{[^}]+\})*,\s*discard this card:/.test(low)) return true;
+  if (/^this ability costs \{1\} less to activate for each legendary creature you control\.?$/.test(low)) return true;
+  if (/^cascade(, cascade)?\.?$/.test(low)) return true;
+  if (/power and toughness are each equal to the number of (lands you control|cards in your hand)\.?$/.test(low)) return true;
+  if (/^whenever this creature is dealt damage, draw that many cards\.?$/.test(low)) return true;
+  if (/^proliferate\.?( \(.*\))?$/.test(low)) return true;
+  if (/gets? (a|two|three|four|\d+) rad counters?( if [a-z ]+)?\.?$/.test(low)) return true;
+  if (/^whenever one or more nonland cards are milled,/.test(low)) return true;
+  if (/^whenever an opponent mills a nonland card, if this creature is in your graveyard, you may return it to your hand\.?$/.test(low)) return true;
+  if (/^whenever a player mills a nonland card, you gain \d+ life\.?$/.test(low)) return true;
+  if (/^whenever you proliferate,/.test(low)) return true;
+  if (/^when you proliferate, return this card from your graveyard to your hand\.?$/.test(low)) return true;
+  if (/^if you would proliferate, proliferate twice instead\.?$/.test(low)) return true;
+  if (/^spells and abilities your opponents control can'?t cause you to sacrifice permanents\.?$/.test(low)) return true;
+  if (/^when you control no [a-z]+s?, sacrifice this creature\.?$/.test(low)) return true;
+  if (/becomes a copy of (target|another target) [a-z ]+(until end of turn)?, except (it has this ability|his name is \w+)\.?$/.test(low)) return true;
+  if (/^enters(?: the battlefield)? tapped unless you control (\w+|an?) or more(?: other)? [a-z]+\.?$/.test(low)) return true;
+  if (/^enters(?: the battlefield)? tapped unless you control an? [a-z]+( or (an? )?[a-z]+)?\.?$/.test(low)) return true;
+  if (/^\{[wubrgc]\/[wubrgc]\}, \{t\}:\s*add\b/.test(low)) return true;
+  if (/^this land deals \d+ damage to you\.?$/.test(low)) return true;
+  if (/^if (an effect would create one or more tokens under your control|one or more \+1\/\+1 counters would be put on a creature you control)/.test(low)) return true;
+  if (/^if an effect would put one or more counters on a permanent you control, it puts twice that many/.test(low)) return true;
+  if (/^at the beginning of your draw step, you may draw two additional cards\.?$/.test(low)) return true;
+  if (/^if you do, choose two cards in your hand drawn this turn\.?$/.test(low)) return true;
+  if (/^for each of those cards, pay 4 life or put the card on top of (your |its owner'?s )?library\.?$/.test(low)) return true;
+  if (/^each creature gets \+1\/\+1 for each other creature on the battlefield that shares at least one creature type with it\.?$/.test(low)) return true;
+  if (/^players skip their untap steps\.?$/.test(low)) return true;
+  if (/^at the beginning of your upkeep, sacrifice (?:this|it)(?: [a-z]+)? unless you pay (?:\{[^}]+\})+\.?$/.test(low)) return true;
+  if (/^this spell can'?t be countered\.?$/.test(low)) return true;
+  if (/^as this land enters, you may reveal an? [a-z]+( or (an? )?[a-z]+)? card from (?:your )?hand\.?$/.test(low)) return true;
+  if (/^if you don'?t, this land enters tapped\.?$/.test(low)) return true;
+  if (/^you may cast spells as though they had flash\.?$/.test(low)) return true;
+  return false;
+}
+function isCardGenericallyAutomated(text) {
+  if (!(text || "").trim()) return true;
+  if (/^\([^)]*\)$/.test((text || "").trim())) return true;
+  const sentences = stripReminderText(text).split(/\n|(?<=\.)\s+/).map((s) => s.trim()).filter(Boolean);
+  if (!sentences.length) return true;
+  return sentences.every((s) => isSentenceGenericallyAutomated(s));
 }
 
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
