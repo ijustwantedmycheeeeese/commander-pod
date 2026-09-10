@@ -446,6 +446,24 @@ const CARD_ABILITIES = {
   // activatable anyway. The creature-copy half is otherwise the exact real card.
   "spark double": [{ trigger: "etb", requiresTarget: true, targetKind: "ownCreature", label: "Spark Double — you may have this creature enter as a copy of a creature you control",
     effects: [{ type: "becomeCopyPermanent", stripLegendary: true, extraCounterOnCopy: true }] }],
+  // Sakashima the Impostor -- "...as a copy of ANY creature on the battlefield, except its name is
+  // Sakashima the Impostor, it's legendary in addition to its other types, and it has '{2}{U}{U}:
+  // Return [it] to its owner's hand at the beginning of the next end step.'" forceName/addSupertype
+  // are new becomeCopyPermanent knobs (see their own comments); the granted bounce ability is its
+  // own ACTIVATED_ABILITIES entry below (this card's copied form keeps its OWN name-keyed table
+  // lookup since _retainedAbilityName isn't needed here -- Sakashima's name never actually changes
+  // away from "Sakashima the Impostor," unlike Thespian's Stage).
+  "sakashima the impostor": [{ trigger: "etb", requiresTarget: true, targetKind: "creature", label: "Sakashima the Impostor — you may have this creature enter as a copy of any creature on the battlefield",
+    effects: [{ type: "becomeCopyPermanent", forceName: "Sakashima the Impostor", addSupertype: "Legendary" }] }],
+  // Sakashima of a Thousand Faces -- "...as a copy of ANOTHER creature YOU CONTROL, except it has
+  // Sakashima's OTHER abilities." retainAbilityName keeps this granted bounce-free activated
+  // ability table lookup working under the copy's new name, same _retainedAbilityName precedent
+  // Thespian's Stage/Mycosynth Gardens already established for item 14's CR 707 batch. The "legend
+  // rule doesn't apply" clause needs no code (see Mirror Box's own wave-9 finding -- this engine
+  // never enforced one). Partner (a commander-pairing rule) isn't modeled -- no partner/co-commander
+  // mechanic exists in this engine at all, a disclosed narrowing with no real single-player impact.
+  "sakashima of a thousand faces": [{ trigger: "etb", requiresTarget: true, targetKind: "otherOwnCreature", label: "Sakashima of a Thousand Faces — you may have this creature enter as a copy of another creature you control",
+    effects: [{ type: "becomeCopyPermanent", retainAbilityName: "sakashima of a thousand faces" }] }],
   "lathliss, dragon queen": [{ trigger: "otherCreatureEtb", label: "Lathliss, Dragon Queen — create a 5/5 red Dragon creature token with flying", requiresTarget: false, typeFilter: ["dragon"], excludeTokenSources: true, effects: [{ type: "createToken", amount: 1, name: "Dragon", tokenType: "Token Creature — Dragon", power: "5", toughness: "5", colors: ["R"], keywords: ["Flying"] }] }],
   // "opponentDraws"/"opponentFirstNoncreatureSpell" are handled by fireGlobalOpponentDrawTriggers/
   // fireGlobalOpponentFirstNoncreatureSpellTriggers (drawN/pushToStack hooks) rather than
@@ -1360,6 +1378,9 @@ const ACTIVATED_ABILITIES = {
   "mercurial chemister": [{ cost: { mana: "{U}", tap: true }, label: "Mercurial Chemister — draw 2 cards", effects: [{ type: "drawCards", amount: 2 }] }],
   "marker beetles": [{ cost: { mana: "{2}", sacrifice: true }, label: "Marker Beetles — draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   "walking ballista": [{ cost: { mana: "{4}" }, label: "Walking Ballista — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  // Sakashima the Impostor's own granted ability -- see becomeCopyPermanent's forceName/
+  // addSupertype knobs and EFFECTS.queueReturnSelfToHandAtEndStep's own comment.
+  "sakashima the impostor": [{ cost: { mana: "{2}{U}{U}" }, label: "Sakashima the Impostor — return it to its owner's hand at the next end step", effects: [{ type: "queueReturnSelfToHandAtEndStep" }] }],
   // Idol of Oblivion -- two independent activated abilities. The first's "Activate only if you
   // created a token this turn" needs a real per-player token-creation tracker (p.createdTokenTurn,
   // compared against turnNumber same as every other "once per turn" gate in this file) -- stamped
@@ -2290,7 +2311,17 @@ const SPELL_ABILITIES = {
   "flawless maneuver": { label: "Flawless Maneuver — creatures you control gain indestructible until end of turn", effects: [{ type: "grantIndestructibleToAllYours", keywords: ["Indestructible"], creaturesOnly: true }] },
   // "Force" cycle -- see ALT_COSTS' own comment for the alternative-cost half.
   "force of will": { label: "Force of Will — counter target spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spell" },
-  "force of negation": { label: "Force of Negation — counter target noncreature spell, exile it", effects: [{ type: "counterTargetSpellExile" }], requiresTarget: true, targetKind: "nonCreatureSpell" }
+  "force of negation": { label: "Force of Negation — counter target noncreature spell, exile it", effects: [{ type: "counterTargetSpellExile" }], requiresTarget: true, targetKind: "nonCreatureSpell" },
+  // Muddle the Mixture -- just the counter half ("Counter target instant or sorcery spell"),
+  // reusing the existing counterTargetSpell effect with the new instantOrSorcerySpell targetKind.
+  // Transmute ("discard this card, search for a same-MV card") is a genuinely different mechanism
+  // (cast-from-hand-as-a-cost tutoring) -- deliberately deferred, a disclosed narrowing, same
+  // "cover the common real use, note what's left out" precedent as every other partial-coverage
+  // card in this file.
+  "muddle the mixture": { label: "Muddle the Mixture — counter target instant or sorcery spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "instantOrSorcerySpell" },
+  // Irenicus's Vile Duplication -- "Create a token that's a copy of target creature you control,
+  // except the token has flying and it isn't legendary."
+  "irenicus's vile duplication": { label: "Irenicus's Vile Duplication — create a token copy of target creature you control, with flying, not legendary", effects: [{ type: "createTokenCopyOfTargetCreature", stripLegendary: true, addKeywords: ["Flying"] }], requiresTarget: true, targetKind: "ownCreature" }
 };
 function getSpellAbility(cardName) {
   return SPELL_ABILITIES[archiveKey(cardName)] || null;
@@ -3330,6 +3361,12 @@ const EFFECTS = {
     if (params.stripLegendary) mirror.type = (mirror.type || "").replace(/\blegendary\s+/i, "");
     if (params.addType) mirror.type = `${mirror.type || ""} ${params.addType}`.trim();
     if (params.addKeywords) mirror.keywords = [...new Set([...(mirror.keywords || []), ...params.addKeywords])];
+    // Sakashima the Impostor -- "...except its name is Sakashima the Impostor [and] it's legendary
+    // in addition to its other types..." forceName mirrors becomeCopyUntilEOT's own Impossible Man
+    // knob; addSupertype is a new PREPEND (the real type-line convention for a supertype like
+    // Legendary, unlike addType's own append-at-the-end shape built for Auton Soldier's "Artifact").
+    if (params.forceName) mirror.name = params.forceName;
+    if (params.addSupertype) mirror.type = `${params.addSupertype} ${mirror.type || ""}`.trim();
     // Spark Double -- "...except it enters with an additional +1/+1 counter on it if it's a
     // creature, it enters with an additional loyalty counter on it if it's a planeswalker." Checked
     // against the COPIED type (after stripLegendary etc. above), since that's what the permanent
@@ -3343,6 +3380,41 @@ const EFFECTS = {
     broadcastCard(lobby, mirror);
     const p = lobby.players[ctx.controllerId];
     pushLog(lobby, `${p ? p.name : "Someone"}'s ${originalName || "permanent"} becomes a copy of ${source.name || "a permanent"}`);
+  },
+  // Sakashima the Impostor's own granted activated ability -- "{2}{U}{U}: Return Sakashima the
+  // Impostor to its owner's hand at the beginning of the next end step." Reuses the existing
+  // queueDelayedTrigger + bounceTargetToHand pair verbatim (same "capture the dynamic bit now"
+  // precedent as Kiki-Jiki's own delayed sacrifice), just baking this card's own id into the
+  // delayed effect's chosenTargetId.
+  queueReturnSelfToHandAtEndStep(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    queueDelayedTrigger(lobby, {
+      firesAtPhase: "End Step", controllerId: ctx.controllerId, sourceCard: card,
+      label: `Return ${card.name || "it"} to its owner's hand`,
+      effects: [{ type: "bounceTargetToHand", chosenTargetId: card.id }]
+    });
+  },
+  // Irenicus's Vile Duplication -- "Create a token that's a copy of target creature you control,
+  // except the token has flying and it isn't legendary." Same COPY_FIELDS reuse as every other
+  // copy-token effect in this file (Miirym, Helm of the Host, Astral Dragon), with the same
+  // optional-override shape becomeCopyPermanent's own stripLegendary/addKeywords already
+  // established -- kept as its own function rather than generalizing Astral Dragon's
+  // createDragonTokenCopiesOfTarget, since that one's hardcoded Dragon-specific type-add and log
+  // text shouldn't need touching for an unrelated card.
+  createTokenCopyOfTargetCreature(lobby, ctx, params) {
+    const source = lobby.cards[params.chosenTargetId];
+    if (!source) return;
+    const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
+    const data = {};
+    COPY_FIELDS.forEach((f) => { data[f] = source[f]; });
+    if (params.stripLegendary) data.type = (data.type || "").replace(/\blegendary\s+/i, "");
+    if (params.addKeywords) data.keywords = [...new Set([...(data.keywords || []), ...params.addKeywords])];
+    data.owner = ctx.controllerId;
+    data.zoneType = classifyType(data.type);
+    spawnBattlefieldCard(lobby, data);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"} creates a token copy of ${source.name || "a creature"}`);
   },
   // Mithril Coat -- "When Mithril Coat enters, attach it to target legendary creature you control."
   // The actual grant ("Equipped creature has indestructible") is already handled generically by
@@ -7395,6 +7467,17 @@ function resolveChosenTarget(lobby, entry, targetId) {
     const s = lobby.stack.find((s) => s.id === targetId);
     if (!s) return { ok: false, error: "Choose a spell on the stack." };
     if ((s.type || "").toLowerCase().includes("creature")) return { ok: false, error: "Choose a NONcreature spell." };
+    return { ok: true };
+  }
+  // Muddle the Mixture -- "Counter target instant or sorcery spell." Same stack-item lookup as
+  // nonCreatureSpell just above, narrowed the other direction (must BE one of these two types,
+  // not just not-creature) and excludes abilities (kind: "ability" stack items have no real type
+  // line of either).
+  if (targetKind === "instantOrSorcerySpell") {
+    const s = lobby.stack.find((s) => s.id === targetId);
+    if (!s || s.kind === "ability") return { ok: false, error: "Choose an instant or sorcery spell on the stack." };
+    const typeLower = (s.type || "").toLowerCase();
+    if (!typeLower.includes("instant") && !typeLower.includes("sorcery")) return { ok: false, error: "Choose an instant or sorcery spell." };
     return { ok: true };
   }
   if (targetKind === "any") {
