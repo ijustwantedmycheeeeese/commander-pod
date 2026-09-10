@@ -581,6 +581,14 @@ const CARD_ABILITIES = {
   "pillar of origins": [{ trigger: "etb", label: "Pillar of Origins — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
   "secluded courtyard": [{ trigger: "etb", label: "Secluded Courtyard — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
   "unclaimed territory": [{ trigger: "etb", label: "Unclaimed Territory — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
+  // Door of Destinies -- same ETB creature-type choice, PLUS a second real trigger ("whenever you
+  // cast a spell of the chosen type, put a charge counter on it") this card is the first to need --
+  // see fireGlobalTrigger's own dynamicTypeFilterFromChosenCreatureType comment. The scaling anthem
+  // half ("+1/+1 for each charge counter") is a pure text-scan in staticBonusFor, no table entry.
+  "door of destinies": [
+    { trigger: "etb", label: "Door of Destinies — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] },
+    { trigger: "youCastSpell", label: "Door of Destinies — put a charge counter on it", requiresTarget: false, dynamicTypeFilterFromChosenCreatureType: true, effects: [{ type: "addCountersToSelf", amount: 1 }] }
+  ],
   "necromancy": [{ trigger: "etb", label: "Necromancy — put target creature card from a graveyard onto the battlefield under your control", requiresTarget: true, targetKind: "anyGraveyardCreature", effects: [{ type: "reanimateFromGraveyard" }] }],
   "commercial district": [{ trigger: "etb", label: "Commercial District — surveil 1", requiresTarget: false, effects: [{ type: "surveilN", amount: 1 }] }],
   // MID/VOW "Surveil land" cycle -- same "enters tapped" + "surveil 1" shape as Commercial
@@ -1909,6 +1917,12 @@ function grantedAbilityFromText(abilityText) {
   if (/^\{t\}, discard a card: draw a card$/.test(t)) {
     return { cost: { tap: true, autoDiscardFilter: "card" }, effects: [{ type: "drawCards", amount: 1 }] };
   }
+  // Bootleggers' Stash -- "Lands you control have '{T}: Create a Treasure token.'" Lands the LAND
+  // sentinel branch already established for Chromatic Lantern; this is just a different quoted
+  // ability text, needing zero new grant/scoping machinery, only this one new mapping.
+  if (/^\{t\}: create a treasure token$/.test(t)) {
+    return { cost: { tap: true }, effects: [{ type: "createTreasureToken" }] };
+  }
   if (/^ward—pay 2 life$/.test(t) || /^ward - pay 2 life$/.test(t)) {
     // A granted KEYWORD line, not a real activated ability -- Ward isn't modeled as an
     // enforceable game restriction in this engine at all (same disclosed gap as everywhere else
@@ -2569,6 +2583,9 @@ const SPELL_ABILITIES = {
   // {U/P} simplifies to a plain {U} cost (Phyrexian mana's "or pay 2 life" alternative isn't
   // modeled anywhere in this engine), same disclosed narrowing Spellskite's own {U/P} already uses.
   "mental misstep": { label: "Mental Misstep — counter target spell with mana value 1", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spellMvFilter", maxCmc: 1 },
+  // Villainous Wealth -- see villainousWealthExileAndCast's own comment (directly reuses Etali,
+  // Primal Storm's exile-then-free-cast shape, targeted at a single opponent and X-filtered).
+  "villainous wealth": { label: "Villainous Wealth — target opponent exiles the top X cards of their library; you may cast any with mana value X or less for free", effects: [{ type: "villainousWealthExileAndCast" }], requiresTarget: true, targetKind: "opponent" },
   // Irenicus's Vile Duplication -- "Create a token that's a copy of target creature you control,
   // except the token has flying and it isn't legendary."
   "irenicus's vile duplication": { label: "Irenicus's Vile Duplication — create a token copy of target creature you control, with flying, not legendary", effects: [{ type: "createTokenCopyOfTargetCreature", stripLegendary: true, addKeywords: ["Flying"] }], requiresTarget: true, targetKind: "ownCreature" }
@@ -2737,6 +2754,35 @@ const EFFECTS = {
       }
       const freeCard = spawnBattlefieldCard(lobby, { ...entry, owner: casterId, zoneType: "stack", faceDown: false });
       castSpell(lobby, freeCard, casterId, " without paying its mana cost (Etali, Primal Storm)");
+    });
+    broadcastPlayers(lobby);
+  },
+  // Villainous Wealth -- "Target opponent exiles the top X cards of their library. You may cast any
+  // number of spells with mana value X or less from among them without paying their mana costs."
+  // Directly reuses Etali's own exile-then-free-cast shape (spawn onto the stack, castSpell with a
+  // free-cast log suffix, owner reassigned to the CASTER) -- the two real differences are a single
+  // TARGETED opponent's library (not every player's top card) and a maxCmc filter off the spell's
+  // own real cast-time X value (params.xAmount, already merged in by executeSpellEffectsNow for any
+  // real {X}-cost spell, targeted or not -- see its own comment). Same disclosed simplification as
+  // Etali: every qualifying nonland card is auto-cast, no real may/order choice UI exists here either.
+  villainousWealthExileAndCast(lobby, ctx, params) {
+    const casterId = ctx.controllerId;
+    const casterP = lobby.players[casterId];
+    const targetP = lobby.players[params.chosenTargetId];
+    if (!casterP || !targetP) return;
+    const x = params.xAmount || 0;
+    const exiled = [];
+    for (let i = 0; i < x && targetP.library.length > 0; i++) exiled.push(targetP.library.shift());
+    broadcastPlayers(lobby);
+    if (!exiled.length) return;
+    pushLog(lobby, `${casterP.name} exiles the top ${exiled.length} card${exiled.length === 1 ? "" : "s"} of ${targetP.name}'s library (Villainous Wealth)`);
+    exiled.forEach((entry) => {
+      if ((entry.type || "").toLowerCase().includes("land") || (entry.cmc || 0) > x) {
+        casterP.exile = [...(casterP.exile || []), entry];
+        return;
+      }
+      const freeCard = spawnBattlefieldCard(lobby, { ...entry, owner: casterId, zoneType: "stack", faceDown: false });
+      castSpell(lobby, freeCard, casterId, " without paying its mana cost (Villainous Wealth)");
     });
     broadcastPlayers(lobby);
   },
@@ -7007,10 +7053,21 @@ function staticBonusFor(lobby, card) {
     // not a literal color/type word in the text, so it needs its own check here rather than fitting
     // anthemEffectsFromText's plain-text pattern.
     if (c.chosenCreatureType) {
-      const m = (c.text || "").match(/creatures you control of the chosen type get ([+-]\d+)\/([+-]\d+)/i);
+      // Door of Destinies' own wording ("...get +1/+1 for each charge counter on this artifact")
+      // would otherwise ALSO match this plain fixed-bonus pattern (nothing here anchors the match to
+      // the end of the clause) -- the negative lookahead keeps the two mutually exclusive so a Door
+      // of Destinies doesn't silently get its own scaled bonus counted twice.
+      const m = (c.text || "").match(/creatures you control of the chosen type get ([+-]\d+)\/([+-]\d+)(?! for each)/i);
       if (m && (card.type || "").toLowerCase().includes(c.chosenCreatureType.toLowerCase())) {
         powerBonus += parseInt(m[1], 10) || 0;
         toughnessBonus += parseInt(m[2], 10) || 0;
+      }
+      // Door of Destinies -- the same per-permanent chosen-type gate, but scaled by the SOURCE's own
+      // charge counters (c.counters, safe to reuse here since Door of Destinies is an artifact, never
+      // a creature that could also carry real +1/+1 counters of its own) instead of a flat bonus.
+      if (/creatures you control of the chosen type get \+1\/\+1 for each charge counter on (?:this artifact|it)/i.test(c.text || "") && (card.type || "").toLowerCase().includes(c.chosenCreatureType.toLowerCase())) {
+        const n = c.counters || 0;
+        powerBonus += n; toughnessBonus += n;
       }
     }
   }
@@ -9186,6 +9243,11 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       // whole battlefield (itself included, since it's removed from lobby.cards AFTER this fires),
       // so no separate "selfInclusive" flag is needed the way otherCreatureEtb's is.
       if (ability.typeFilter && !(eventCard && (eventCard.type || "").toLowerCase().includes(ability.typeFilter))) return;
+      // Door of Destinies -- "whenever you cast a spell of the CHOSEN type" -- unlike typeFilter just
+      // above (a fixed string baked into the table entry), the type here is a per-permanent runtime
+      // choice (c.chosenCreatureType, set by chooseCreatureType/targetKind:"creatureType" at ETB), so
+      // it needs to be read off the source card `c` itself at fire time rather than the ability entry.
+      if (ability.dynamicTypeFilterFromChosenCreatureType && !(eventCard && c.chosenCreatureType && (eventCard.type || "").toLowerCase().includes(c.chosenCreatureType.toLowerCase()))) return;
       // City of Traitors-style "when you play ANOTHER land" -- unlike landfall's own default
       // self-inclusive firing (Field of the Dead counts itself among "seven or more lands," no
       // exclusion wanted there), this permanent reacting needs to skip the case where IT is the one
