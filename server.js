@@ -535,6 +535,7 @@ const CARD_ABILITIES = {
   // Bugenhagen, Wise Elder -- same "control a creature with power >= N" condition shape as Bonders'
   // Enclave's activated-ability condition, just on an upkeep trigger instead.
   "bugenhagen, wise elder": [{ trigger: "upkeep", label: "Bugenhagen, Wise Elder — draw a card (you control a creature with power 7 or greater)", requiresTarget: false, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 7), effects: [{ type: "drawCards", amount: 1 }] }],
+  "descent into avernus": [{ trigger: "upkeep", requiresTarget: false, label: "Descent into Avernus — add 2 descent counters, each player creates Treasures and takes damage equal to the counters", effects: [{ type: "descentIntoAvernusTick" }] }],
   // Wave 27 -- the "Thriving" land cycle. "This land enters tapped" is already generic; this is
   // just the ETB half of the one-time color choice (chooseColorOtherThan) -- see the matching
   // ACTIVATED_ABILITIES entries below for the ongoing mana ability that reads it back.
@@ -2502,7 +2503,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus", "kird ape"];
+const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus", "kird ape", "academy manufactor", "rites of flourishing"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -2697,6 +2698,24 @@ const EFFECTS = {
   // user which only ever needed "you"/"each opponent" (no real choice). chosenTargetId takes
   // priority over the effectTargets() shortcut when present -- never set by any existing entry, so
   // this is purely additive.
+  // Descent into Avernus -- "At the beginning of your upkeep, put two descent counters on this
+  // enchantment. Then each player creates X Treasure tokens and this enchantment deals X damage to
+  // each player, where X is the number of descent counters on this enchantment." Reuses card.counters
+  // directly (safe here -- this is an enchantment, no +1/+1 P/T ambiguity like a creature would
+  // have), createToken looped over every player (still respects each player's OWN tokenMultiplierFor),
+  // and loseLife's existing target:"eachPlayer" scope (effectTargets already supports it) for the
+  // damage half.
+  descentIntoAvernusTick(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    card.counters = (card.counters || 0) + 2;
+    broadcastCard(lobby, card);
+    const x = card.counters;
+    Object.keys(lobby.players).forEach((pid) => {
+      EFFECTS.createToken(lobby, { controllerId: pid, sourceCard: card }, { name: "Treasure", tokenType: "Token Artifact — Treasure", amount: x });
+    });
+    EFFECTS.loseLife(lobby, ctx, { target: "eachPlayer", amount: x });
+  },
   loseLife(lobby, ctx, params) {
     const sourceCardId = ctx.sourceCard && ctx.sourceCard.id;
     const targets = params.chosenTargetId ? [params.chosenTargetId] : effectTargets(lobby, ctx.controllerId, params.target);
@@ -2826,6 +2845,13 @@ const EFFECTS = {
       // every existing caller -- no prior token name has a CARD_ABILITIES "etb" entry, so this is
       // a pure addition with zero behavior change for anything already shipped.
       fireEtbTriggers(lobby, token);
+      // Academy Manufactor -- "If you would create a Clue, Food, or Treasure token, instead create
+      // one of each." A real replacement effect, checked per INDIVIDUAL token creation (matches the
+      // real rule: "create twice X Treasures" under Academy Manufactor becomes X separate one-of-
+      // each replacements, not one combined one-of-each for the whole batch). Only the two OTHER
+      // types are added here -- the type actually being created (token, just spawned above) already
+      // counts as its own share.
+      createOtherManufactorTokens(lobby, ctx.controllerId, params.name);
     }
     // Idol of Oblivion's "activate only if you created a token this turn" -- stamped here since
     // this is the overwhelmingly common token-creation path (see idol of oblivion's own comment).
@@ -5008,22 +5034,20 @@ const EFFECTS = {
   // tokens get their real "{T}, Sacrifice: Add one mana of any color" ability for free.
   // Smothering Tithe's declined-payment consequence -- same real Treasure (see the generic
   // "treasure" ACTIVATED_ABILITIES entry) as rollD20CreateTreasures just below.
+  // Refactored to delegate to the generic createToken (see its own comment) instead of duplicating
+  // a raw spawnBattlefieldCard call -- a real, found-in-passing gap: this bespoke path never
+  // respected tokenMultiplierFor (Anointed Procession/Doubling Season doubling), never fired the
+  // token's own ETB (fireEtbTriggers, the wave-12 fix that only ever touched the generic path), and
+  // never triggered Academy Manufactor's "instead create one of each" replacement -- all three now
+  // apply for free, with less code than before.
   createTreasureToken(lobby, ctx, params) {
-    spawnBattlefieldCard(lobby, {
-      name: "Treasure", type: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg",
-      owner: ctx.controllerId, zoneType: "artifact"
-    });
+    EFFECTS.createToken(lobby, ctx, { name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg" });
   },
   rollD20CreateTreasures(lobby, ctx, params) {
     const roll = 1 + Math.floor(Math.random() * 20);
     const p = lobby.players[ctx.controllerId];
     pushLog(lobby, `${p ? p.name : "?"} rolls a d20 for ${(ctx.sourceCard && lobby.cards[ctx.sourceCard.id] && lobby.cards[ctx.sourceCard.id].name) || "Ancient Copper Dragon"}: ${roll} -- creating ${roll} Treasure token${roll === 1 ? "" : "s"}`);
-    for (let i = 0; i < roll; i++) {
-      spawnBattlefieldCard(lobby, {
-        name: "Treasure", type: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg",
-        owner: ctx.controllerId, zoneType: "artifact"
-      });
-    }
+    EFFECTS.createToken(lobby, ctx, { name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg", amount: roll });
   },
   // Kaalia, Zenith Seeker -- "When Kaalia enters, look at the top six cards of your library. You
   // may reveal an Angel card, a Demon card, and/or a Dragon card from among them and put them into
@@ -6435,6 +6459,27 @@ function canActivateAbilitiesAsThoughHaste(lobby, ownerId) {
 // by name (same "no fixed name list" precedent as commander-color-identity mana/shockland pay-life),
 // so it stacks correctly if more than one is somehow in play. Applied by every createToken-family
 // EFFECTS function, multiplying the count right before spawning.
+// Academy Manufactor -- "If you would create a Clue, Food, or Treasure token, instead create one
+// of each." Called once per individual token spawned by EFFECTS.createToken; a no-op unless the
+// player controls a matching permanent AND the token just created is one of the three named types.
+// Spawns the two OTHER types directly (not through createToken itself, which would re-trigger
+// tokenMultiplierFor/this same check and double-count).
+const MANUFACTOR_TOKENS = {
+  clue: { name: "Clue", tokenType: "Token Artifact — Clue" },
+  food: { name: "Food", tokenType: "Token Artifact — Food" },
+  treasure: { name: "Treasure", tokenType: "Token Artifact — Treasure" }
+};
+function createOtherManufactorTokens(lobby, ownerId, createdName) {
+  const key = (createdName || "").toLowerCase();
+  if (!MANUFACTOR_TOKENS[key]) return;
+  const hasManufactor = Object.values(lobby.cards).some((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /if you would create a clue, food, or treasure token, instead create one of each/i.test(c.text || ""));
+  if (!hasManufactor) return;
+  Object.keys(MANUFACTOR_TOKENS).filter((k) => k !== key).forEach((k) => {
+    const spec = MANUFACTOR_TOKENS[k];
+    const extra = spawnBattlefieldCard(lobby, { name: spec.name, type: spec.tokenType, img: "", owner: ownerId, zoneType: classifyType(spec.tokenType), text: "", colors: [] });
+    fireEtbTriggers(lobby, extra);
+  });
+}
 function tokenMultiplierFor(lobby, ownerId) {
   let mult = 1;
   for (const id in lobby.cards) {
@@ -7223,7 +7268,12 @@ function returnAllHandToLibrary(lobby, ownerId) {
 
 function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   if (targetZoneType === "mana") {
-    const allowed = 1 + (p.landDropBonus || 0);
+    // Rites of Flourishing -- "Each player may play an additional land on each of their turns."
+    // Checked LIVE here (not just refreshed at Untap, unlike landDropBonus itself) so it applies
+    // immediately the turn it enters, matching how a real static ability works continuously rather
+    // than only from the next untap step onward.
+    const ritesBonus = Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /each player may play an additional land on each of their turns/i.test(c.text || "")) ? 1 : 0;
+    const allowed = 1 + (p.landDropBonus || 0) + ritesBonus;
     if ((p.landsPlayedThisTurn || 0) >= allowed) {
       return { ok: false, error: `You've already played your land${allowed > 1 ? "s" : ""} this turn (${allowed} allowed).` };
     }
@@ -9395,6 +9445,14 @@ function advanceOnePhase(lobby) {
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
     activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
+    // Real pre-existing bug found while building Rites of Flourishing: landDropBonus (Explore's own
+    // "you may play an additional land THIS TURN") was never reset anywhere per turn in this file --
+    // once granted, it silently persisted for the rest of the game, letting a player play an extra
+    // land EVERY subsequent turn, not just the one it was actually cast on. Reset here, in the same
+    // per-turn Untap block landsPlayedThisTurn already uses. (Rites of Flourishing's own always-on
+    // static land-drop bonus is checked LIVE in attemptPlay instead of stored here, so it applies
+    // immediately the turn it enters rather than only from the next untap onward.)
+    activePlayer.landDropBonus = 0;
     // Teferi's Protection -- "until your next turn" and phased-out permanents both resolve right
     // here: permanents phase back in "before you untap during your untap step" (CR 702.26e), so
     // this runs BEFORE the untap loop below, letting that same loop untap anything that phases back
@@ -9469,6 +9527,14 @@ function advanceOnePhase(lobby) {
   if (activePlayer && turn.phase === "Draw") {
     const drew = drawN(lobby, activeId, 1);
     if (drew) pushLog(lobby, `${activePlayer.name} drew a card for the turn`);
+    // Rites of Flourishing -- "At the beginning of each player's draw step, that player draws an
+    // additional card." Checked against ANY permanent at the table, not scoped to a specific
+    // controller -- the effect benefits whoever's draw step it currently is, regardless of who
+    // actually controls Rites of Flourishing.
+    if (Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /at the beginning of each player'?s draw step, that player draws an additional card/i.test(c.text || ""))) {
+      const drewExtra = drawN(lobby, activeId, 1);
+      if (drewExtra) pushLog(lobby, `${activePlayer.name} draws an additional card (Rites of Flourishing)`);
+    }
   }
   broadcastTurn(lobby);
   broadcastCombat(lobby);
