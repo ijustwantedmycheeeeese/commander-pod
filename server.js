@@ -714,6 +714,16 @@ const CARD_ABILITIES = {
     { trigger: "landfall", requiresTarget: false, label: "Avenger of Zendikar — put a +1/+1 counter on each Plant you control",
       effects: [{ type: "addCountersToAllYourCreatures", amount: 1, typeFilter: "plant" }] }
   ],
+  // Flopsie, Bumi's Buddy -- ETB half only: "put a +1/+1 counter on each creature you control,"
+  // pure reuse of addCountersToAllYourCreatures with no typeFilter (every creature, not just a
+  // subtype). The static half ("creatures you control with power 4+ can't be blocked by more than
+  // one creature") is a genuinely new blocking-restriction shape -- this engine's block-legality
+  // checks have no concept of "how many blockers may this creature have" at all (only Menace's own
+  // opposite "must have at least two" restriction exists) -- deliberately deferred, a disclosed
+  // partial matching every other multi-ability card in this file with one half needing real new
+  // infrastructure.
+  "flopsie, bumi's buddy": [{ trigger: "etb", requiresTarget: false, label: "Flopsie, Bumi's Buddy — put a +1/+1 counter on each creature you control",
+    effects: [{ type: "addCountersToAllYourCreatures", amount: 1 }] }],
   // See EFFECTS.attachSelfToTarget for the attach itself; the indestructible grant is already
   // generic (equipEffectsFromText) once attached.
   "mithril coat": [{ trigger: "etb", label: "Mithril Coat — attach to target legendary creature you control", requiresTarget: true, targetKind: "ownCreature", effects: [{ type: "attachSelfToTarget" }] }],
@@ -1514,6 +1524,14 @@ const ACTIVATED_ABILITIES = {
   // this app already has a working per-card dynamic-button mechanism (maskCard's activatedAbilities
   // list) that fits perfectly: `condition` hides both once chosenMode is set, so the choice can only
   // be made once. See the matching CARD_ABILITIES entry for what the Jeskai mode actually does.
+  // Ferocious Tigorilla -- same free-activated-abilities-as-an-ETB-choice precedent as Windcrag
+  // Siege just below, one click grants the real keyword directly (see EFFECTS.grantKeywordToSelf's
+  // own comment) rather than only recording a mode. "Counter" simplifies to a permanent keyword
+  // grant, this file's standing narrowing for any non-+1/+1 counter type.
+  "ferocious tigorilla": [
+    { label: "Ferocious Tigorilla — enters with a trample counter", condition: (c) => !c.chosenMode, effects: [{ type: "chooseMode", mode: "Trample" }, { type: "grantKeywordToSelf", keyword: "Trample", permanent: true }] },
+    { label: "Ferocious Tigorilla — enters with a menace counter", condition: (c) => !c.chosenMode, effects: [{ type: "chooseMode", mode: "Menace" }, { type: "grantKeywordToSelf", keyword: "Menace", permanent: true }] }
+  ],
   "windcrag siege": [
     { label: "Windcrag Siege — choose Mardu", condition: (c) => !c.chosenMode, effects: [{ type: "chooseMode", mode: "Mardu" }] },
     { label: "Windcrag Siege — choose Jeskai", condition: (c) => !c.chosenMode, effects: [{ type: "chooseMode", mode: "Jeskai" }] }
@@ -1571,6 +1589,13 @@ const ACTIVATED_ABILITIES = {
   // "target creature can't be blocked this turn" -- see declareBlockers' own comment for how
   // Unblockable actually gets enforced.
   "rogue's passage": [{ cost: { mana: "{4}", tap: true }, label: "Rogue's Passage — target creature can't be blocked this turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Unblockable" }] }],
+  // Manifold Key -- two independent activated abilities, both pure reuse: untapTarget (Thousand-
+  // Year Elixir's own effect) with excludeSelf for "ANOTHER target artifact," and Rogue's Passage's
+  // own grantKeywordToTarget/Unblockable shape for the second ability, just at a different cost.
+  "manifold key": [
+    { cost: { mana: "{1}", tap: true }, label: "Manifold Key — untap another target artifact", requiresTarget: true, targetKind: "artifact", excludeSelf: true, effects: [{ type: "untapTarget" }] },
+    { cost: { mana: "{3}", tap: true }, label: "Manifold Key — target creature can't be blocked this turn", requiresTarget: true, targetKind: "creature", effects: [{ type: "grantKeywordToTarget", keyword: "Unblockable" }] }
+  ],
   // Two SEPARATE {T}, Sacrifice abilities (either one, not both -- sacrificing the land is part of
   // the cost either way) -- same "one entry per real activated ability" shape ACTIVATED_ABILITIES
   // already uses everywhere else a card has more than one.
@@ -3789,6 +3814,21 @@ const EFFECTS = {
   grantTemporaryPTToSelf(lobby, ctx, params) {
     const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
     if (card) grantTemporaryPT(lobby, card, params.power || 0, params.toughness || 0);
+  },
+  // Ferocious Tigorilla -- "This creature enters with your choice of a trample counter or a menace
+  // counter." Self-targeting counterpart to grantKeywordToTarget (same params.permanent default-to-
+  // temporary shape), paired with a chooseMode effect in the same ability's effects array (Windcrag
+  // Siege's own "modal ETB choice modeled as two free activated abilities" precedent) so picking a
+  // mode both records the choice (hiding both buttons afterward) AND actually grants the keyword in
+  // one click -- chooseMode alone only ever recorded the choice, never granted anything itself.
+  grantKeywordToSelf(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card || !params.keyword) return;
+    if (params.permanent) {
+      if (!(card.keywords || []).includes(params.keyword)) { card.keywords = [...(card.keywords || []), params.keyword]; broadcastCard(lobby, card); }
+    } else {
+      grantTemporaryKeyword(lobby, card, params.keyword);
+    }
   },
   // Icon of Ancestry / Cavern of Souls -- "As this permanent enters, choose a creature type." Free
   // text (targetKind:"creatureType"), not validated against a real creature-type list -- same
