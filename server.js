@@ -2049,8 +2049,18 @@ const SPELL_ABILITIES = {
   "diabolic intent": { label: "Diabolic Intent — sacrifice a creature, search for a card, put it into your hand", additionalCost: { sacrificeType: "creature" }, effects: [{ type: "tutorToHand" }] },
   "fling": { label: "Fling — sacrifice a creature, deal damage equal to its power to any target", additionalCost: { sacrificeType: "creature" }, effects: [{ type: "damageEqualToSacrificedCreaturePower" }], requiresTarget: true, targetKind: "any" },
   "utter end": { label: "Utter End — exile target nonland permanent", effects: [{ type: "exileTarget" }], requiresTarget: true, targetKind: "permanent" },
+  // Toxic Deluge -- "As an additional cost to cast this spell, pay X life. All creatures get
+  // -X/-X until end of turn." X is chosen freely by the caster (payXLife, see attemptPlay's own
+  // comment) and baked into this effect's own xAmount at cast time -- no target needed.
+  "toxic deluge": { label: "Toxic Deluge — pay X life, all creatures get -X/-X until end of turn", additionalCost: { payXLife: true }, effects: [{ type: "allCreaturesGetMinusX" }] },
   "assassin's trophy": { label: "Assassin's Trophy — destroy target permanent an opponent controls, its controller may search for a basic land", effects: [{ type: "destroyTargetThenOwnerSearchesBasicLand" }], requiresTarget: true, targetKind: "opponentPermanent" },
   "mystical tutor": { label: "Mystical Tutor — search your library for an instant or sorcery card, put it on top", effects: [{ type: "tutorToHand", typeFilter: ["instant", "sorcery"], toTopOfLibrary: true }] },
+  // Rishkar's Expertise -- "Draw cards equal to the greatest power among creatures you control.
+  // You may cast a spell with mana value 5 or less from your hand without paying its mana cost."
+  // The free-cast half reuses the pendingDiscard/resolveDiscard picker a FOURTH time
+  // (destination: "castFree", maxCmc: 5) -- pick 0 or 1 qualifying card, then castSpell it
+  // directly rather than discarding/exiling/putting it anywhere.
+  "rishkar's expertise": { label: "Rishkar's Expertise — draw cards equal to greatest power, you may cast a spell (MV 5 or less) from hand free", effects: [{ type: "drawCardsEqualToGreatestPower" }, { type: "queueFreeCastFromHand", maxCmc: 5 }] },
   "brainstorm": { label: "Brainstorm — draw three cards, then put two cards from your hand on top of your library", effects: [{ type: "brainstormDrawThenPutBack" }] },
   "deadly dispute": { label: "Deadly Dispute — sacrifice an artifact or creature, draw two cards and create a Treasure", additionalCost: { sacrificeType: ["artifact", "creature"] }, effects: [{ type: "drawCards", amount: 2 }, { type: "createTreasureToken" }] },
   "brave the elements": { label: "Brave the Elements — choose a color", modes: ["White", "Blue", "Black", "Red", "Green"].map((color) => ({
@@ -2319,6 +2329,18 @@ const EFFECTS = {
     const hasLand = Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType === "hand" && (c.type || "").toLowerCase().includes("land"));
     if (!hasLand) return;
     lobby.turn.pendingDiscard = { playerId: ctx.controllerId, count: 1, optional: true, destination: "battlefieldLand" };
+    broadcastTurn(lobby);
+  },
+  // Rishkar's Expertise -- "You may cast a spell with mana value [maxCmc] or less from your hand
+  // without paying its mana cost." Fourth reuse of the pendingDiscard/resolveDiscard picker --
+  // resolveDiscard's "castFree" branch calls castSpell directly on whatever's picked rather than
+  // discarding/exiling/putting it anywhere, so a targeted free-cast spell still prompts its own
+  // target normally afterward.
+  queueFreeCastFromHand(lobby, ctx, params) {
+    const maxCmc = params.maxCmc != null ? params.maxCmc : Infinity;
+    const hasQualifying = Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType === "hand" && !(c.type || "").toLowerCase().includes("land") && (c.cmc || 0) <= maxCmc);
+    if (!hasQualifying) return;
+    lobby.turn.pendingDiscard = { playerId: ctx.controllerId, count: 1, optional: true, destination: "castFree", maxCmc };
     broadcastTurn(lobby);
   },
   // Body of Knowledge -- "draw that many cards," the dynamic-amount sibling of drawCards just
@@ -3444,6 +3466,34 @@ const EFFECTS = {
     const toughness = (params.toughness || 0) + (params.xToughness ? (params.xAmount || 0) : 0);
     if (power || toughness) grantTemporaryPT(lobby, card, power, toughness);
     (params.keywords || []).forEach((k) => grantTemporaryKeyword(lobby, card, k));
+  },
+  // Toxic Deluge -- "All creatures get -X/-X until end of turn," ALL creatures on the table, not
+  // just the caster's own -- a real disclosed-nothing board wipe/debuff, unlike every other
+  // grantTemporaryPT caller which scopes to a controller or a single target. xAmount is baked in
+  // by attemptPlay's own payXLife handling (see its comment) since this effect has no target.
+  allCreaturesGetMinusX(lobby, ctx, params) {
+    const x = params.xAmount || 0;
+    if (!x) return;
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => grantTemporaryPT(lobby, c, -x, -x));
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "Someone"} pays ${x} life -- all creatures get -${x}/-${x} until end of turn (Toxic Deluge)`);
+    // checkLethalToughness (CR 704.5f, a real engine gap found while building this card) only ever
+    // runs from inside broadcastPlayers -- force it here rather than waiting on some unrelated
+    // later action to happen to call it, so creatures reduced to 0 toughness die immediately.
+    broadcastPlayers(lobby);
+  },
+  // Rishkar's Expertise -- "Draw cards equal to the greatest power among creatures you control."
+  // Same effective-power computation (base + counters + equipment/aura/anthem bonuses) Molimo/Body
+  // of Knowledge's own dynamic P/T already uses.
+  drawCardsEqualToGreatestPower(lobby, ctx, params) {
+    const greatest = Object.values(lobby.cards)
+      .filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature")
+      .reduce((max, c) => {
+        const bonus = attachedBonusFor(lobby, c), stat = staticBonusFor(lobby, c);
+        const power = Math.max(0, parsePT(c.power) + (c.counters || 0) + bonus.powerBonus + stat.powerBonus);
+        return Math.max(max, power);
+      }, 0);
+    drawN(lobby, ctx.controllerId, greatest);
   },
   // Kyodai, Soul of Kamigawa -- "{W}{U}{B}{R}{G}: Kyodai gets +5/+5 until end of turn." A pure self
   // buff with no targeting at all, unlike grantTemporaryPTAndKeywordsToTarget just above -- reuses
@@ -6446,6 +6496,7 @@ function playersView(lobby, viewerId) {
 function broadcastPlayers(lobby) {
   refreshAllDynamicPT(lobby); // Body of Knowledge/Molimo -- see its own comment for why this is the right choke point
   checkStateBasedSacrificeConditions(lobby); // Tethered Griffin -- see its own comment for why this is the right choke point
+  checkLethalToughness(lobby); // Toxic Deluge and any future non-combat toughness reducer -- see its own comment
   for (const sid of lobbySocketIds(lobby)) {
     const sock = io.sockets.sockets.get(sid);
     if (sock) sock.emit("players", playersView(lobby, sid));
@@ -6559,6 +6610,31 @@ function checkStateBasedSacrificeConditions(lobby) {
   toSacrifice.forEach((card) => {
     if (!lobby.cards[card.id]) return; // already gone (e.g. two matching cards checked in the same pass)
     pushLog(lobby, `${card.name || "A creature"} is sacrificed (its own state-trigger condition is no longer met)`);
+    fireDeathTriggers(lobby, card);
+    sendToGraveyardInternal(lobby, card);
+  });
+}
+
+// Real Magic CR 704.5f: a creature with toughness 0 or less is put into its owner's graveyard as a
+// state-based action -- not preventable by indestructible. This engine never had a generic sweep
+// for it: combat deaths are checked directly inside resolveCombatDamage (damage marked vs toughness
+// at that specific moment), which covers the overwhelming majority of creature deaths, but any OTHER
+// toughness-reducing effect outside combat (Toxic Deluge's mass -X/-X, any future -1/-1 counter
+// effect) had no way to actually kill anything -- found while building Toxic Deluge. Same "recompute
+// at the most ubiquitous choke point" precedent as checkStateBasedSacrificeConditions (Tethered
+// Griffin) just above -- broadcastPlayers already runs after every real state change. Collects
+// matches first, same "mutating lobby.cards while iterating is unsafe" reason as that function.
+function checkLethalToughness(lobby) {
+  const toDie = [];
+  for (const id in lobby.cards) {
+    const card = lobby.cards[id];
+    if (card.zoneType !== "creature") continue;
+    const bonus = attachedBonusFor(lobby, card), stat = staticBonusFor(lobby, card);
+    const toughness = parsePT(card.toughness) + (card.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
+    if (toughness <= 0) toDie.push(card);
+  }
+  toDie.forEach((card) => {
+    if (!lobby.cards[card.id]) return;
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
   });
@@ -6714,7 +6790,18 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
       return { ok: false, error: `You have no ${types.join(" or ")} to sacrifice as an additional cost.` };
     }
   }
-  const paid = affordWithRestricted(p, cost, xValue, { kind: "cast", card });
+  // Toxic Deluge -- "as an additional cost to cast this spell, pay X life," where X is chosen
+  // FREELY by the caster (not tied to the spell's own mana cost, unlike a real {X} spell). Reuses
+  // the same client xValue channel a {X} mana cost would use (a single card never needs both), but
+  // it must NOT also inflate the generic mana needed the way a real {X} spell's xValue does --
+  // xForMana below keeps it out of affordWithRestricted entirely. "Reject before paying" same as
+  // sacrificeForCost just above.
+  const payXLife = addlCost && addlCost.payXLife;
+  if (payXLife && xValue > 0 && p.life <= xValue) {
+    return { ok: false, error: `Not enough life to pay ${xValue} as an additional cost.` };
+  }
+  const xForMana = payXLife ? 0 : xValue;
+  const paid = affordWithRestricted(p, cost, xForMana, { kind: "cast", card });
   if (!paid) {
     return { ok: false, error: `Not enough mana to cast ${card.name || "this card"}.` };
   }
@@ -6741,6 +6828,14 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
     sendToGraveyardInternal(lobby, sacrificeForCost);
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} sacrificed ${sacrificeForCost.name || "a permanent"} to cast ${card.name || "a spell"}`);
+  }
+  if (payXLife) {
+    const life = xValue || 0;
+    if (life > 0) { applyLifeLoss(lobby, card.owner, life); checkEliminations(lobby); }
+    // Same "bake the dynamic value into _resolvedSpellEffects, resolution reads it automatically"
+    // precedent castSpell's own target-choice branches already use (line ~10598) -- Toxic Deluge
+    // has no target, so this is the only place the chosen X ever reaches its effect.
+    card._resolvedSpellEffects = (spellAbility.effects || []).map((e) => ({ ...e, xAmount: life }));
   }
   return { ok: true };
 }
@@ -11483,6 +11578,28 @@ io.on("connection", (socket) => {
       lobby.turn.pendingDiscard = null;
       broadcastTurn(lobby);
       pushLog(lobby, `${p.name} put ${chosen.name || "a land"} onto the battlefield (Growth Spiral)`);
+      return;
+    }
+    // Rishkar's Expertise -- "cast a spell (MV [maxCmc] or less) from your hand without paying
+    // its mana cost." Unlike every other pendingDiscard destination, the chosen card ISN'T
+    // removed/relocated here at all -- castSpell itself (via pushToStack) flips it from "hand" to
+    // "stack", so this branch just validates the filter and calls castSpell directly. A targeted
+    // free-cast spell still prompts its own real target afterward, same as any other cast.
+    if (pd.destination === "castFree") {
+      if (ids.length === 0) {
+        lobby.turn.pendingDiscard = null;
+        broadcastTurn(lobby);
+        pushLog(lobby, `${p.name} declines to cast a spell for free`);
+        return;
+      }
+      const chosen = discardedCards[0];
+      if ((chosen.type || "").toLowerCase().includes("land") || (chosen.cmc || 0) > (pd.maxCmc != null ? pd.maxCmc : Infinity)) {
+        socket.emit("actionError", `Choose a nonland spell with mana value ${pd.maxCmc} or less.`);
+        return;
+      }
+      lobby.turn.pendingDiscard = null;
+      broadcastTurn(lobby);
+      castSpell(lobby, chosen, socket.id, " without paying its mana cost (Rishkar's Expertise)");
       return;
     }
     // Force of Will / Force of Negation -- "exile a [color] card from your hand rather than pay
