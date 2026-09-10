@@ -646,6 +646,12 @@ const CARD_ABILITIES = {
   // Tatyova, Benthic Druid -- "Landfall — gain 1 life and draw a card." Pure reuse of the existing
   // landfall trigger shape, zero new mechanism.
   "tatyova, benthic druid": [{ trigger: "landfall", requiresTarget: false, label: "Tatyova, Benthic Druid — gain 1 life, draw a card", effects: [{ type: "gainLife", target: "controller", amount: 1 }, { type: "drawCards", amount: 1 }] }],
+  // Risen Reef -- "Whenever this creature or another Elemental you control enters, look at the
+  // top card of your library. If it's a land card, you may put it onto the battlefield tapped. If
+  // you don't, put it into your hand." Auto-resolves to taking the land (declining a free land
+  // drop is essentially never correct) -- same "no real choice worth a UI" precedent as
+  // resolveCascade's own auto-cast of the found card.
+  "risen reef": [{ trigger: "otherCreatureEtb", typeFilter: ["Elemental"], selfInclusive: true, requiresTarget: false, label: "Risen Reef — look at the top card, land to battlefield tapped or else to hand", effects: [{ type: "revealTopLandToBattlefieldTappedElseHand" }] }],
   // Rest in Peace -- the ETB half (exile all graveyards) is a one-shot EFFECTS call; the ongoing
   // "cards that would go to a graveyard are exiled instead" half is GRAVEYARD_REDIRECT_ALL_PLAYERS
   // (see its own comment), checked by sendToGraveyardInternal directly -- no table entry needed for
@@ -705,6 +711,10 @@ const CARD_ABILITIES = {
   // separate, chainable choices with no way to skip the second, not worth building for one clause).
   // Plainscycling needs no table entry -- see cyclingCostFromText's own comment.
   "angel of the ruins": [{ trigger: "etb", label: "Angel of the Ruins — exile target artifact or enchantment", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], effects: [{ type: "exileTarget" }] }],
+  // Reclamation Sage -- same typeList targetKind as Angel of the Ruins just above, destroy instead
+  // of exile. "You may" is the existing cancelTargetChoice escape hatch, same as every other
+  // optional targeted ETB in this file.
+  "reclamation sage": [{ trigger: "etb", label: "Reclamation Sage — you may destroy target artifact or enchantment", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], effects: [{ type: "destroyTarget" }] }],
   // Magecraft -- reuses the exact youCastSpell/spellTypeFilter mechanism built for Guttersnipe.
   "archmage emeritus": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], label: "Archmage Emeritus — draw a card", requiresTarget: false, effects: [{ type: "drawCards", amount: 1 }] }],
   // "Whenever ~ enters or attacks, target opponent sacrifices a creature or planeswalker of their
@@ -2316,7 +2326,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds"];
+const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -4526,6 +4536,23 @@ const EFFECTS = {
       pushLog(lobby, `${p.name} reveals ${entry.name || "a card"} and puts it into their hand`);
     }
   },
+  // Risen Reef -- same shape as revealTopCardLandToBattlefieldElseHand just above, but the land
+  // ALWAYS enters tapped (the real card's own wording), so this can't just reuse that function --
+  // forceTapped-after-spawn is the same override pattern fetchLand's own handler already uses for
+  // a fetched land's own tapped state.
+  revealTopLandToBattlefieldTappedElseHand(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p || !p.library.length) return;
+    const entry = p.library.shift();
+    if ((entry.type || "").toLowerCase().includes("land")) {
+      const card = spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, zoneType: "mana" });
+      if (!card.tapped) { card.tapped = true; broadcastCard(lobby, card); }
+      pushLog(lobby, `${p.name} reveals ${entry.name || "a land"} and puts it onto the battlefield tapped`);
+    } else {
+      spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, faceDown: true, zoneType: "hand" });
+      pushLog(lobby, `${p.name} reveals ${entry.name || "a card"} and puts it into their hand`);
+    }
+  },
   // Diregraf Colossus -- "enters with a +1/+1 counter for each Zombie card in your graveyard."
   // Generic on typeFilter (a lowercase type-line substring), reusable for any future "counters equal
   // to graveyard cards of type X" card.
@@ -5774,6 +5801,13 @@ function effectiveKeywords(lobby, card) {
     const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === lifeKwMatch[2].toLowerCase());
     if (p && kw && p.life >= parseInt(lifeKwMatch[1], 10)) extra.push(kw);
   }
+  // Jund Hackblade -- "As long as you control another multicolored permanent, this creature gets
+  // +1/+1 and has haste." The keyword half; see staticBonusFor's own comment for the P/T half of
+  // this same self-referential conditional grant.
+  if (/as long as you control another multicolored permanent, this creature gets \+1\/\+1 and has haste/i.test(card.text || "")) {
+    const hasOtherMulti = Object.values(lobby.cards).some((c) => c.id !== card.id && c.owner === card.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && (c.colors || []).length >= 2);
+    if (hasOtherMulti) extra.push("Haste");
+  }
   // Kyodai, Soul of Kamigawa -- "target permanent gains indestructible for as long as you control
   // Kyodai." A LINKED-duration grant (not "until end of turn," tied to a specific OTHER permanent's
   // continued presence) -- stored as a source id on the card itself, checked LIVE here rather than
@@ -6179,10 +6213,27 @@ function staticBonusFor(lobby, card) {
       toughnessBonus += parseInt(lifePTMatch[3], 10) || 0;
     }
   }
+  // Jund Hackblade -- "As long as you control another multicolored permanent, this creature gets
+  // +1/+1 and has haste." Self-referential conditional, same shape as Serra Ascendant just above
+  // (checked against card's OWN text), but the CONDITION itself needs a scan for a qualifying
+  // other permanent rather than a simple life-total lookup. See effectiveKeywords' own comment for
+  // the haste half of this same grant.
+  if (/as long as you control another multicolored permanent, this creature gets \+1\/\+1 and has haste/i.test(card.text || "")) {
+    const hasOtherMulti = Object.values(lobby.cards).some((c) => c.id !== card.id && c.owner === card.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && (c.colors || []).length >= 2);
+    if (hasOtherMulti) { powerBonus += 1; toughnessBonus += 1; }
+  }
   const cardColors = card.colors || [];
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    // Knight of New Alara -- "Each OTHER multicolored creature you control gets +1/+1 for each of
+    // its colors." A dynamic anthem scaled by the TARGET creature's own color count (not the
+    // source's) -- doesn't fit anthemEffectsFromText's flat-bonus model at all, so it's a direct
+    // check here instead, same "doesn't fit the generic shape, gets its own block" precedent as
+    // Mirror Box's same-name-count bonus just below.
+    if (id !== card.id && (cardColors.length >= 2) && /each other multicolored creature you control gets \+1\/\+1 for each of its colors/i.test(c.text || "")) {
+      powerBonus += cardColors.length; toughnessBonus += cardColors.length;
+    }
     // Sedge Sliver -- "All Sliver creatures have 'This creature gets +1/+1 as long as you control a
     // Swamp.'" A GRANTED self-referential conditional (unlike Serra Ascendant's own printed-on-
     // itself version above) -- inherently self-inclusive by its own "All Xs have" wording (no
@@ -8949,6 +9000,29 @@ function advanceOnePhase(lobby) {
         lobby.cards[id].tapped = false;
         broadcastCard(lobby, lobby.cards[id]);
       }
+    }
+  }
+  // Seedborn Muse -- "Untap all permanents you control during EACH OTHER player's untap step."
+  // Fires on every single Untap step (not gated to the Muse's own controller's turn, unlike the
+  // activePlayer block just above) for every OTHER player who controls one -- same "recompute
+  // against whoever the activePlayer actually is this phase" shape as
+  // fireGlobalTriggerEachOpponent, just a direct sweep instead of a real CARD_ABILITIES trigger
+  // (nothing here needs a target or goes on the stack). Respects the same "doesn't untap" text
+  // exclusion the activePlayer's own untap loop above already checks.
+  if (turn.phase === "Untap") {
+    for (const pid in lobby.players) {
+      if (pid === activeId) continue;
+      const controlsMuse = Object.values(lobby.cards).some((c) => c.owner === pid && c.zoneType !== "hand" && c.zoneType !== "stack" && /untap all permanents you control during each other player'?s untap step/i.test(c.text || ""));
+      if (!controlsMuse) continue;
+      let changed = false;
+      for (const id in lobby.cards) {
+        if (lobby.cards[id].owner === pid && lobby.cards[id].tapped && !/this (?:artifact|permanent) doesn'?t untap during your untap step/i.test(lobby.cards[id].text || "")) {
+          lobby.cards[id].tapped = false;
+          broadcastCard(lobby, lobby.cards[id]);
+          changed = true;
+        }
+      }
+      if (changed) pushLog(lobby, `${lobby.players[pid].name}'s permanents untap (Seedborn Muse)`);
     }
   }
   // "At the beginning of your upkeep" triggers -- reuses fireGlobalTrigger exactly as it already
