@@ -536,6 +536,11 @@ const CARD_ABILITIES = {
   // Enclave's activated-ability condition, just on an upkeep trigger instead.
   "bugenhagen, wise elder": [{ trigger: "upkeep", label: "Bugenhagen, Wise Elder — draw a card (you control a creature with power 7 or greater)", requiresTarget: false, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 7), effects: [{ type: "drawCards", amount: 1 }] }],
   "descent into avernus": [{ trigger: "upkeep", requiresTarget: false, label: "Descent into Avernus — add 2 descent counters, each player creates Treasures and takes damage equal to the counters", effects: [{ type: "descentIntoAvernusTick" }] }],
+  // Dark Depths -- the ETB half ("enters with ten ice counters") is applied synchronously inline
+  // inside fireEtbTriggers itself (see its own comment for why -- a real ordering bug going through
+  // the normal stack-based trigger path), not a table entry here. The "{3}: remove an ice counter"
+  // activated ability lives in ACTIVATED_ABILITIES, and the "sacrifice + create Marit Lage when
+  // empty" half is a state-based check (checkDarkDepthsIceCounters).
   // Wave 27 -- the "Thriving" land cycle. "This land enters tapped" is already generic; this is
   // just the ETB half of the one-time color choice (chooseColorOtherThan) -- see the matching
   // ACTIVATED_ABILITIES entries below for the ongoing mana ability that reads it back.
@@ -1702,6 +1707,10 @@ const ACTIVATED_ABILITIES = {
   "contagion clasp": [{ cost: { mana: "{4}", tap: true }, label: "Contagion Clasp — Proliferate", effects: [{ type: "proliferateAll" }] }],
   "contagion engine": [{ cost: { mana: "{4}", tap: true }, label: "Contagion Engine — Proliferate twice", effects: [{ type: "proliferateAll", times: 2 }] }],
   "karn's bastion": [{ cost: { mana: "{4}", tap: true }, label: "Karn's Bastion — Proliferate", effects: [{ type: "proliferateAll" }] }],
+  "dark depths": [{ cost: { mana: "{3}" }, requiresTarget: false, label: "Dark Depths — remove an ice counter", effects: [{ type: "removeCounterFromSelf" }] }],
+  // Spellskite -- {U/P} simplifies to a plain {U} cost (this engine doesn't model Phyrexian mana's
+  // "or pay 2 life" alternative payment anywhere), a disclosed narrowing.
+  "spellskite": [{ cost: { mana: "{U}" }, requiresTarget: true, targetKind: "spell", label: "Spellskite — change a target of target spell or ability to this creature", effects: [{ type: "redirectStackItemTargetToSelf" }] }],
   // Throne of Geth's own text doesn't say "another artifact" -- sacrificing itself is a legal
   // candidate like any other match, same as Scavenger Grounds' own autoSacrificeLandFilter and
   // Pashalik Mons' autoSacrificeFilter (no "excludeSelf") precedent. Uses the new
@@ -1893,7 +1902,23 @@ function getActivatedAbilities(card, lobby) {
   // name-keyed. _retainedAbilityName (stamped by becomeCopyPermanent) keeps it findable under its
   // ORIGINAL name regardless of what it currently looks like.
   const retained = card._retainedAbilityName ? (ACTIVATED_ABILITIES[card._retainedAbilityName] || []) : [];
-  return [...named, ...retained, ...getGrantedActivatedAbilities(card, lobby)];
+  // Marvin, Murderous Mimic -- "has all activated abilities of creatures you control that don't
+  // have the same name as this creature." Collects each OTHER same-controller creature's own
+  // NAMED activated abilities (not their own granted-from-elsewhere ones, to avoid a mutual-copy
+  // loop if two Marvins somehow existed) and merges them in. Composes correctly with zero further
+  // changes needed: activateAbility already operates on whichever card.id was actually clicked
+  // (Marvin), so a mimicked "sacrifice this"/"{T}:" cost taps or sacrifices MARVIN, not the
+  // original creature, and any self-referential effect (addCountersToSelf, etc.) already resolves
+  // off ctx.sourceCard, which activateAbility already sets to the activating card.
+  let mimicked = [];
+  if (/has all activated abilities of creatures you control that don'?t have the same name as this creature/i.test(card.text || "")) {
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.id === card.id || c.owner !== card.owner || c.zoneType !== "creature") return;
+      if (archiveKey(c.name) === archiveKey(card.name)) return;
+      mimicked = mimicked.concat(ACTIVATED_ABILITIES[archiveKey(c.name)] || []);
+    });
+  }
+  return [...named, ...retained, ...mimicked, ...getGrantedActivatedAbilities(card, lobby)];
 }
 
 // Channel (CR 702.83) -- "Channel — {cost}, Discard this card: EFFECT." A genuinely different
@@ -2503,7 +2528,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus", "kird ape", "academy manufactor", "rites of flourishing"];
+const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus", "kird ape", "academy manufactor", "rites of flourishing", "marvin, murderous mimic"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -2955,6 +2980,37 @@ const EFFECTS = {
     const mult = amount > 0 ? counterMultiplierFor(lobby, card.owner) : 1;
     card.counters = (card.counters || 0) + (amount + bonus) * mult;
     broadcastCard(lobby, card);
+  },
+  // Dark Depths -- "{3}: Remove an ice counter from Dark Depths." Deliberately NOT routed through
+  // Hardened Scales/counterMultiplierFor (those only apply to counters being ADDED, never removed)
+  // -- a plain decrement, floored at 0 since "remove a counter" on an empty permanent is a no-op in
+  // real Magic, not a negative count.
+  removeCounterFromSelf(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    card.counters = Math.max(0, (card.counters || 0) - (params.amount || 1));
+    broadcastCard(lobby, card);
+  },
+  // Spellskite -- "Change a target of target spell or ability to this creature." Reuses the
+  // existing targetKind:"spell" verbatim (its own comment already says "Choose a spell or ability
+  // on the stack" -- it was never actually narrowed to real spells only). Mutates chosenTargetId
+  // directly on whichever effects the chosen stack item carries -- an "ability" kind item's own
+  // `effects` array, or a spell card's `_resolvedSpellEffects` (only ever populated once a target
+  // was actually chosen at cast time, matching this engine's "targets are locked in at cast, not
+  // at resolution" model) -- so every OTHER targeted effect bundled into the same stack item is
+  // redirected too, a disclosed simplification for the rare case of a single ability with multiple
+  // independently-targeted effects (no automated card in this file has ever needed that distinction).
+  // A stack item with no chosenTargetId anywhere (an untargeted spell/ability) silently does
+  // nothing, matching CR 608.2b's "no legal target found" fizzle.
+  redirectStackItemTargetToSelf(lobby, ctx, params) {
+    const item = lobby.stack.find((s) => s.id === params.chosenTargetId);
+    const self = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!item || !self) return;
+    const effects = item.kind === "ability" ? item.effects : item._resolvedSpellEffects;
+    if (!effects || !effects.some((e) => e.chosenTargetId)) return;
+    effects.forEach((e) => { if (e.chosenTargetId) e.chosenTargetId = self.id; });
+    broadcastStack(lobby);
+    pushLog(lobby, `${self.name || "Spellskite"} redirects a target to itself`);
   },
   // Idyllic Grange -- addCountersToSelf's targeted counterpart: "put a +1/+1 counter on TARGET
   // creature you control" instead of the source itself. Same Hardened Scales/doubling hooks.
@@ -7010,6 +7066,7 @@ function broadcastPlayers(lobby) {
   refreshAllDynamicPT(lobby); // Body of Knowledge/Molimo -- see its own comment for why this is the right choke point
   checkStateBasedSacrificeConditions(lobby); // Tethered Griffin -- see its own comment for why this is the right choke point
   checkLethalToughness(lobby); // Toxic Deluge and any future non-combat toughness reducer -- see its own comment
+  checkDarkDepthsIceCounters(lobby); // Dark Depths -- see its own comment
   for (const sid of lobbySocketIds(lobby)) {
     const sock = io.sockets.sockets.get(sid);
     if (sock) sock.emit("players", playersView(lobby, sid));
@@ -7125,6 +7182,28 @@ function checkStateBasedSacrificeConditions(lobby) {
     pushLog(lobby, `${card.name || "A creature"} is sacrificed (its own state-trigger condition is no longer met)`);
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
+  });
+}
+// Dark Depths -- "When Dark Depths has no ice counters on it, sacrifice it. If you do, create Marit
+// Lage, a legendary 20/20 black Avatar creature token with flying and indestructible." Same
+// "recompute continuously at the most ubiquitous choke point" shape as checkStateBasedSacrificeConditions
+// just above (this is genuinely CR 704's state-based-action territory, not a one-shot trigger --
+// "no ice counters" could become true from the {3} ability, a future counter-removal effect, or
+// entering with the wrong count entirely) rather than a one-shot ability tied to the removal cost
+// alone. Self-limiting: once sacrificed, the card is gone from lobby.cards, so it can never match
+// again on a later pass.
+function checkDarkDepthsIceCounters(lobby) {
+  Object.values(lobby.cards).forEach((c) => {
+    if (c.zoneType === "hand" || c.zoneType === "stack") return;
+    if (!/when .+ has no ice counters on it, sacrifice it\. if you do, create marit lage/i.test(c.text || "")) return;
+    if ((c.counters || 0) > 0) return;
+    if (!lobby.cards[c.id]) return;
+    pushLog(lobby, `${c.name || "Dark Depths"} has no ice counters left -- sacrificed, creating Marit Lage`);
+    fireDeathTriggers(lobby, c);
+    sendToGraveyardInternal(lobby, c);
+    EFFECTS.createToken(lobby, { controllerId: c.owner, sourceCard: c }, {
+      name: "Marit Lage", tokenType: "Legendary Creature — Avatar", power: "20", toughness: "20", colors: ["B"], keywords: ["Flying", "Indestructible"]
+    });
   });
 }
 
@@ -8260,6 +8339,14 @@ function fireEtbTriggers(lobby, card) {
   // stack, matching landfall's own "generic text-detected, resolved inline" precedent just below.
   const scryAmount = scryOnEtbFromText(card.text);
   if (scryAmount) EFFECTS.scryN(lobby, { controllerId: card.owner, sourceCard: { id: card.id } }, { amount: scryAmount });
+  // Dark Depths -- "enters with ten ice counters on it." Same "no target, resolved inline rather
+  // than through fireTrigger/the stack" precedent as scry-on-ETB just above -- a REAL ordering bug
+  // was found by routing this through the normal CARD_ABILITIES etb/stack path instead: the ETB
+  // ability sat on the stack undrained while checkDarkDepthsIceCounters (wired into broadcastPlayers,
+  // which fires on every action including the one right after spawning) saw the card still at its
+  // default 0 counters and sacrificed it immediately, before its own ETB ever got a chance to
+  // resolve. Applying the counters synchronously at spawn time closes that window entirely.
+  if (/enters with ten ice counters on it/i.test(card.text || "")) { card.counters = (card.counters || 0) + 10; broadcastCard(lobby, card); }
   const gainLifeAmount = gainLifeOnEtbFromText(card.text);
   // applyLifeGain itself never broadcasts (every other call site handles that downstream via
   // whatever ELSE it does after -- checkEliminations+broadcastPlayers, a spell's own
