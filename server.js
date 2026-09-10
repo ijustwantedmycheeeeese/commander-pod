@@ -7852,6 +7852,15 @@ function anyPlayerFlashGrantAppliesTo(lobby, card) {
     return m && cardType.includes(m[1].toLowerCase());
   });
 }
+// High Fae Trickster / Leyline of Anticipation -- "You may cast spells as though they had flash."
+// A THIRD distinct shape from the two above: unlike Emergence Zone (activated, per-player,
+// until-end-of-turn) and Quick Sliver (static, but ALL players, type-scoped), this is static,
+// always-on, and scoped to just ITS OWN CONTROLLER -- no existing helper covers it. The plain
+// "cast spells as though they had flash" phrase (no "this turn", no named type in between) is
+// exactly what keeps this from colliding with either of the other two's own wording.
+function ownFlashGrant(lobby, socketId) {
+  return Object.values(lobby.cards).some((c) => c.owner === socketId && c.zoneType !== "hand" && c.zoneType !== "stack" && /you may cast spells as though they had flash/i.test(c.text || ""));
+}
 function checkTiming(lobby, socketId, card) {
   const text = (card.type || "").toLowerCase();
   // Emergence Zone -- "you may cast SPELLS this turn as though they had flash" never applies to a
@@ -7859,7 +7868,8 @@ function checkTiming(lobby, socketId, card) {
   // canCastSpells's own cantCastSpells check already makes below.
   const isInstantSpeed = text.includes("instant") || (Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash"))
     || (!text.includes("land") && lobby.players[socketId] && lobby.players[socketId].hasFlashUntilEndOfTurn)
-    || anyPlayerFlashGrantAppliesTo(lobby, card);
+    || anyPlayerFlashGrantAppliesTo(lobby, card)
+    || (!text.includes("land") && ownFlashGrant(lobby, socketId));
   if (lobby.stack.length > 0) {
     // A priority round is active: only the current holder may act, and only with an
     // instant-speed spell (which includes land drops? no -- lands are never instant-speed, so
