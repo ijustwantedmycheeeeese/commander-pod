@@ -269,6 +269,11 @@ const CARD_ABILITIES = {
   // Poison-Tip Archer -- "whenever ANOTHER creature dies" (any player's), not the self-scoped
   // deathYouControl above -- see fireGlobalTriggerAllPlayers' own new excludeSelf check.
   "poison-tip archer": [{ trigger: "deathAnyCreature", excludeSelf: true, label: "Poison-Tip Archer — each opponent loses 1 life", effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] }],
+  // Fangren Marauder -- "Whenever an artifact is put into a graveyard from the battlefield, you may
+  // gain 5 life." New eventCardTypeFilter (see fireGlobalTriggerAllPlayers' own comment) narrows the
+  // existing deathAnyCreature scan to artifacts specifically; "may" simplifies to unconditional,
+  // same "declining is essentially never correct" precedent used for every other optional lifegain.
+  "fangren marauder": [{ trigger: "deathAnyCreature", eventCardTypeFilter: ["artifact"], requiresTarget: false, label: "Fangren Marauder — gain 5 life", effects: [{ type: "gainLife", target: "controller", amount: 5 }] }],
   "ajani's pridemate": [{ trigger: "selfGainsLife", label: "Ajani's Pridemate — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
   // Real text has no further condition ("Whenever you cast a spell, you gain 1 life") -- no
   // simplification needed here, unlike most other narrowed entries in this table.
@@ -1941,6 +1946,13 @@ const SPELL_ABILITIES = {
   "contentious plan": { label: "Contentious Plan — proliferate, draw a card", effects: [{ type: "proliferateAll" }, { type: "drawCards", amount: 1 }] },
   "grim affliction": { label: "Grim Affliction — put a -1/-1 counter on target creature, proliferate", effects: [{ type: "addNegativeCounterTarget" }, { type: "proliferateAll" }], requiresTarget: true, targetKind: "creature" },
   "drown in ichor": { label: "Drown in Ichor — target creature gets -4/-4 until end of turn, proliferate", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", power: -4, toughness: -4 }, { type: "proliferateAll" }], requiresTarget: true, targetKind: "creature" },
+  // Sudden Spinnerets -- "Target creature gets +1/+3 until end of turn. Put a reach counter on it.
+  // Untap it." Three independent effects chained on one target: the temporary PT half via
+  // grantTemporaryPTAndKeywordsToTarget (Drown in Ichor's own shape, just positive), the reach
+  // COUNTER simplified to a permanent keyword grant (grantKeywordToTarget's own params.permanent,
+  // same "counter that just grants a keyword forever" narrowing used everywhere else a non-+1/+1
+  // counter type shows up), and untapTarget (Thousand-Year Elixir's own effect) verbatim.
+  "sudden spinnerets": { label: "Sudden Spinnerets — target creature gets +1/+3, a reach counter, untapped", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", power: 1, toughness: 3 }, { type: "grantKeywordToTarget", keyword: "Reach", permanent: true }, { type: "untapTarget" }], requiresTarget: true, targetKind: "creature" },
   "tezzeret's gambit": { label: "Tezzeret's Gambit — draw two cards, proliferate", effects: [{ type: "drawCards", amount: 2 }, { type: "proliferateAll" }] },
   // Storm isn't modeled (no copy-per-prior-spell mechanic exists) -- only the Proliferate half ships.
   "radstorm": { label: "Radstorm — proliferate", effects: [{ type: "proliferateAll" }] },
@@ -2163,6 +2175,10 @@ const SPELL_ABILITIES = {
   // -X/-X until end of turn." X is chosen freely by the caster (payXLife, see attemptPlay's own
   // comment) and baked into this effect's own xAmount at cast time -- no target needed.
   "toxic deluge": { label: "Toxic Deluge — pay X life, all creatures get -X/-X until end of turn", additionalCost: { payXLife: true }, effects: [{ type: "allCreaturesGetMinusX" }] },
+  // Delayed Blast Fireball -- front half only (the base, non-Foretell cast at its printed cost; see
+  // EFFECTS.damageEachOpponentAndTheirCreatures' own comment for why the doubled Foretell damage is
+  // deliberately deferred).
+  "delayed blast fireball": { label: "Delayed Blast Fireball — deals 2 damage to each opponent and each creature they control", effects: [{ type: "damageEachOpponentAndTheirCreatures", amount: 2 }] },
   "assassin's trophy": { label: "Assassin's Trophy — destroy target permanent an opponent controls, its controller may search for a basic land", effects: [{ type: "destroyTargetThenOwnerSearchesBasicLand" }], requiresTarget: true, targetKind: "opponentPermanent" },
   "mystical tutor": { label: "Mystical Tutor — search your library for an instant or sorcery card, put it on top", effects: [{ type: "tutorToHand", typeFilter: ["instant", "sorcery"], toTopOfLibrary: true }] },
   // Rishkar's Expertise -- "Draw cards equal to the greatest power among creatures you control.
@@ -2671,6 +2687,24 @@ const EFFECTS = {
       if (applyLifeLoss(lobby, id, params.amount || 0, sourceCardId)) {
         io.to(lobby.id).emit("spellDamage", { targetId: id, amount: params.amount || 0, sourceCardId });
       }
+    });
+  },
+  // Delayed Blast Fireball -- "deals 2 damage to each opponent and each creature they control." Same
+  // per-opponent life-loss half as damageEachOpponent just above, plus a per-opponent creature sweep
+  // reusing damageAllCreaturesOfPlayer's own lethal-check-and-destroy shape (this engine has no
+  // separate "damage marked on a creature" concept -- sweepers just destroy anything at or under the
+  // dealt amount, same precedent as Chain Reaction/Blasphemous Act). Foretell (exile for {2}, cast
+  // later for {4}{R}{R} dealing 5 instead of 2) is a genuinely different cast-from-a-different-zone
+  // timing mechanism with no precedent in this engine -- deliberately deferred; this only ships the
+  // normal cast-for-printed-cost path, always at the base (non-exile) damage amount.
+  damageEachOpponentAndTheirCreatures(lobby, ctx, params) {
+    const amount = params.amount || 0;
+    const sourceCardId = ctx.sourceCard && ctx.sourceCard.id;
+    effectTargets(lobby, ctx.controllerId, "eachOpponent").forEach((id) => {
+      if (applyLifeLoss(lobby, id, amount, sourceCardId)) {
+        io.to(lobby.id).emit("spellDamage", { targetId: id, amount, sourceCardId });
+      }
+      EFFECTS.damageAllCreaturesOfPlayer(lobby, ctx, { dealtToPlayerId: id, dealtToPlayerAmount: amount });
     });
   },
   millCards(lobby, ctx, params) {
@@ -8485,6 +8519,11 @@ function fireGlobalTriggerAllPlayers(lobby, eventType, eventCard) {
       // controller, unlike the unrestricted deathAnyCreature default (every permanent, including the
       // dying creature's own controller's own other permanents).
       if (ability.opponentOnly && eventCard && c.owner === eventCard.owner) return;
+      // Fangren Marauder -- "Whenever an artifact is put into a graveyard from the battlefield" --
+      // narrows the table-wide deathAnyCreature scan (which fires for ANY dying permanent, not just
+      // creatures, despite its name) down to the dying card's own type, same shape as
+      // opponentOnly/excludeSelf narrowing the WATCHER side instead of the event card's side.
+      if (ability.eventCardTypeFilter && eventCard && !ability.eventCardTypeFilter.some((t) => (eventCard.type || "").toLowerCase().includes(t))) return;
       let fireAbility = ability;
       // "That creature's controller" -- a dynamic per-event player id, baked into the effect's own
       // chosenTargetId field at fire time (the same param name the real target-choice flow already
