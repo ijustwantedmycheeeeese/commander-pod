@@ -414,6 +414,11 @@ const CARD_ABILITIES = {
   // (fireGlobalCombatDamageToPlayerTrigger/"anyCreatureCombatDamageToPlayer"), not the self-only
   // "combatDamageToPlayer" trigger the entries just above use.
   "old gnawbone": [{ trigger: "anyCreatureCombatDamageToPlayer", label: "Old Gnawbone — create that many Treasure tokens", requiresTarget: false, effects: [{ type: "createTokensEqualToDealtDamage", name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg" }] }],
+  // Impostor Syndrome -- "Whenever a nontoken creature you control deals combat damage to a player,
+  // create a token that's a copy of it, except it isn't legendary." Reuses createTokenCopyOfTargetCreature
+  // verbatim (Irenicus's Vile Duplication's own effect, wave 11) -- the dealing creature's own id is
+  // baked into chosenTargetId by fireGlobalCombatDamageToPlayerTrigger itself (see its own comment).
+  "impostor syndrome": [{ trigger: "anyCreatureCombatDamageToPlayer", excludeTokenSources: true, requiresTarget: false, label: "Impostor Syndrome — create a nonlegendary token copy of that creature", effects: [{ type: "createTokenCopyOfTargetCreature", stripLegendary: true }] }],
   "zeriam, golden wind": [{ trigger: "anyCreatureCombatDamageToPlayer", typeFilter: ["griffin"], label: "Zeriam, Golden Wind — create a 2/2 white Griffin token with flying", requiresTarget: false, effects: [{ type: "createToken", name: "Griffin", tokenType: "Token Creature — Griffin", power: "2", toughness: "2", colors: ["W"], keywords: ["Flying"] }] }],
   "kaalia, zenith seeker": [{ trigger: "etb", label: "Kaalia, Zenith Seeker — look at top 6, take Angels/Demons/Dragons", effects: [{ type: "lookTopNRevealTypesToHand", amount: 6, types: ["Angel", "Demon", "Dragon"] }] }],
   "utvara hellkite": [{ trigger: "otherAttacks", typeFilter: ["Dragon"], label: "Utvara Hellkite — create a 6/6 flying Dragon token, tapped and attacking",
@@ -2250,6 +2255,12 @@ const SPELL_ABILITIES = {
   // -X/-X until end of turn." X is chosen freely by the caster (payXLife, see attemptPlay's own
   // comment) and baked into this effect's own xAmount at cast time -- no target needed.
   "toxic deluge": { label: "Toxic Deluge — pay X life, all creatures get -X/-X until end of turn", additionalCost: { payXLife: true }, effects: [{ type: "allCreaturesGetMinusX" }] },
+  // Deflecting Swat -- "You may choose new targets for target spell or ability." The commander-tax
+  // free-cast half is a plain ALT_COSTS entry (see its own comment); this is just the targeting
+  // half, deliberately a single effect (queueRedirectNewTargetChoice) that queues the SECOND real
+  // target choice once this spell itself resolves, rather than trying to bundle two targets into
+  // one cast.
+  "deflecting swat": { label: "Deflecting Swat — choose new targets for target spell or ability", requiresTarget: true, targetKind: "spell", effects: [{ type: "queueRedirectNewTargetChoice" }] },
   // Pest Infestation -- "Destroy up to X target artifacts and/or enchantments. Create twice X 1/1
   // black and green Pest creature tokens with 'when this token dies, you gain 1 life.'" "Up to X"
   // narrows to exactly one target, this file's standing precedent for "up to N" targeting a single
@@ -2515,6 +2526,7 @@ const ALT_COSTS = {
   "sephara, sky's blade": { label: "Sephara, Sky's Blade — pay {W} and tap four untapped creatures you control with flying, rather than pay its mana cost", mana: "{W}", tapCount: 4, tapKeyword: "flying" },
   "fierce guardianship": { kind: "commanderFree", label: "Fierce Guardianship — cast for free if you control a commander" },
   "flawless maneuver": { kind: "commanderFree", label: "Flawless Maneuver — cast for free if you control a commander" },
+  "deflecting swat": { kind: "commanderFree", label: "Deflecting Swat — cast for free if you control a commander" },
   // "exileColoredCardFromHand" -- see castWithAltCost's own comment for the full interactive flow
   // (queues a real "pick a card to exile" choice, doesn't cast immediately). onlyOffTurn is Force
   // of Negation's own "if it's not your turn" restriction; Force of Will has no such restriction.
@@ -3011,6 +3023,42 @@ const EFFECTS = {
     effects.forEach((e) => { if (e.chosenTargetId) e.chosenTargetId = self.id; });
     broadcastStack(lobby);
     pushLog(lobby, `${self.name || "Spellskite"} redirects a target to itself`);
+  },
+  // Deflecting Swat -- "You may choose new targets for target spell or ability." Unlike Spellskite
+  // (always redirects to itself, a single real target), this needs the caster to freely choose the
+  // NEW target too -- a genuinely second, independent real target choice, queued here (at
+  // RESOLUTION, matching CR timing: Deflecting Swat's own target -- the spell/ability -- is locked
+  // in at cast time same as any other targeted spell, but "choose new targets" happens as it
+  // resolves) rather than bundled into the original cast. params.chosenTargetId here is the STACK
+  // ITEM id chosen when Deflecting Swat itself was cast; stashed into the queued choice's own
+  // effects so redirectStackItemTarget below still knows which item to mutate once the SECOND
+  // choice (the new target) comes back. If the targeted spell/ability already resolved or left the
+  // stack by the time Deflecting Swat itself resolves, this is a real, silent fizzle (CR 608.2b) --
+  // no second prompt is queued at all.
+  queueRedirectNewTargetChoice(lobby, ctx, params) {
+    const stackItemId = params.chosenTargetId;
+    if (!lobby.stack.some((s) => s.id === stackItemId)) return;
+    queueTargetChoice(lobby, {
+      controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: "Deflecting Swat — choose a new target", targetKind: "any",
+      effects: [{ type: "redirectStackItemTarget", stackItemId }]
+    });
+  },
+  // The chosen-new-target counterpart to redirectStackItemTargetToSelf just above -- same
+  // chosenTargetId-mutation shape, just to a freely-chosen target (params.chosenTargetId, baked in
+  // by the second real target choice queueRedirectNewTargetChoice just queued) instead of always
+  // the source's own id. Legality of the new target against the original ability's OWN targetKind
+  // requirements isn't re-validated (this engine has no generic way to look up "what targetKind did
+  // that stack item originally require"), a disclosed simplification matching Spellskite's own
+  // unconditional-redirect precedent.
+  redirectStackItemTarget(lobby, ctx, params) {
+    const item = lobby.stack.find((s) => s.id === params.stackItemId);
+    if (!item) return;
+    const effects = item.kind === "ability" ? item.effects : item._resolvedSpellEffects;
+    if (!effects || !effects.some((e) => e.chosenTargetId)) return;
+    effects.forEach((e) => { if (e.chosenTargetId) e.chosenTargetId = params.chosenTargetId; });
+    broadcastStack(lobby);
+    pushLog(lobby, "A target is redirected (Deflecting Swat)");
   },
   // Idyllic Grange -- addCountersToSelf's targeted counterpart: "put a +1/+1 counter on TARGET
   // creature you control" instead of the source itself. Same Hardened Scales/doubling hooks.
@@ -9083,8 +9131,18 @@ function fireGlobalCombatDamageToPlayerTrigger(lobby, dealingCard, defenderId, a
     if (source.owner !== dealingCard.owner || source.zoneType === "hand" || source.zoneType === "stack") return;
     getAutomatedAbilities(source.name, "anyCreatureCombatDamageToPlayer").forEach((ability) => {
       if (ability.typeFilter && !ability.typeFilter.some((t) => dealingType.includes(t))) return;
+      // Impostor Syndrome -- "Whenever a NONTOKEN creature you control deals combat damage to a
+      // player..." Same excludeTokenSources flag/semantics fireGlobalOtherCreatureEtbTriggers
+      // already established (Miirym/Lathliss/Guardian Project's own "nontoken" exclusions), just
+      // checked against the DEALING creature's type here instead of an entering one.
+      if (ability.excludeTokenSources && dealingType.includes("token")) return;
       if (ability.condition && !ability.condition(source, lobby)) return;
-      const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId, dealtToPlayerAmount: amount }));
+      // Impostor Syndrome's own token-copy effect needs to know WHICH creature dealt the damage --
+      // dealingCard.id baked in as chosenTargetId, the same "capture the dynamic bit now" precedent
+      // used everywhere else in this file (dealtToPlayerId/dealtToPlayerAmount right below it).
+      // Purely additive: no existing anyCreatureCombatDamageToPlayer entry (Old Gnawbone) reads
+      // chosenTargetId at all.
+      const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId, dealtToPlayerAmount: amount, chosenTargetId: dealingCard.id }));
       pushAbilityToStack(lobby, { sourceCard: source, controllerId: source.owner, label: ability.label, effects });
     });
   });
@@ -12494,6 +12552,15 @@ io.on("connection", (socket) => {
   socket.on("passPriority", () => {
     const lobby = currentLobby(); if (!lobby) return;
     if (lobby.stack.length === 0 || lobby.priority.holderId !== socket.id) return;
+    // Deflecting Swat -- a resolving ability can itself queue a NEW real target choice (its "choose
+    // a new target" half, see EFFECTS.queueRedirectNewTargetChoice) that must be answered before the
+    // stack is safe to continue resolving. Same reasoning as shouldAutoAdvance's own
+    // pendingOptionalPayments check (wave 18): without this, whatever sits BELOW the ability that
+    // just queued the choice (e.g. the spell being redirected) stayed exposed to further priority
+    // passes and could resolve on its own, stale target and all, before the redirect ever landed --
+    // a real bug caught by this exact scenario (Lightning Bolt resolving against its ORIGINAL target
+    // before Deflecting Swat's own "choose a new target" prompt was ever answered).
+    if (lobby.pendingTargetChoices.length > 0) return;
     const next = nextInOrder(lobby.turn.order, socket.id);
     if (!next) return; // shouldn't happen with a non-empty stack and a non-empty turn order
     if (next === lobby.priority.lastActorId) {
