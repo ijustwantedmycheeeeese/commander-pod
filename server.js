@@ -994,6 +994,10 @@ const ACTIVATED_ABILITIES = {
   "golgari signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Golgari Signet — Add {B}{G}", effects: [{ type: "addFixedMana", colors: ["B", "G"] }] }],
   "boros signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Boros Signet — Add {R}{W}", effects: [{ type: "addFixedMana", colors: ["R", "W"] }] }],
   "simic signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Simic Signet — Add {G}{U}", effects: [{ type: "addFixedMana", colors: ["G", "U"] }] }],
+  // Mossfire Valley -- "{1}, {T}: Add {R}{G}." Exactly the Signet cycle's own shape (a real mana
+  // cost plus tap, two fixed colors from one activation), just on a land instead of an artifact --
+  // zero new code, pure table-entry reuse.
+  "mossfire valley": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Mossfire Valley — Add {R}{G}", effects: [{ type: "addFixedMana", colors: ["R", "G"] }] }],
   "archivist": [{ cost: { tap: true }, label: "Archivist — {T}: Draw a card", effects: [{ type: "drawCards", amount: 1 }] }],
   // Wave 22 -- High Market's own "{T}: Add {C}" needs no table entry (already generic).
   "high market": [{ cost: { tap: true, autoSacrificeFilter: "creature" }, label: "High Market — {T}, Sacrifice a creature: You gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
@@ -1655,6 +1659,11 @@ const ACTIVATED_ABILITIES = {
   // autoSacrificeArtifactFilter (not the plain autoSacrificeFilter, which is hardcoded to
   // zoneType "creature" and would never find an artifact at all).
   "throne of geth": [{ cost: { tap: true, autoSacrificeArtifactFilter: "artifact" }, label: "Throne of Geth — Proliferate", effects: [{ type: "proliferateAll" }] }],
+  // Slobad, Goblin Tinkerer -- "Sacrifice an artifact: Target artifact gains indestructible until
+  // end of turn." Same autoSacrificeArtifactFilter cost as Throne of Geth just above (no tap needed
+  // here, matching the real card's own cost), plus Deathless Angel's exact "target X gains
+  // indestructible" effect shape, just retargeted at an artifact instead of a creature.
+  "slobad, goblin tinkerer": [{ cost: { autoSacrificeArtifactFilter: "artifact" }, requiresTarget: true, targetKind: "artifact", label: "Slobad, Goblin Tinkerer — Sacrifice an artifact: target artifact gains indestructible until end of turn", effects: [{ type: "grantKeywordToTarget", keyword: "Indestructible" }] }],
   // Lulu, Stern Guardian's own stun-counter trigger ("whenever an opponent attacks you...") is
   // separate/unautomated (stun counters aren't a distinct counter type in this app's model) --
   // just the activated Proliferate ability here.
@@ -2209,6 +2218,17 @@ const SPELL_ABILITIES = {
   // "Return target artifact or enchantment card from your graveyard to your hand." New
   // ownGraveyardTypeList targetKind (see resolveChosenTarget's own comment) plus a matching effect.
   "argivian find": { label: "Argivian Find — return target artifact or enchantment card from your graveyard to hand", effects: [{ type: "returnOwnGraveyardEntryToHand" }], requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact", "enchantment"] },
+  // Bala Ged Recovery // Bala Ged Sanctuary -- "Return target card from your graveyard to your
+  // hand." Plain reuse of Eternal Witness's own targetKind:"ownGraveyard" + returnGraveyardCardToHand
+  // (zero new code), just as a sorcery instead of an ETB. The land back face (Bala Ged Sanctuary,
+  // "This land enters tapped. {T}: Add {G}.") is a genuinely different mechanism -- casting a
+  // modal double-faced card as its land face has no precedent in this engine at all (no card has
+  // ever needed "cast this land-shaped half of my hand card as a land drop") -- deliberately
+  // deferred, a disclosed narrowing matching every other partial-coverage card in this file. Keyed
+  // under both the bare front-face name and the full combined MDFC name since it's unconfirmed
+  // which form this pod's own card data uses.
+  "bala ged recovery": { label: "Bala Ged Recovery — return target card from your graveyard to your hand", effects: [{ type: "returnGraveyardCardToHand" }], requiresTarget: true, targetKind: "ownGraveyard" },
+  "bala ged recovery // bala ged sanctuary": { label: "Bala Ged Recovery — return target card from your graveyard to your hand", effects: [{ type: "returnGraveyardCardToHand" }], requiresTarget: true, targetKind: "ownGraveyard" },
   // "Destroy target nonland permanent. Proliferate." -- reuses the existing targetKind:"permanent"
   // (creature/artifact only, same disclosed nonland-permanent narrowing as Anguished Unmaking/
   // Cyclonic Rift's own entries) plus the new proliferateAll effect (see its own comment for what's
@@ -2385,7 +2405,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade"];
+const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -7239,6 +7259,19 @@ function pushToStack(lobby, card, casterId) {
   // cascadeCountFromText counts literal occurrences of the word rather than assuming 1, since the
   // reminder text for this keyword never repeats the word itself.
   if (/\bcascade\b/i.test(card.text || "")) resolveCascade(lobby, casterId, card);
+  // Maelstrom Nexus -- "The first spell you cast each turn has cascade." Checked separately from
+  // the spell's own printed cascade text just above (real rulings: if the first spell already has
+  // cascade, BOTH cascade abilities trigger, resolved one after another -- not a single doubled
+  // application), so this always calls resolveCascade with a forced count of exactly 1 rather than
+  // deferring to cascadeCountFromText, which would read 0 off a spell with no cascade text of its
+  // own and silently no-op. spellsCastThisTurn was just incremented above, so === 1 here means this
+  // genuinely is the caster's first spell this turn.
+  if (casterP && casterP.spellsCastThisTurn === 1 && hasMaelstromNexusFor(lobby, casterId)) {
+    resolveCascade(lobby, casterId, card, 1);
+  }
+}
+function hasMaelstromNexusFor(lobby, ownerId) {
+  return Object.values(lobby.cards).some((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "maelstrom nexus");
 }
 function cascadeCountFromText(text) {
   return ((text || "").match(/\bcascade\b/gi) || []).length;
@@ -7251,10 +7284,10 @@ function cascadeCountFromText(text) {
 // "Put the exiled cards on the bottom in a random order" simplifies to shuffling the whole library
 // after returning them, same precedent as lookTopNRevealTypesToHand's own comment (this app's
 // library has no concept of top/bottom ordering beyond draw-from-top).
-function resolveCascade(lobby, casterId, spellCard) {
+function resolveCascade(lobby, casterId, spellCard, forcedTimes) {
   const p = lobby.players[casterId];
   if (!p) return;
-  const times = cascadeCountFromText(spellCard.text);
+  const times = forcedTimes != null ? forcedTimes : cascadeCountFromText(spellCard.text);
   for (let i = 0; i < times; i++) {
     const exiled = [];
     let found = null;
