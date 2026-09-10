@@ -914,6 +914,18 @@ const CARD_ABILITIES = {
   // "becomes the target of a spell" trigger type exists in this engine, a disclosed narrowing
   // (only the attack half of this trigger fires).
   "goldspan dragon": [{ trigger: "attack", label: "Goldspan Dragon — create a Treasure token", requiresTarget: false, effects: [{ type: "createTreasureToken" }] }],
+  "etali, primal storm": [{ trigger: "attack", requiresTarget: false, label: "Etali, Primal Storm — exile the top card of each player's library, then cast the nonland ones for free", effects: [{ type: "etaliPrimalStormExileAndCast" }] }],
+  // Bloodroot Apothecary -- Toxic 2 is ALREADY fully generic (see toxicAmountFor's own text-scan,
+  // hooked into every combat-damage-to-player site), so the only new code needed is the ETB half.
+  // createTokenForTargetPlayer already exists unchanged (Goblin Spymaster) -- just Treasure's own
+  // params instead of a Goblin token. The "whenever an opponent sacrifices a noncreature token,
+  // poison" clause is deliberately deferred: this engine has no way to distinguish a SACRIFICE from
+  // any other permanent leaving the battlefield (fireDeathTriggers fires for any death, not just a
+  // paid sacrifice cost) -- a real gap, not a quick add, matching every other partial-coverage card.
+  "bloodroot apothecary": [{ trigger: "etb", requiresTarget: true, targetKind: "opponent", label: "Bloodroot Apothecary — you and target opponent each create a Treasure token", effects: [
+    { type: "createTreasureToken" },
+    { type: "createTokenForTargetPlayer", name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg" }
+  ] }],
   // Wave 17 gap-analysis batch.
   // Goblin Chieftain/Goblin Trashmaster/Hobgoblin Bandit Lord's "Other Goblins you control get
   // +1/+1" need no table entry -- see anthemEffectsFromText's new type-scoped branch. Chieftain's
@@ -2634,6 +2646,92 @@ const EFFECTS = {
   drawCards(lobby, ctx, params) {
     const targets = params.chosenTargetId ? [params.chosenTargetId] : effectTargets(lobby, ctx.controllerId, params.target);
     targets.forEach((id) => drawN(lobby, id, params.amount || 1));
+  },
+  // Sylvan Library -- the "accept" half of the draw-step choice (see advanceOnePhase's own Draw-phase
+  // comment): draws two more cards, capturing each one's own real id (unlike drawN, whose callers
+  // never need to know WHICH card came up) so a second, per-card choice can be queued right after.
+  // Mirrors drawN's own body (including its win-on-empty-library and opponent-draw-trigger calls)
+  // rather than calling drawN directly, since drawN has no way to hand back what it just drew.
+  sylvanLibraryExtraDraw(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const drawnIds = [];
+    for (let i = 0; i < 2; i++) {
+      if (p.library.length === 0) {
+        if (hasWinOnEmptyDraw(lobby, ctx.controllerId)) {
+          pushLog(lobby, `${p.name} would draw from an empty library -- wins the game instead!`);
+          io.to(lobby.id).emit("gameOver", { winnerId: ctx.controllerId, winnerName: p.name });
+        }
+        break;
+      }
+      const entry = p.library.shift();
+      const card = spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, faceDown: true, zoneType: "hand" });
+      drawnIds.push(card.id);
+      fireGlobalOpponentDrawTriggers(lobby, ctx.controllerId, 1);
+      fireGlobalTriggerForOpponentDraw(lobby, ctx.controllerId, 1);
+    }
+    if (!drawnIds.length) return;
+    pushLog(lobby, `${p.name} draws two additional cards (Sylvan Library)`);
+    broadcastPlayers(lobby);
+    // "Choose two cards in your hand drawn this turn. For each of those cards, pay 4 life or put the
+    // card on top of your library" -- CR lets you choose ANY two cards drawn this turn (not
+    // necessarily these exact two, if other draws happened first), but in every real scenario this
+    // matters for, these ARE the two extra cards, so queuing the choice on exactly the cards just
+    // drawn is a faithful (not narrowed) implementation of the common case.
+    drawnIds.forEach((cardId) => {
+      queueOptionalPayment(lobby, {
+        playerId: ctx.controllerId, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+        label: "Sylvan Library — pay 4 life to keep this card, or put it back on top of your library",
+        costLabel: "Pay 4 life", cost: { life: 4 },
+        declinedEffects: [{ type: "returnCardToLibraryTop", targetCardId: cardId }]
+      });
+    });
+  },
+  // Sylvan Library's own decline branch, generic enough to reuse for any future "put a specific hand
+  // card back on top of its owner's library" effect.
+  returnCardToLibraryTop(lobby, ctx, params) {
+    const card = lobby.cards[params.targetCardId];
+    if (!card || card.zoneType !== "hand" || card.owner !== ctx.controllerId) return;
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    delete lobby.cards[card.id];
+    io.to(lobby.id).emit("cardRemove", card.id);
+    p.library.unshift(toEntry(card));
+    pushLog(lobby, `${p.name} puts a card back on top of their library (Sylvan Library)`);
+    broadcastPlayers(lobby);
+  },
+  // Etali, Primal Storm -- "Whenever Etali attacks, exile the top card of each player's library,
+  // then you may cast any number of spells from among those cards without paying their mana costs."
+  // Disclosed simplification (matching Cascade's own "auto-cast the found card, no choice" precedent,
+  // extended to multiple cards): every nonland exiled card is automatically cast for free rather than
+  // offering a real may/order choice among them -- this engine has no "choose some subset, in some
+  // order" UI anywhere. Lands can't be cast at all, so they're the only ones that actually end up
+  // sitting in exile (matching what real Magic does with an uncastable exiled card here too). Every
+  // free-cast card's owner is reassigned to Etali's controller (same reassignment cascade's own
+  // freeCard already does, just extended here to cards that didn't originate in the caster's own
+  // library) -- a disclosed simplification, not a fidelity gap unique to this card.
+  etaliPrimalStormExileAndCast(lobby, ctx, params) {
+    const casterId = ctx.controllerId;
+    const casterP = lobby.players[casterId];
+    if (!casterP) return;
+    const exiled = [];
+    Object.keys(lobby.players).forEach((pid) => {
+      const p = lobby.players[pid];
+      if (!p || p.library.length === 0) return;
+      exiled.push(p.library.shift());
+    });
+    broadcastPlayers(lobby);
+    if (!exiled.length) return;
+    pushLog(lobby, `${casterP.name} exiles the top card of each player's library (Etali, Primal Storm)`);
+    exiled.forEach((entry) => {
+      if ((entry.type || "").toLowerCase().includes("land")) {
+        casterP.exile = [...(casterP.exile || []), entry];
+        return;
+      }
+      const freeCard = spawnBattlefieldCard(lobby, { ...entry, owner: casterId, zoneType: "stack", faceDown: false });
+      castSpell(lobby, freeCard, casterId, " without paying its mana cost (Etali, Primal Storm)");
+    });
+    broadcastPlayers(lobby);
   },
   // Explore/Urban Evolution-style "you may play an additional land this turn" -- reuses the
   // existing p.landDropBonus field (already respected by the real play-a-land check and already
@@ -9830,6 +9928,19 @@ function advanceOnePhase(lobby) {
       const drewExtra = drawN(lobby, activeId, 1);
       if (drewExtra) pushLog(lobby, `${activePlayer.name} draws an additional card (Rites of Flourishing)`);
     }
+    // Sylvan Library -- "at the beginning of YOUR draw step" (unlike Rites of Flourishing just
+    // above, scoped to this permanent's own controller, not every player's draw step) "you may draw
+    // two additional cards." A real yes/no choice reusing queueOptionalPayment with an empty cost
+    // (see payOptionalCost's own comment for why cost:{} always costs nothing) and the new
+    // acceptedEffects hook -- accepting is what causes the actual draw.
+    const sylvanLib = Object.values(lobby.cards).find((c) => c.owner === activeId && c.zoneType !== "hand" && c.zoneType !== "stack" && /at the beginning of your draw step, you may draw two additional cards/i.test(c.text || ""));
+    if (sylvanLib) {
+      queueOptionalPayment(lobby, {
+        playerId: activeId, controllerId: activeId, sourceCard: sylvanLib,
+        label: "Sylvan Library — draw two additional cards this turn?", costLabel: "Draw 2 extra cards", cost: {},
+        acceptedEffects: [{ type: "sylvanLibraryExtraDraw" }]
+      });
+    }
   }
   broadcastTurn(lobby);
   broadcastCombat(lobby);
@@ -11781,6 +11892,14 @@ io.on("connection", (socket) => {
           label: `${entry.label} — choose a permanent to sacrifice`, effects: [{ type: "sacrificeTarget" }], targetKind: "ownPermanent"
         });
       }
+    }
+    // Sylvan Library -- the symmetric counterpart to declinedEffects just below, for a "you may X"
+    // choice framed as a free (cost: {}) optional payment where ACCEPTING is the real effect (draw
+    // two additional cards) rather than merely a cost gate. Every prior optional-payment card wanted
+    // its real consequence on the DECLINE branch (pay or lose X); this is the first one that wants it
+    // on the ACCEPT branch instead.
+    if (entry.acceptedEffects && entry.acceptedEffects.length && entry.sourceCard) {
+      pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: `${entry.label} (accepted)`, effects: entry.acceptedEffects });
     }
     promptNextOptionalPayment(lobby, socket.id);
   });
