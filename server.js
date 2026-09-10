@@ -670,6 +670,29 @@ const CARD_ABILITIES = {
   // drop is essentially never correct) -- same "no real choice worth a UI" precedent as
   // resolveCascade's own auto-cast of the found card.
   "risen reef": [{ trigger: "otherCreatureEtb", typeFilter: ["Elemental"], selfInclusive: true, requiresTarget: false, label: "Risen Reef — look at the top card, land to battlefield tapped or else to hand", effects: [{ type: "revealTopLandToBattlefieldTappedElseHand" }] }],
+  // Roxanne, Starfall Savant -- "Whenever Roxanne enters or attacks, create a tapped colorless
+  // artifact token named Meteorite with '[ETB: deal 2 damage to any target]' and '{T}: Add one
+  // mana of any color.'" Two separate trigger entries (etb + attack) sharing the same effect. The
+  // "{T}: Add any color" half needs NO table entry at all -- producedMana with 5 colors already
+  // gets the generic free-tap "chooseMana" prompt any multi-color-producing permanent gets (same
+  // precedent as original dual lands). The ETB damage half is Meteorite's OWN CARD_ABILITIES entry
+  // below, which only fires now because createToken was just generalized to call fireEtbTriggers
+  // on freshly-created tokens (a real pre-existing gap -- no token ever needed its own ETB before).
+  "roxanne, starfall savant": [
+    { trigger: "etb", requiresTarget: false, label: "Roxanne, Starfall Savant — create a tapped Meteorite token",
+      effects: [{ type: "createToken", name: "Meteorite", tokenType: "Token Artifact — Meteorite", tapped: true, producedMana: ["W", "U", "B", "R", "G"], text: "When this token enters, it deals 2 damage to any target. {T}: Add one mana of any color." }] },
+    { trigger: "attack", requiresTarget: false, label: "Roxanne, Starfall Savant — create a tapped Meteorite token",
+      effects: [{ type: "createToken", name: "Meteorite", tokenType: "Token Artifact — Meteorite", tapped: true, producedMana: ["W", "U", "B", "R", "G"], text: "When this token enters, it deals 2 damage to any target. {T}: Add one mana of any color." }] }
+  ],
+  // Meteorite's own ETB (created by Roxanne, Starfall Savant above) -- "When this token enters, it
+  // deals 2 damage to any target."
+  "meteorite": [{ trigger: "etb", requiresTarget: true, targetKind: "any", label: "Meteorite — deals 2 damage to any target", effects: [{ type: "damageTarget", amount: 2 }] }],
+  // Haywire Mite -- "When this creature dies, you gain 2 life." sourceNameFilter matched against
+  // its OWN name correctly scopes deathYouControl (which is self-inclusive by nature, see Tireless
+  // Tracker's own comment) to just this card's own death, same precedent as Tireless Tracker's
+  // "clue" filter -- the only theoretical edge case (another permanent also literally named
+  // "Haywire Mite" dying) is the same already-accepted narrowing that precedent established.
+  "haywire mite": [{ trigger: "deathYouControl", sourceNameFilter: "haywire mite", requiresTarget: false, label: "Haywire Mite — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
   // Rest in Peace -- the ETB half (exile all graveyards) is a one-shot EFFECTS call; the ongoing
   // "cards that would go to a graveyard are exiled instead" half is GRAVEYARD_REDIRECT_ALL_PLAYERS
   // (see its own comment), checked by sendToGraveyardInternal directly -- no table entry needed for
@@ -1381,6 +1404,11 @@ const ACTIVATED_ABILITIES = {
   // Sakashima the Impostor's own granted ability -- see becomeCopyPermanent's forceName/
   // addSupertype knobs and EFFECTS.queueReturnSelfToHandAtEndStep's own comment.
   "sakashima the impostor": [{ cost: { mana: "{2}{U}{U}" }, label: "Sakashima the Impostor — return it to its owner's hand at the next end step", effects: [{ type: "queueReturnSelfToHandAtEndStep" }] }],
+  // Haywire Mite -- "{G}, Sacrifice this creature: Exile target noncreature artifact or
+  // noncreature enchantment." Same typeList targetKind + exileTarget reuse as Angel of the
+  // Ruins/Reclamation Sage; doesn't explicitly exclude artifact/enchantment CREATURES (a disclosed
+  // simplification, same narrowing those two cards' own typeList reuse already carries).
+  "haywire mite": [{ cost: { mana: "{G}", sacrifice: true }, requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], label: "Haywire Mite — exile target noncreature artifact or enchantment", effects: [{ type: "exileTarget" }] }],
   // Idol of Oblivion -- two independent activated abilities. The first's "Activate only if you
   // created a token this turn" needs a real per-player token-creation tracker (p.createdTokenTurn,
   // compared against turnNumber same as every other "once per turn" gate in this file) -- stamped
@@ -2639,12 +2667,25 @@ const EFFECTS = {
   createToken(lobby, ctx, params) {
     const n = (params.amount || 1) * tokenMultiplierFor(lobby, ctx.controllerId);
     for (let i = 0; i < n; i++) {
-      spawnBattlefieldCard(lobby, {
+      const token = spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
         power: params.power, toughness: params.toughness, colors: params.colors || [],
         keywords: params.keywords || [], owner: ctx.controllerId, zoneType: classifyType(params.tokenType || "Token Creature"),
-        tapped: !!params.tapped
+        text: params.text || "", producedMana: params.producedMana || null
       });
+      // Real pre-existing bug found while building Roxanne, Starfall Savant's "create a TAPPED
+      // Meteorite": spawnBattlefieldCard's own tapped field is always computed from entersTapped()
+      // (a text scan), which NEVER looked at a literal data.tapped flag -- so params.tapped has
+      // been silently inert for every createToken caller in this file (Battle Cry Goblin's "create
+      // a tapped, attacking Goblin token" included) the whole time. Same forceTapped-after-spawn
+      // override fetchLand's own handler and Risen Reef's effect already use.
+      if (params.tapped && !token.tapped) { token.tapped = true; broadcastCard(lobby, token); }
+      // Roxanne, Starfall Savant's Meteorite token -- "When this token enters, it deals 2 damage
+      // to any target." No prior card ever needed a freshly-created TOKEN's own ETB to fire, so
+      // this was never called here before; a real gap, found while building Roxanne. Safe for
+      // every existing caller -- no prior token name has a CARD_ABILITIES "etb" entry, so this is
+      // a pure addition with zero behavior change for anything already shipped.
+      fireEtbTriggers(lobby, token);
     }
     // Idol of Oblivion's "activate only if you created a token this turn" -- stamped here since
     // this is the overwhelmingly common token-creation path (see idol of oblivion's own comment).
