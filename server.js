@@ -1373,6 +1373,13 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Basalt Monolith — Add {C}{C}{C}", effects: [{ type: "addFixedMana", colors: ["C", "C", "C"] }] },
     { cost: { mana: "{3}" }, label: "Basalt Monolith — untap this artifact", requiresTarget: false, effects: [{ type: "untapSelf" }] }
   ],
+  // Sensei's Divining Top -- both abilities have zero target/interaction beyond the player's own
+  // library. The {1} reorder is scryN itself (amount 3, noBottom -- see its own comment for why
+  // this card specifically can't be allowed to bin any of the three to the bottom).
+  "sensei's divining top": [
+    { cost: { mana: "{1}" }, label: "Sensei's Divining Top — look at the top three cards of your library, then put them back in any order", requiresTarget: false, effects: [{ type: "scryN", amount: 3, noBottom: true }] },
+    { cost: { tap: true }, label: "Sensei's Divining Top — draw a card, then put this on top of its owner's library", requiresTarget: false, effects: [{ type: "drawCards", amount: 1 }, { type: "putSelfOnTopOfLibrary" }] }
+  ],
   "ominous cemetery": [
     { cost: { tap: true }, manaAbility: true, label: "Ominous Cemetery — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{5}", tap: true, exile: true }, label: "Ominous Cemetery — target creature's owner shuffles it into their library", requiresTarget: true, targetKind: "creature", effects: [{ type: "shuffleTargetIntoLibrary" }] }
@@ -3455,6 +3462,24 @@ const EFFECTS = {
     card.tapped = false;
     broadcastCard(lobby, card);
   },
+  // Sensei's Divining Top -- "{T}: Draw a card, then put this artifact on top of its owner's
+  // library." Mirrors moveOut's own cleanup (targets/commander-ref/attachments) rather than a bare
+  // delete, even though no real deck in this pod attaches anything to an artifact like this one --
+  // consistency with the one other place a card leaves the battlefield this way costs nothing extra.
+  putSelfOnTopOfLibrary(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!card) return;
+    const owner = lobby.players[card.originalOwner || card.owner];
+    if (!owner) return;
+    delete lobby.cards[card.id];
+    if (lobby.targets[card.id]) { delete lobby.targets[card.id]; broadcastTargets(lobby); }
+    io.to(lobby.id).emit("cardRemove", card.id);
+    clearCommanderRef(lobby, card);
+    detachDependents(lobby, card);
+    owner.library.unshift(toEntry(card));
+    pushLog(lobby, `${owner.name} puts ${card.name || "a permanent"} on top of their library`);
+    broadcastPlayers(lobby);
+  },
   // Boros Charm's "permanents you control gain indestructible until end of turn" mode -- applies
   // grantTemporaryKeyword (see its own comment) to every permanent the controller has, not just one.
   // Generalized to any keyword list (default ["Indestructible"], Boros Charm's own case unchanged)
@@ -4895,9 +4920,14 @@ const EFFECTS = {
       (params.thenEffects || []).forEach((e) => { const fn = EFFECTS[e.type]; if (fn) fn(lobby, ctx, e); });
       return;
     }
-    p.pendingScry = { count: n, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
+    // Sensei's Divining Top -- "look at the top three, put them back in any order" is a REORDER,
+    // not a real scry (nothing may ever leave for the bottom). noBottom is enforced server-side in
+    // resolveScry itself (any card the client's keepIndices omits still gets force-kept, just
+    // appended after the ones it did order) rather than trusted to a cooperative client, so this
+    // stays faithful rather than silently letting the card bin cards it was never printed to bin.
+    p.pendingScry = { count: n, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id, noBottom: !!params.noBottom };
     const sock = io.sockets.sockets.get(ctx.controllerId);
-    if (sock) sock.emit("scryPrompt", { cards: p.library.slice(0, n).map((e, i) => ({ index: i, name: e.name, img: e.img, type: e.type })) });
+    if (sock) sock.emit("scryPrompt", { cards: p.library.slice(0, n).map((e, i) => ({ index: i, name: e.name, img: e.img, type: e.type })), noBottom: !!params.noBottom });
   },
   // Surveil N -- scryN's graveyard-instead-of-bottom sibling. Shares its whole shape (a private
   // pendingSurveil holding the real top-N slice, resolved by the client choosing which indices
@@ -6858,6 +6888,14 @@ function colorsAmongPermanentsFor(lobby, ownerId) {
   }
   return colors.size;
 }
+// Coat of Arms -- creature SUBTYPES only (the words after the type line's own em dash), lowercased
+// for comparison. "Legendary Creature — Elder Dinosaur" -> ["elder","dinosaur"]; a type line with no
+// em dash (a plain "Creature" token with no named subtype) returns [].
+function creatureSubtypesOf(typeLine) {
+  const parts = (typeLine || "").split("—");
+  if (parts.length < 2) return [];
+  return parts[parts.length - 1].trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
 function staticBonusFor(lobby, card) {
   let powerBonus = 0, toughnessBonus = 0;
   if (card.zoneType !== "creature") return { powerBonus, toughnessBonus };
@@ -6896,6 +6934,20 @@ function staticBonusFor(lobby, card) {
   if (/this creature gets \+1\/\+2 as long as you control a forest/i.test(card.text || "")) {
     const hasForest = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && /forest/i.test(c.type || ""));
     if (hasForest) { powerBonus += 1; toughnessBonus += 2; }
+  }
+  // Coat of Arms -- "Each creature gets +1/+1 for each other creature on the battlefield that
+  // shares at least one creature type with it." Unlike every anthem in the loop just below (all
+  // scoped to "creatures YOU control"), this affects EVERY creature at the table regardless of who
+  // controls Coat of Arms itself or the creature being computed -- checked here, before that
+  // owner-scoped loop, rather than folded into it. A creature with no subtype at all
+  // (creatureSubtypesOf returns []) can never share one with anything, correctly contributing/
+  // receiving nothing either way.
+  if (card.zoneType === "creature" && Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /each creature gets \+1\/\+1 for each other creature on the battlefield that shares at least one creature type with it/i.test(c.text || ""))) {
+    const cardTypes = creatureSubtypesOf(card.type);
+    if (cardTypes.length) {
+      const sharedTypeCount = Object.values(lobby.cards).filter((x) => x.id !== card.id && x.zoneType === "creature" && creatureSubtypesOf(x.type).some((t) => cardTypes.includes(t))).length;
+      powerBonus += sharedTypeCount; toughnessBonus += sharedTypeCount;
+    }
   }
   const cardColors = card.colors || [];
   for (const id in lobby.cards) {
@@ -8702,6 +8754,26 @@ function checkCumulativeUpkeep(lobby, activeId) {
     });
   });
 }
+// Stasis -- "At the beginning of your upkeep, sacrifice this enchantment unless you pay {U}." A
+// FLAT (non-cumulative, no age counters) per-turn sibling of checkCumulativeUpkeep just above --
+// same queueOptionalPayment/sacrificeSelf shape, generic off the printed cost, reusable for any
+// future card worded the same way (a real, recurring Magic pattern beyond just this one card).
+function flatUpkeepSacrificeCostFromText(text) {
+  const m = (text || "").match(/at the beginning of your upkeep, sacrifice (?:this|it)(?: [a-z]+)? unless you pay ((?:\{[^}]+\})+)/i);
+  return m ? m[1] : null;
+}
+function checkFlatUpkeepSacrifice(lobby, activeId) {
+  Object.values(lobby.cards).forEach((c) => {
+    if (c.owner !== activeId || c.zoneType === "hand" || c.zoneType === "stack") return;
+    const cost = flatUpkeepSacrificeCostFromText(c.text);
+    if (!cost) return;
+    queueOptionalPayment(lobby, {
+      playerId: activeId, controllerId: activeId, sourceCard: c,
+      label: `${c.name} — pay ${cost} or sacrifice it`,
+      costLabel: `Pay ${cost}`, cost: { mana: cost }, declinedEffects: [{ type: "sacrificeSelf" }]
+    });
+  });
+}
 function checkShockLandChoice(lobby, card) {
   if (card.tapped) return;
   const lifeCost = shockLandLifeCost(card);
@@ -9857,14 +9929,22 @@ function advanceOnePhase(lobby) {
     }
     activePlayer.lifeLocked = false;
     activePlayer.protectionFromEverything = false;
-    for (const id in lobby.cards) {
-      // Grim Monolith / Basalt Monolith-style "This artifact doesn't untap during your untap
-      // step" -- a pure text-scan, no table entry needed (same precedent as every other
-      // name-independent mechanism in this file). Its own separate "{N}: Untap this artifact"
-      // paid ability is the only way it comes back untapped.
-      if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped && !/this (?:artifact|permanent) doesn'?t untap during your untap step/i.test(lobby.cards[id].text || "")) {
-        lobby.cards[id].tapped = false;
-        broadcastCard(lobby, lobby.cards[id]);
+    // Stasis -- "Players skip their untap steps." Table-wide (any controller), skips only the
+    // actual UNTAPPING for everyone -- the rest of this phase's per-turn resets (landsPlayedThisTurn
+    // etc, already applied above) still happen normally, matching real Magic's "the untap step is
+    // skipped" wording, which is specifically about the untap ACTION, not the whole phase's other
+    // bookkeeping (none of which is really a game rule anyway, just this engine's own turn-tracking).
+    const stasisActive = Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /players skip their untap steps/i.test(c.text || ""));
+    if (!stasisActive) {
+      for (const id in lobby.cards) {
+        // Grim Monolith / Basalt Monolith-style "This artifact doesn't untap during your untap
+        // step" -- a pure text-scan, no table entry needed (same precedent as every other
+        // name-independent mechanism in this file). Its own separate "{N}: Untap this artifact"
+        // paid ability is the only way it comes back untapped.
+        if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped && !/this (?:artifact|permanent) doesn'?t untap during your untap step/i.test(lobby.cards[id].text || "")) {
+          lobby.cards[id].tapped = false;
+          broadcastCard(lobby, lobby.cards[id]);
+        }
       }
     }
   }
@@ -9874,8 +9954,10 @@ function advanceOnePhase(lobby) {
   // against whoever the activePlayer actually is this phase" shape as
   // fireGlobalTriggerEachOpponent, just a direct sweep instead of a real CARD_ABILITIES trigger
   // (nothing here needs a target or goes on the stack). Respects the same "doesn't untap" text
-  // exclusion the activePlayer's own untap loop above already checks.
-  if (turn.phase === "Untap") {
+  // exclusion the activePlayer's own untap loop above already checks, and the same Stasis
+  // "players skip their untap steps" gate -- if the step is skipped outright, nothing that would
+  // only happen "during" it (Seedborn Muse included) gets a chance to happen either.
+  if (turn.phase === "Untap" && !Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /players skip their untap steps/i.test(c.text || ""))) {
     for (const pid in lobby.players) {
       if (pid === activeId) continue;
       const controlsMuse = Object.values(lobby.cards).some((c) => c.owner === pid && c.zoneType !== "hand" && c.zoneType !== "stack" && /untap all permanents you control during each other player'?s untap step/i.test(c.text || ""));
@@ -9899,6 +9981,8 @@ function advanceOnePhase(lobby) {
   // pure text-scan like entersTapped rather than a table entry, since the mechanism is fully generic
   // off the printed cost. See checkCumulativeUpkeep's own comment for the age-counter/payment shape.
   if (activePlayer && turn.phase === "Upkeep") checkCumulativeUpkeep(lobby, activeId);
+  // Stasis -- see checkFlatUpkeepSacrifice's own comment for the non-cumulative shape.
+  if (activePlayer && turn.phase === "Upkeep") checkFlatUpkeepSacrifice(lobby, activeId);
   // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
   if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
   // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step,
@@ -12163,14 +12247,16 @@ io.on("connection", (socket) => {
   socket.on("resolveScry", ({ keepIndices }) => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p || !p.pendingScry) return;
-    const { count: n, thenEffects, sourceCardId } = p.pendingScry;
+    const { count: n, thenEffects, sourceCardId, noBottom } = p.pendingScry;
     const top = p.library.slice(0, n);
     const rest = p.library.slice(n);
     const seen = new Set();
     const keepOrder = (Array.isArray(keepIndices) ? keepIndices : []).filter((i) => Number.isInteger(i) && i >= 0 && i < n && !seen.has(i) && seen.add(i));
     const keep = keepOrder.map((i) => top[i]);
-    const toBottom = top.filter((_, i) => !seen.has(i));
-    p.library = [...keep, ...rest, ...toBottom];
+    const notKept = top.filter((_, i) => !seen.has(i));
+    // Sensei's Divining Top -- nothing is allowed to leave for the bottom, so anything the client's
+    // own ordering omitted still goes back on top (in its original relative order), never to rest.
+    p.library = noBottom ? [...keep, ...notKept, ...rest] : [...keep, ...rest, ...notKept];
     p.pendingScry = null;
     pushLog(lobby, `${p.name} finished scrying`);
     // Run any bundled follow-up (Preordain/Ponder's own "then draw a card") now, AFTER the reorder
