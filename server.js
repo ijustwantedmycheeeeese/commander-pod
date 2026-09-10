@@ -438,6 +438,14 @@ const CARD_ABILITIES = {
   // hatch is the "you may decline" half.
   "auton soldier": [{ trigger: "etb", requiresTarget: true, targetKind: "creature", label: "Auton Soldier — you may have this creature enter as a copy of any creature on the battlefield",
     effects: [{ type: "becomeCopyPermanent", stripLegendary: true, addType: "Artifact", addKeywords: ["Myriad"] }] }],
+  // Spark Double -- "...as a copy of a creature OR PLANESWALKER you control..." -- narrowed to
+  // creatures only, same disclosed simplification this engine already has for planeswalkers
+  // generally (no planeswalker mechanic exists at all -- classifyType has no distinct zoneType for
+  // them, they'd fall into "artifact"). Real pod impact is minimal: only one planeswalker (Jace
+  // Reawakened) exists anywhere in the backlog, and copying it wouldn't make its loyalty abilities
+  // activatable anyway. The creature-copy half is otherwise the exact real card.
+  "spark double": [{ trigger: "etb", requiresTarget: true, targetKind: "ownCreature", label: "Spark Double — you may have this creature enter as a copy of a creature you control",
+    effects: [{ type: "becomeCopyPermanent", stripLegendary: true, extraCounterOnCopy: true }] }],
   "lathliss, dragon queen": [{ trigger: "otherCreatureEtb", label: "Lathliss, Dragon Queen — create a 5/5 red Dragon creature token with flying", requiresTarget: false, typeFilter: ["dragon"], excludeTokenSources: true, effects: [{ type: "createToken", amount: 1, name: "Dragon", tokenType: "Token Creature — Dragon", power: "5", toughness: "5", colors: ["R"], keywords: ["Flying"] }] }],
   // "opponentDraws"/"opponentFirstNoncreatureSpell" are handled by fireGlobalOpponentDrawTriggers/
   // fireGlobalOpponentFirstNoncreatureSpellTriggers (drawN/pushToStack hooks) rather than
@@ -482,6 +490,21 @@ const CARD_ABILITIES = {
   // land-count condition (same pattern as Temple of the False God's own condition/lobby.cards scan,
   // just counting Plains specifically instead of any land).
   "emeria, the sky ruin": [{ trigger: "upkeep", label: "Emeria, the Sky Ruin — return target creature card from your graveyard to the battlefield", requiresTarget: true, targetKind: "ownGraveyardCreature", condition: (card, lobby) => Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "mana" && (c.type || "").toLowerCase().includes("plains")).length >= 7, effects: [{ type: "reanimateFromGraveyard" }] }],
+  // Land Tax -- "At the beginning of your upkeep, if an opponent controls more lands than you, you
+  // may search your library for up to three basic land cards... put them into your hand." "Up to
+  // three" reuses the exact same thenEffects-chaining precedent Buried Alive's own "search for up
+  // to three creature cards" already established (three nested tutorToHand calls) -- the player's
+  // existing cancelTutor escape hatch covers "you may" (canceling the first search takes zero,
+  // same as every other unmodeled early-stop-mid-chain case in this file).
+  "land tax": [{ trigger: "upkeep", requiresTarget: false,
+    condition: (card, lobby) => {
+      const myLands = Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType === "mana").length;
+      return Object.keys(lobby.players).some((pid) => pid !== card.owner && Object.values(lobby.cards).filter((c) => c.owner === pid && c.zoneType === "mana").length > myLands);
+    },
+    label: "Land Tax — search for up to three basic lands, put them into your hand",
+    effects: [{ type: "tutorToHand", typeFilter: ["plains", "island", "swamp", "mountain", "forest"],
+      thenEffects: [{ type: "tutorToHand", typeFilter: ["plains", "island", "swamp", "mountain", "forest"],
+        thenEffects: [{ type: "tutorToHand", typeFilter: ["plains", "island", "swamp", "mountain", "forest"] }] }] }] }],
   // Bugenhagen, Wise Elder -- same "control a creature with power >= N" condition shape as Bonders'
   // Enclave's activated-ability condition, just on an upkeep trigger instead.
   "bugenhagen, wise elder": [{ trigger: "upkeep", label: "Bugenhagen, Wise Elder — draw a card (you control a creature with power 7 or greater)", requiresTarget: false, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 7), effects: [{ type: "drawCards", amount: 1 }] }],
@@ -620,6 +643,25 @@ const CARD_ABILITIES = {
   // image of Field of the Dead just above -- this one WANTS the exclusion landfall doesn't apply by
   // default, via the new excludeSelf flag on fireGlobalTrigger.
   "city of traitors": [{ trigger: "landfall", excludeSelf: true, requiresTarget: false, label: "City of Traitors — sacrifice this land", effects: [{ type: "sacrificeSelf" }] }],
+  // Tatyova, Benthic Druid -- "Landfall — gain 1 life and draw a card." Pure reuse of the existing
+  // landfall trigger shape, zero new mechanism.
+  "tatyova, benthic druid": [{ trigger: "landfall", requiresTarget: false, label: "Tatyova, Benthic Druid — gain 1 life, draw a card", effects: [{ type: "gainLife", target: "controller", amount: 1 }, { type: "drawCards", amount: 1 }] }],
+  // Rest in Peace -- the ETB half (exile all graveyards) is a one-shot EFFECTS call; the ongoing
+  // "cards that would go to a graveyard are exiled instead" half is GRAVEYARD_REDIRECT_ALL_PLAYERS
+  // (see its own comment), checked by sendToGraveyardInternal directly -- no table entry needed for
+  // that half at all, same as Liesa/Valgavoth's own redirect tables.
+  "rest in peace": [{ trigger: "etb", requiresTarget: false, label: "Rest in Peace — exile all graveyards", effects: [{ type: "exileAllGraveyards" }] }],
+  // Avenger of Zendikar -- ETB "create a 0/1 green Plant creature token for each land you
+  // control," then Landfall "put a +1/+1 counter on each Plant creature you control." The ETB half
+  // generalizes createTokensEqualToTypeCountControlled with a new countZoneType ("mana" instead of
+  // "creature") and an empty typeFilter (every land counts, not just a subtype); the landfall half
+  // generalizes addCountersToAllYourCreatures with a new optional typeFilter.
+  "avenger of zendikar": [
+    { trigger: "etb", requiresTarget: false, label: "Avenger of Zendikar — create a Plant token for each land you control",
+      effects: [{ type: "createTokensEqualToTypeCountControlled", countZoneType: "mana", typeFilter: [], name: "Plant", tokenType: "Token Creature — Plant", power: "0", toughness: "1", colors: ["G"] }] },
+    { trigger: "landfall", requiresTarget: false, label: "Avenger of Zendikar — put a +1/+1 counter on each Plant you control",
+      effects: [{ type: "addCountersToAllYourCreatures", amount: 1, typeFilter: "plant" }] }
+  ],
   // See EFFECTS.attachSelfToTarget for the attach itself; the indestructible grant is already
   // generic (equipEffectsFromText) once attached.
   "mithril coat": [{ trigger: "etb", label: "Mithril Coat — attach to target legendary creature you control", requiresTarget: true, targetKind: "ownCreature", effects: [{ type: "attachSelfToTarget" }] }],
@@ -2300,7 +2342,8 @@ function isCardAutomated(cardName) {
     // own attack-tax enforcement) that this indicator simply never checked. Found while auditing the
     // full-pod-drive backlog for Propaganda specifically -- same "working mechanism in a table this
     // function forgot to look at" shape as tokenMultiplierFor's wave-1 classifier gap.
-    || !!ATTACK_TAX_EFFECTS[key]);
+    || !!ATTACK_TAX_EFFECTS[key]
+    || GRAVEYARD_REDIRECT_ALL_PLAYERS.includes(key));
 }
 
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
@@ -2592,7 +2635,12 @@ const EFFECTS = {
   // counts toward his own total (he's a Goblin), matching the real card.
   createTokensEqualToTypeCountControlled(lobby, ctx, params) {
     const filter = params.typeFilter || [];
-    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && filter.some((t) => (c.type || "").toLowerCase().includes(t))).length * tokenMultiplierFor(lobby, ctx.controllerId);
+    // Avenger of Zendikar -- "create a token for each LAND you control," not a creature subtype
+    // count. countZoneType generalizes the counted zone ("mana" for lands); an empty typeFilter
+    // (Avenger's own case -- every land counts, not just a subtype) matches everything in that
+    // zone instead of nothing.
+    const countZoneType = params.countZoneType || "creature";
+    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === countZoneType && (filter.length === 0 || filter.some((t) => (c.type || "").toLowerCase().includes(t)))).length * tokenMultiplierFor(lobby, ctx.controllerId);
     for (let i = 0; i < n; i++) {
       spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
@@ -2678,7 +2726,11 @@ const EFFECTS = {
     const amount = params.amount || 1;
     const bonus = amount > 0 ? bonusCountersFor(lobby, ctx.controllerId) : 0;
     const mult = amount > 0 ? counterMultiplierFor(lobby, ctx.controllerId) : 1;
-    Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature").forEach((c) => {
+    // Avenger of Zendikar -- "put a +1/+1 counter on EACH PLANT CREATURE you control," not every
+    // creature. Optional typeFilter narrows the same way createTokensEqualToTypeCountControlled's
+    // own filter already does; omitted, every existing caller (Cathars' Crusade, etc.) is unchanged.
+    const typeFilter = (params.typeFilter || "").toLowerCase();
+    Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && (!typeFilter || (c.type || "").toLowerCase().includes(typeFilter))).forEach((c) => {
       c.counters = (c.counters || 0) + (amount + bonus) * mult;
       broadcastCard(lobby, c);
     });
@@ -3268,6 +3320,15 @@ const EFFECTS = {
     if (params.stripLegendary) mirror.type = (mirror.type || "").replace(/\blegendary\s+/i, "");
     if (params.addType) mirror.type = `${mirror.type || ""} ${params.addType}`.trim();
     if (params.addKeywords) mirror.keywords = [...new Set([...(mirror.keywords || []), ...params.addKeywords])];
+    // Spark Double -- "...except it enters with an additional +1/+1 counter on it if it's a
+    // creature, it enters with an additional loyalty counter on it if it's a planeswalker." Checked
+    // against the COPIED type (after stripLegendary etc. above), since that's what the permanent
+    // actually IS once it becomes the copy.
+    if (params.extraCounterOnCopy) {
+      const typeLower = (mirror.type || "").toLowerCase();
+      if (typeLower.includes("creature")) mirror.counters = (mirror.counters || 0) + 1;
+      else if (typeLower.includes("planeswalker")) mirror.loyalty = (parseInt(mirror.loyalty, 10) || 0) + 1;
+    }
     mirror.zoneType = classifyType(mirror.type);
     broadcastCard(lobby, mirror);
     const p = lobby.players[ctx.controllerId];
@@ -3486,6 +3547,19 @@ const EFFECTS = {
     // runs from inside broadcastPlayers -- force it here rather than waiting on some unrelated
     // later action to happen to call it, so creatures reduced to 0 toughness die immediately.
     broadcastPlayers(lobby);
+  },
+  // Rest in Peace -- "When this enchantment enters, exile all graveyards." Graveyard entries are
+  // already plain toEntry() objects, not live lobby.cards permanents, so this just moves each
+  // player's whole graveyard array into their exile array directly -- no exileCardInternal needed
+  // (that function is for removing a BATTLEFIELD card, not relocating an already-dead one).
+  exileAllGraveyards(lobby, ctx, params) {
+    Object.values(lobby.players).forEach((p) => {
+      if (!p.graveyard || !p.graveyard.length) return;
+      p.exile = [...(p.exile || []), ...p.graveyard];
+      p.graveyard = [];
+    });
+    broadcastPlayers(lobby);
+    pushLog(lobby, `All graveyards were exiled (Rest in Peace)`);
   },
   // Rishkar's Expertise -- "Draw cards equal to the greatest power among creatures you control."
   // Same effective-power computation (base + counters + equipment/aura/anthem bonuses) Molimo/Body
@@ -8560,12 +8634,18 @@ function findAndRemoveGraveyardEntry(lobby, entryId) {
 // modeling a real choice between the two replacement effects).
 const GRAVEYARD_REDIRECT_CREATURE_ONLY = ["liesa, forgotten archangel"];
 const GRAVEYARD_REDIRECT_ANY_CARD = ["valgavoth, terror eater"];
+// Rest in Peace -- "If a card or token would be put into a graveyard from anywhere, exile it
+// instead." Table-wide (no "an opponent" qualifier at all, unlike Liesa/Valgavoth above), so this
+// list is checked BEFORE the same-owner exclusion those two rely on.
+const GRAVEYARD_REDIRECT_ALL_PLAYERS = ["rest in peace"];
 function graveyardRedirectFor(lobby, card) {
   if (card.isCommander) return false;
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
-    if (c.zoneType === "hand" || c.zoneType === "stack" || c.owner === card.owner) continue;
+    if (c.zoneType === "hand" || c.zoneType === "stack") continue;
     const key = archiveKey(c.name);
+    if (GRAVEYARD_REDIRECT_ALL_PLAYERS.includes(key)) return true;
+    if (c.owner === card.owner) continue;
     // Liesa only redirects CREATURES; Valgavoth redirects any card type ("from anywhere").
     if (card.zoneType === "creature" && GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key)) return true;
     if (GRAVEYARD_REDIRECT_ANY_CARD.includes(key)) return true;
