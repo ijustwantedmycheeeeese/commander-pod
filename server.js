@@ -698,6 +698,11 @@ const CARD_ABILITIES = {
   // "clue" filter -- the only theoretical edge case (another permanent also literally named
   // "Haywire Mite" dying) is the same already-accepted narrowing that precedent established.
   "haywire mite": [{ trigger: "deathYouControl", sourceNameFilter: "haywire mite", requiresTarget: false, label: "Haywire Mite — gain 2 life", effects: [{ type: "gainLife", target: "controller", amount: 2 }] }],
+  // Pest Infestation's own token -- "When this token dies, you gain 1 life." Name-keyed like every
+  // other named token with its own ability (Meteorite, Treasure-adjacent, etc.); a plain "death"
+  // trigger (not deathYouControl) is correct here since a token's controller IS its owner, no
+  // cross-player scoping needed.
+  "pest": [{ trigger: "death", requiresTarget: false, label: "Pest — gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }],
   // Rest in Peace -- the ETB half (exile all graveyards) is a one-shot EFFECTS call; the ongoing
   // "cards that would go to a graveyard are exiled instead" half is GRAVEYARD_REDIRECT_ALL_PLAYERS
   // (see its own comment), checked by sendToGraveyardInternal directly -- no table entry needed for
@@ -1987,6 +1992,12 @@ const SPELL_ABILITIES = {
   // same "counter that just grants a keyword forever" narrowing used everywhere else a non-+1/+1
   // counter type shows up), and untapTarget (Thousand-Year Elixir's own effect) verbatim.
   "sudden spinnerets": { label: "Sudden Spinnerets — target creature gets +1/+3, a reach counter, untapped", effects: [{ type: "grantTemporaryPTAndKeywordsToTarget", power: 1, toughness: 3 }, { type: "grantKeywordToTarget", keyword: "Reach", permanent: true }, { type: "untapTarget" }], requiresTarget: true, targetKind: "creature" },
+  // Gift of the Viper -- "Put a +1/+1 counter, a reach counter, and a deathtouch counter on target
+  // creature. Untap it." Same shape as Sudden Spinnerets just above, but the +1/+1 half is a REAL
+  // permanent counter here (not "until end of turn"), so it uses addCountersToTarget instead of the
+  // temporary grantTemporaryPTAndKeywordsToTarget; reach/deathtouch both simplify to permanent
+  // keyword grants, this file's standing narrowing for non-+1/+1 counter types.
+  "gift of the viper": { label: "Gift of the Viper — target creature gets a +1/+1 counter, reach, deathtouch, untapped", effects: [{ type: "addCountersToTarget", amount: 1 }, { type: "grantKeywordToTarget", keyword: "Reach", permanent: true }, { type: "grantKeywordToTarget", keyword: "Deathtouch", permanent: true }, { type: "untapTarget" }], requiresTarget: true, targetKind: "creature" },
   "tezzeret's gambit": { label: "Tezzeret's Gambit — draw two cards, proliferate", effects: [{ type: "drawCards", amount: 2 }, { type: "proliferateAll" }] },
   // Storm isn't modeled (no copy-per-prior-spell mechanic exists) -- only the Proliferate half ships.
   "radstorm": { label: "Radstorm — proliferate", effects: [{ type: "proliferateAll" }] },
@@ -2209,6 +2220,15 @@ const SPELL_ABILITIES = {
   // -X/-X until end of turn." X is chosen freely by the caster (payXLife, see attemptPlay's own
   // comment) and baked into this effect's own xAmount at cast time -- no target needed.
   "toxic deluge": { label: "Toxic Deluge — pay X life, all creatures get -X/-X until end of turn", additionalCost: { payXLife: true }, effects: [{ type: "allCreaturesGetMinusX" }] },
+  // Pest Infestation -- "Destroy up to X target artifacts and/or enchantments. Create twice X 1/1
+  // black and green Pest creature tokens with 'when this token dies, you gain 1 life.'" "Up to X"
+  // narrows to exactly one target, this file's standing precedent for "up to N" targeting a single
+  // type (Angel of the Ruins/Sylvan Reclamation's own "up to two" -> one). The token half is the
+  // first real cast-time-X-scaled effect in this file -- see createToken's own xMultiplier param.
+  "pest infestation": { label: "Pest Infestation — destroy target artifact or enchantment, create twice X Pest tokens", effects: [
+    { type: "destroyTarget" },
+    { type: "createToken", name: "Pest", tokenType: "Token Creature — Pest", power: "1", toughness: "1", colors: ["B", "G"], text: "When this token dies, you gain 1 life.", xMultiplier: 2 }
+  ], requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"] },
   // Delayed Blast Fireball -- front half only (the base, non-Foretell cast at its printed cost; see
   // EFFECTS.damageEachOpponentAndTheirCreatures' own comment for why the doubled Foretell damage is
   // deliberately deferred).
@@ -2478,7 +2498,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus"];
+const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus", "kird ape"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -2776,7 +2796,12 @@ const EFFECTS = {
   // practice despite looking correct in the table and resolving "cleanly" off the stack. Found while
   // adding Windcrag Siege's token trigger, which copied the exact same (broken) shape.
   createToken(lobby, ctx, params) {
-    const n = (params.amount || 1) * tokenMultiplierFor(lobby, ctx.controllerId);
+    // Pest Infestation -- "create twice X 1/1 Pest tokens." params.xMultiplier (absent for every
+    // existing caller, so this is fully backward compatible) scales the base count off the real
+    // cast-time X value (see attemptPlay/executeSpellEffectsNow's own xAmount threading) instead of
+    // a fixed params.amount.
+    const baseAmount = params.xMultiplier != null ? (params.xAmount || 0) * params.xMultiplier : (params.amount || 1);
+    const n = baseAmount * tokenMultiplierFor(lobby, ctx.controllerId);
     for (let i = 0; i < n; i++) {
       const token = spawnBattlefieldCard(lobby, {
         name: params.name || "Token", type: params.tokenType || "Token Creature", img: params.img || "",
@@ -6492,6 +6517,13 @@ function staticBonusFor(lobby, card) {
     const hasOtherMulti = Object.values(lobby.cards).some((c) => c.id !== card.id && c.owner === card.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && (c.colors || []).length >= 2);
     if (hasOtherMulti) { powerBonus += 1; toughnessBonus += 1; }
   }
+  // Kird Ape -- "This creature gets +1/+2 as long as you control a Forest." Same self-referential
+  // conditional shape as Jund Hackblade just above, just checking basic land type control instead
+  // of another multicolored permanent.
+  if (/this creature gets \+1\/\+2 as long as you control a forest/i.test(card.text || "")) {
+    const hasForest = Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && /forest/i.test(c.type || ""));
+    if (hasForest) { powerBonus += 1; toughnessBonus += 2; }
+  }
   const cardColors = card.colors || [];
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
@@ -7268,6 +7300,18 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
     // precedent castSpell's own target-choice branches already use (line ~10598) -- Toxic Deluge
     // has no target, so this is the only place the chosen X ever reaches its effect.
     card._resolvedSpellEffects = (spellAbility.effects || []).map((e) => ({ ...e, xAmount: life }));
+  } else if (cost.x) {
+    // Pest Infestation -- a REAL {X} mana cost (not Toxic Deluge's payXLife) whose own EFFECT scales
+    // with X ("create twice X tokens"), not just its cost. Every X-cost card automated before this
+    // one was an ACTIVATED ability (Silklash Spider, Kessig Wolf Run), which already threads xValue
+    // into its effects via fireTrigger's own xValue param -- no cast SORCERY/INSTANT ever needed X
+    // in its effects before, only in its mana cost, so this path never existed. Stashed directly on
+    // the card object (survives through both the untargeted resolveStackTop path AND the targeted
+    // queueTargetChoice/chooseTargetFor path, which sets its own _resolvedSpellEffects later and
+    // would otherwise clobber a value baked in here) -- executeSpellEffectsNow reads it back and
+    // merges it into every effect right before resolution, the single choke point both paths funnel
+    // through.
+    card._castXValue = xValue || 0;
   }
   return { ok: true };
 }
@@ -7998,9 +8042,14 @@ function resolveChosenTarget(lobby, entry, targetId) {
 // and chooseTargetFor's spell-completion branch (target-requiring spells, once chosen).
 function executeSpellEffectsNow(lobby, card, effects) {
   const ctx = { controllerId: card.owner, sourceCard: { id: card.id } };
+  // Pest Infestation and any future real {X}-cost spell whose EFFECT scales with X -- see
+  // attemptPlay's own cost.x branch for why this is stashed on the card rather than baked into
+  // `effects` up front (the targeted-spell path sets its own _resolvedSpellEffects later, which
+  // would otherwise clobber it).
+  const xAmount = card._castXValue;
   (effects || []).forEach((params) => {
     const fn = EFFECTS[params.type];
-    if (fn) fn(lobby, ctx, params);
+    if (fn) fn(lobby, ctx, xAmount != null ? { ...params, xAmount } : params);
   });
   checkEliminations(lobby);
   broadcastPlayers(lobby);
