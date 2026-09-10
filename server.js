@@ -2545,6 +2545,11 @@ const SPELL_ABILITIES = {
   // "cover the common real use, note what's left out" precedent as every other partial-coverage
   // card in this file.
   "muddle the mixture": { label: "Muddle the Mixture — counter target instant or sorcery spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "instantOrSorcerySpell" },
+  "flusterstorm": { label: "Flusterstorm — counter target instant or sorcery spell unless its controller pays {1}", effects: [{ type: "counterTargetSpellUnlessPay", payAmount: 1 }], requiresTarget: true, targetKind: "instantOrSorcerySpell" },
+  "pact of negation": { label: "Pact of Negation — counter target spell; at your next upkeep, pay {3}{U}{U} or lose the game", effects: [{ type: "counterTargetSpell" }, { type: "queuePactPayment" }], requiresTarget: true, targetKind: "spell" },
+  // {U/P} simplifies to a plain {U} cost (Phyrexian mana's "or pay 2 life" alternative isn't
+  // modeled anywhere in this engine), same disclosed narrowing Spellskite's own {U/P} already uses.
+  "mental misstep": { label: "Mental Misstep — counter target spell with mana value 1", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "spellMvFilter", maxCmc: 1 },
   // Irenicus's Vile Duplication -- "Create a token that's a copy of target creature you control,
   // except the token has flying and it isn't legendary."
   "irenicus's vile duplication": { label: "Irenicus's Vile Duplication — create a token copy of target creature you control, with flying, not legendary", effects: [{ type: "createTokenCopyOfTargetCreature", stripLegendary: true, addKeywords: ["Flying"] }], requiresTarget: true, targetKind: "ownCreature" }
@@ -4497,6 +4502,53 @@ const EFFECTS = {
     const owner = lobby.players[item.owner];
     const caster = lobby.players[ctx.controllerId];
     if (owner) pushLog(lobby, `${caster ? caster.name : "Someone"} countered ${owner.name}'s ${item.name || "spell"}`);
+  },
+  // Flusterstorm -- "Counter target instant or sorcery spell UNLESS its controller pays {1}." The
+  // first "counter unless pay" card in this file -- reuses the existing queueOptionalPayment engine
+  // (Rhystic Study/shocklands/etc.), with the target's own id captured NOW (while Flusterstorm's
+  // own resolution is still synchronous) and baked into declinedEffects so counterTargetSpell still
+  // knows what to counter once the payment prompt is actually answered. Storm isn't modeled (no
+  // copy-per-prior-spell-this-turn mechanic exists anywhere in this engine) -- a disclosed
+  // narrowing, only the base "counter unless pay" effect ships.
+  counterTargetSpellUnlessPay(lobby, ctx, params) {
+    const stackItemId = params.chosenTargetId;
+    const item = lobby.stack.find((s) => s.id === stackItemId);
+    if (!item) return;
+    const sourceName = (ctx.sourceCard && lobby.cards[ctx.sourceCard.id] && lobby.cards[ctx.sourceCard.id].name) || "That spell";
+    const payAmount = params.payAmount || 1;
+    queueOptionalPayment(lobby, {
+      playerId: item.owner, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: `${sourceName} — pay {${payAmount}} or ${item.name || "that spell"} is countered`,
+      costLabel: `Pay {${payAmount}}`, cost: { mana: `{${payAmount}}` },
+      declinedEffects: [{ type: "counterTargetSpell", chosenTargetId: stackItemId }]
+    });
+  },
+  // Pact of Negation -- "Counter target spell. At the beginning of your next upkeep, pay {3}{U}{U}.
+  // If you don't, you lose the game." Queues a real delayed trigger (ownTurnOnly: true -- see
+  // queueDelayedTrigger's own new comment for why this needed a real generalization, not just the
+  // next end step's own "whoever's turn" default) that, once due, offers the real payment via the
+  // same queueOptionalPayment engine, declining calls the new loseTheGame effect.
+  queuePactPayment(lobby, ctx, params) {
+    queueDelayedTrigger(lobby, {
+      firesAtPhase: "Upkeep", controllerId: ctx.controllerId, sourceCard: ctx.sourceCard, ownTurnOnly: true,
+      label: "Pact of Negation — pay {3}{U}{U} or you lose the game",
+      effects: [{ type: "offerPactPaymentOrLose" }]
+    });
+  },
+  offerPactPaymentOrLose(lobby, ctx, params) {
+    queueOptionalPayment(lobby, {
+      playerId: ctx.controllerId, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: "Pact of Negation — pay {3}{U}{U} or you lose the game",
+      costLabel: "Pay {3}{U}{U}", cost: { mana: "{3}{U}{U}" },
+      declinedEffects: [{ type: "loseTheGame" }]
+    });
+  },
+  // Shared by Pact of Negation's own declined payment and any future "if you don't, you lose the
+  // game" card -- reuses eliminatePlayer/checkGameOver verbatim (the same real elimination path
+  // life-loss/poison/the concede button all already funnel through).
+  loseTheGame(lobby, ctx, params) {
+    eliminatePlayer(lobby, ctx.controllerId);
+    checkGameOver(lobby);
   },
   // Force of Negation -- "if that spell is countered this way, exile it instead of putting it into
   // its owner's graveyard." Same shape as counterTargetSpell above, but removeStackItem always
@@ -7869,7 +7921,10 @@ function castSpell(lobby, card, casterId, logSuffix) {
       queueTargetChoice(lobby, {
         kind: "castSpell", controllerId: casterId, spellCard: card, sourceCard: card,
         label: spellAbility.label, effects: spellAbility.effects, targetKind: spellAbility.targetKind,
-        minCmc: spellAbility.minCmc || null, typeFilter: spellAbility.typeFilter || null, logSuffix: logSuffix || ""
+        // Mental Misstep -- maxCmc (targetKind:"spellMvFilter") forwarded the same way minCmc/
+        // typeFilter already are, a real gap found while building it (this field never had a caller
+        // before, so its absence here was never noticed).
+        minCmc: spellAbility.minCmc || null, maxCmc: spellAbility.maxCmc != null ? spellAbility.maxCmc : null, typeFilter: spellAbility.typeFilter || null, logSuffix: logSuffix || ""
       });
       return;
     }
@@ -7901,9 +7956,9 @@ function pushAbilityToStack(lobby, { sourceCard, controllerId, label, effects })
 // on a SPECIFIC card (Whip of Erebos exiling the exact creature it just reanimated), bake that
 // card's id into `effects` at queue time, the same "capture the dynamic bit now" pattern used
 // throughout this engine (fireCombatDamageToPlayerTriggers, etc.) rather than re-resolving it later.
-function queueDelayedTrigger(lobby, { firesAtPhase, controllerId, sourceCard, label, effects }) {
+function queueDelayedTrigger(lobby, { firesAtPhase, controllerId, sourceCard, label, effects, ownTurnOnly }) {
   if (!lobby.delayedTriggers) lobby.delayedTriggers = [];
-  lobby.delayedTriggers.push({ firesAtPhase, controllerId, sourceCard, label, effects });
+  lobby.delayedTriggers.push({ firesAtPhase, controllerId, sourceCard, label, effects, ownTurnOnly: !!ownTurnOnly });
 }
 
 // "That player may pay X; if they don't, Y happens" (Smothering Tithe, Esper Sentinel, Rakdos,
@@ -8013,6 +8068,16 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!s || s.kind === "ability") return { ok: false, error: "Choose an instant or sorcery spell on the stack." };
     const typeLower = (s.type || "").toLowerCase();
     if (!typeLower.includes("instant") && !typeLower.includes("sorcery")) return { ok: false, error: "Choose an instant or sorcery spell." };
+    return { ok: true };
+  }
+  // Mental Misstep -- "counter target spell with mana value 1." Same real-spell-only shape as
+  // instantOrSorcerySpell just above, filtered on cmc via entry.maxCmc instead of a type substring
+  // (same "generalize the number, not the shape" precedent ownGraveyardMvFilter already uses for a
+  // graveyard-side mana-value filter).
+  if (targetKind === "spellMvFilter") {
+    const s = lobby.stack.find((s) => s.id === targetId);
+    if (!s || s.kind === "ability") return { ok: false, error: "Choose a spell on the stack." };
+    if ((s.cmc || 0) !== (entry.maxCmc != null ? entry.maxCmc : 0)) return { ok: false, error: `Choose a spell with mana value ${entry.maxCmc}.` };
     return { ok: true };
   }
   if (targetKind === "any") {
@@ -9640,9 +9705,14 @@ function advanceOnePhase(lobby) {
   // as the real "the next end step" wording -- not necessarily the queuing player's own), then
   // removes itself. See queueDelayedTrigger.
   if (lobby.delayedTriggers && lobby.delayedTriggers.length) {
-    const due = lobby.delayedTriggers.filter((dt) => dt.firesAtPhase === turn.phase);
+    // Pact of Negation -- "At the beginning of YOUR next upkeep" is scoped to the queuing player's
+    // OWN turn specifically, unlike Whip of Erebos/Liesa's own "the next end step" (whoever's turn
+    // it happens to be) -- a new opt-in ownTurnOnly flag (absent for every existing caller, so
+    // their behavior is completely unchanged) narrows the match to exactly that.
+    const isDue = (dt) => dt.firesAtPhase === turn.phase && (!dt.ownTurnOnly || turn.order[turn.activeIndex] === dt.controllerId);
+    const due = lobby.delayedTriggers.filter(isDue);
     if (due.length) {
-      lobby.delayedTriggers = lobby.delayedTriggers.filter((dt) => dt.firesAtPhase !== turn.phase);
+      lobby.delayedTriggers = lobby.delayedTriggers.filter((dt) => !isDue(dt));
       // A departing player's own delayed trigger is simply dropped -- nowhere sensible to resolve
       // it, same "discard rather than error" precedent discardPendingTargetChoices already follows.
       due.filter((dt) => lobby.players[dt.controllerId]).forEach((dt) => pushAbilityToStack(lobby, { sourceCard: dt.sourceCard, controllerId: dt.controllerId, label: dt.label, effects: dt.effects }));
