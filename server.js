@@ -2274,7 +2274,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond"];
+const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -2295,7 +2295,12 @@ function isCardAutomated(cardName) {
   const key = archiveKey(cardName);
   return !!(CARD_ABILITIES[key] || ACTIVATED_ABILITIES[key] || SPELL_ABILITIES[key]
     || ENTERS_TAPPED_FOR_OPPONENTS.includes(key) || ATTACK_ALONE_CARDS.includes(key) || DAMAGE_DOUBLING_CARDS.includes(key) || SELF_DAMAGE_HALVING_CARDS.includes(key)
-    || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key) || ALT_COSTS[key] || DEDICATED_FUNCTION_CARDS.includes(key));
+    || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key) || ALT_COSTS[key] || DEDICATED_FUNCTION_CARDS.includes(key)
+    // Propaganda/Ghostly Prison/Windborn Muse -- a real, already-working mechanism (declareAttackers'
+    // own attack-tax enforcement) that this indicator simply never checked. Found while auditing the
+    // full-pod-drive backlog for Propaganda specifically -- same "working mechanism in a table this
+    // function forgot to look at" shape as tokenMultiplierFor's wave-1 classifier gap.
+    || !!ATTACK_TAX_EFFECTS[key]);
 }
 
 // Each effect handler runs as (lobby, ctx, params) where ctx = {controllerId, sourceCard}. No
@@ -6884,6 +6889,23 @@ function checkTiming(lobby, socketId, card) {
   return { ok: true };
 }
 
+// Grand Abolisher -- "During your turn, your opponents can't cast spells or activate abilities of
+// artifacts, creatures, or enchantments." A pure text-scan static restriction (no fixed name list,
+// same precedent as spellCostReductionFor/isProtectedFromCountering) -- scoped to its OWN controller's
+// turn (not just "Grand Abolisher's controller exists"), and only ever restricts someone who ISN'T
+// that controller (real Magic's own "your opponents," never affects the controller's own actions).
+// Checked at both canCastSpells (casting) and the activateAbility handler (activated abilities) --
+// doesn't restrict instants/sorceries, which the real card's own wording never mentions.
+function grandAbolisherRestricts(lobby, casterId, cardType) {
+  const typeLower = (cardType || "").toLowerCase();
+  if (!(typeLower.includes("artifact") || typeLower.includes("creature") || typeLower.includes("enchantment"))) return false;
+  const activeId = lobby.turn.order[lobby.turn.activeIndex];
+  return Object.values(lobby.cards).some((c) => {
+    if (c.zoneType === "hand" || c.zoneType === "stack") return false;
+    if (c.owner === casterId || c.owner !== activeId) return false;
+    return /during your turn, your opponents can'?t cast spells or activate abilities of artifacts, creatures, or enchantments/i.test(c.text || "");
+  });
+}
 // Orim's Chant's "can't cast spells this turn" -- checked at the same call sites as checkTiming
 // (playCard, freeCastCard), but only for actual SPELLS: playing a LAND is never "casting a spell"
 // in real Magic, so a land classification is exempt.
@@ -6891,6 +6913,9 @@ function canCastSpells(lobby, socketId, card) {
   if (classifyType(card.type) === "mana") return { ok: true };
   if (lobby.players[socketId] && lobby.players[socketId].cantCastSpells) {
     return { ok: false, error: `You can't cast spells this turn.` };
+  }
+  if (grandAbolisherRestricts(lobby, socketId, card.type)) {
+    return { ok: false, error: `An opponent's Grand Abolisher stops you from casting that right now.` };
   }
   return { ok: true };
 }
@@ -10230,6 +10255,10 @@ io.on("connection", (socket) => {
     // fireAttackTriggers already follow, just enforced with a real error here since this is a
     // player-initiated action, not a silent automatic trigger.
     if (!lobby.turn.started) { socket.emit("actionError", "You can't activate abilities before the game starts."); return; }
+    if (grandAbolisherRestricts(lobby, socket.id, card.type)) {
+      socket.emit("actionError", `An opponent's Grand Abolisher stops you from activating that right now.`);
+      return;
+    }
     const ability = getActivatedAbilities(card, lobby)[abilityIndex];
     if (!ability) return;
     // Reject BEFORE paying anything if this ability could never find a legal target right now --
