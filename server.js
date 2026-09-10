@@ -541,6 +541,25 @@ const CARD_ABILITIES = {
   // Enclave's activated-ability condition, just on an upkeep trigger instead.
   "bugenhagen, wise elder": [{ trigger: "upkeep", label: "Bugenhagen, Wise Elder — draw a card (you control a creature with power 7 or greater)", requiresTarget: false, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus) >= 7), effects: [{ type: "drawCards", amount: 1 }] }],
   "descent into avernus": [{ trigger: "upkeep", requiresTarget: false, label: "Descent into Avernus — add 2 descent counters, each player creates Treasures and takes damage equal to the counters", effects: [{ type: "descentIntoAvernusTick" }] }],
+  // Scrawling Crawler -- draw half (each player draws) is a plain "upkeep" trigger reusing
+  // drawCards' new target:"eachPlayer" support; the life-loss half reuses the existing
+  // opponentDrawsCard dispatcher's new opt-in dynamicTargetOwner flag (see
+  // fireGlobalTriggerForOpponentDraw's own comment) to apply to the DRAWING player, not this
+  // ability's own controller.
+  "scrawling crawler": [
+    { trigger: "upkeep", requiresTarget: false, label: "Scrawling Crawler — each player draws a card", effects: [{ type: "drawCards", target: "eachPlayer" }] },
+    { trigger: "opponentDrawsCard", dynamicTargetOwner: true, requiresTarget: false, label: "Scrawling Crawler — that player loses 1 life", effects: [{ type: "loseLife", amount: 1 }] }
+  ],
+  // Kibo, Uktabi Prince -- two of its three abilities. The Banana token's own "{T}, Sacrifice this
+  // token: Add {R} or {G}. You gain 2 life" needs a real name-keyed ACTIVATED_ABILITIES entry (see
+  // "banana" below) since it's restricted to two colors AND grants life, unlike the generic
+  // any-color free-tap shortcut. "Whenever Kibo attacks, defending player sacrifices an artifact of
+  // their choice" is deliberately deferred -- a real player CHOICE among their own artifacts with
+  // no precedent in this engine (every existing forced-sacrifice site auto-picks), a disclosed
+  // narrowing matching every other partial-coverage card in this file.
+  "kibo, uktabi prince": [
+    { trigger: "deathAnyCreature", eventCardTypeFilter: ["artifact"], opponentOnly: true, requiresTarget: false, label: "Kibo, Uktabi Prince — +1/+1 counter on each Ape or Monkey you control", effects: [{ type: "addCountersToAllYourCreatures", amount: 1, typeFilter: ["ape", "monkey"] }] }
+  ],
   // Dark Depths -- the ETB half ("enters with ten ice counters") is applied synchronously inline
   // inside fireEtbTriggers itself (see its own comment for why -- a real ordering bug going through
   // the normal stack-based trigger path), not a table entry here. The "{3}: remove an ice counter"
@@ -1713,6 +1732,16 @@ const ACTIVATED_ABILITIES = {
   "contagion engine": [{ cost: { mana: "{4}", tap: true }, label: "Contagion Engine — Proliferate twice", effects: [{ type: "proliferateAll", times: 2 }] }],
   "karn's bastion": [{ cost: { mana: "{4}", tap: true }, label: "Karn's Bastion — Proliferate", effects: [{ type: "proliferateAll" }] }],
   "dark depths": [{ cost: { mana: "{3}" }, requiresTarget: false, label: "Dark Depths — remove an ice counter", effects: [{ type: "removeCounterFromSelf" }] }],
+  "coretapper": [
+    { cost: { tap: true }, requiresTarget: true, targetKind: "artifact", label: "Coretapper — put a charge counter on target artifact", effects: [{ type: "addCountersToTarget" }] },
+    { cost: { sacrifice: true }, requiresTarget: true, targetKind: "artifact", label: "Coretapper — put two charge counters on target artifact", effects: [{ type: "addCountersToTarget", amount: 2 }] }
+  ],
+  "kibo, uktabi prince": [{ cost: { tap: true }, requiresTarget: false, label: "Kibo, Uktabi Prince — each player creates a Banana token", effects: [{ type: "createTokenForEachPlayer", name: "Banana", tokenType: "Token Artifact — Banana", producedMana: ["R", "G"], text: "{T}, Sacrifice this token: Add {R} or {G}. You gain 2 life." }] }],
+  // The Banana token's own mana ability -- restricted to two colors AND grants 2 life, so it needs
+  // its own real entry (the generic free-tap shortcut only ever offers unrestricted any-color mana
+  // with no side effect). manaAbility runs every effect in its array synchronously, so the choice
+  // and the lifegain both apply from one activation with no new plumbing.
+  "banana": [{ cost: { tap: true, sacrifice: true }, manaAbility: true, label: "Banana — Add {R} or {G}, gain 2 life", effects: [{ type: "chooseManaFromOptionsWithPain", options: ["R", "G"], painDamage: 0, sourceName: "Banana" }, { type: "gainLife", target: "controller", amount: 2 }] }],
   // Spellskite -- {U/P} simplifies to a plain {U} cost (this engine doesn't model Phyrexian mana's
   // "or pay 2 life" alternative payment anywhere), a disclosed narrowing.
   "spellskite": [{ cost: { mana: "{U}" }, requiresTarget: true, targetKind: "spell", label: "Spellskite — change a target of target spell or ability to this creature", effects: [{ type: "redirectStackItemTargetToSelf" }] }],
@@ -2594,7 +2623,13 @@ function effectTargets(lobby, controllerId, target) {
   return [controllerId]; // "controller" (default)
 }
 const EFFECTS = {
-  drawCards(lobby, ctx, params) { drawN(lobby, ctx.controllerId, params.amount || 1); },
+  // Scrawling Crawler -- "each player draws a card." params.target (absent for every existing
+  // caller, so this is fully backward compatible) reuses effectTargets' own "eachPlayer"/
+  // "eachOpponent" scope, same shape loseLife already established, instead of always the controller.
+  drawCards(lobby, ctx, params) {
+    const targets = params.chosenTargetId ? [params.chosenTargetId] : effectTargets(lobby, ctx.controllerId, params.target);
+    targets.forEach((id) => drawN(lobby, id, params.amount || 1));
+  },
   // Explore/Urban Evolution-style "you may play an additional land this turn" -- reuses the
   // existing p.landDropBonus field (already respected by the real play-a-land check and already
   // reset to 0 every turn) rather than the manual landDropBonus socket event, which is the
@@ -2909,6 +2944,15 @@ const EFFECTS = {
     // this is the overwhelmingly common token-creation path (see idol of oblivion's own comment).
     if (n > 0 && lobby.players[ctx.controllerId]) lobby.players[ctx.controllerId].createdTokenTurn = lobby.turn.turnNumber;
   },
+  // Kibo, Uktabi Prince -- "each player creates a colorless artifact token named Banana..." Loops
+  // the plain createToken above once per player at the table -- each call still independently
+  // respects THAT player's own tokenMultiplierFor, same shape Descent into Avernus's own per-player
+  // Treasure creation already established.
+  createTokenForEachPlayer(lobby, ctx, params) {
+    Object.keys(lobby.players).forEach((pid) => {
+      EFFECTS.createToken(lobby, { controllerId: pid, sourceCard: ctx.sourceCard }, params);
+    });
+  },
   // Forbidden Orchard -- "target opponent creates a 1/1 colorless Spirit creature token." The
   // chosen-target counterpart to createToken (which always makes tokens for the controller) --
   // owner: params.chosenTargetId instead of ctx.controllerId, same "owner override" shape
@@ -3096,8 +3140,12 @@ const EFFECTS = {
     // Avenger of Zendikar -- "put a +1/+1 counter on EACH PLANT CREATURE you control," not every
     // creature. Optional typeFilter narrows the same way createTokensEqualToTypeCountControlled's
     // own filter already does; omitted, every existing caller (Cathars' Crusade, etc.) is unchanged.
-    const typeFilter = (params.typeFilter || "").toLowerCase();
-    Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && (!typeFilter || (c.type || "").toLowerCase().includes(typeFilter))).forEach((c) => {
+    // Kibo, Uktabi Prince -- "each creature you control that's an Ape OR a Monkey" needs a real
+    // union, not a single substring -- typeFilter can now be an array (matches if ANY entry is a
+    // substring of the type line), same wrap-a-plain-string-unchanged shape tutorToHand's own
+    // typeFilter already uses for Mystical Tutor's "instant or sorcery."
+    const typeFilters = params.typeFilter ? (Array.isArray(params.typeFilter) ? params.typeFilter : [params.typeFilter]).map((t) => t.toLowerCase()) : [];
+    Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && (!typeFilters.length || typeFilters.some((t) => (c.type || "").toLowerCase().includes(t)))).forEach((c) => {
       c.counters = (c.counters || 0) + (amount + bonus) * mult;
       broadcastCard(lobby, c);
     });
@@ -7373,7 +7421,17 @@ function fireGlobalTriggerForOpponentDraw(lobby, drawingPlayerId, count) {
     const c = lobby.cards[id];
     if (c.owner === drawingPlayerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
     getAutomatedAbilities(c.name, "opponentDrawsCard").forEach((ability) => {
-      for (let i = 0; i < count; i++) fireTrigger(lobby, c, ability);
+      // Scrawling Crawler -- "that player loses 1 life" (the DRAWER, not this ability's own
+      // controller/watcher) -- same opt-in dynamicTargetOwner flag/shape Gimli's own
+      // fireGlobalTriggerAllPlayers dispatcher already established, so Consecrated Sphinx's
+      // existing use of this same dispatcher (drawCards, no dynamicTargetOwner set) is completely
+      // unaffected and keeps defaulting to its own controller.
+      if (ability.dynamicTargetOwner) {
+        const effects = (ability.effects || []).map((e) => ({ ...e, chosenTargetId: drawingPlayerId }));
+        for (let i = 0; i < count; i++) fireTrigger(lobby, c, { ...ability, effects });
+      } else {
+        for (let i = 0; i < count; i++) fireTrigger(lobby, c, ability);
+      }
     });
   }
 }
