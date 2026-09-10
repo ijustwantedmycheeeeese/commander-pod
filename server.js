@@ -2316,7 +2316,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher"];
+const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -5946,6 +5946,14 @@ function anthemEffectsFromText(text) {
     if (t.slice(Math.max(0, sm.index - 6), sm.index).toLowerCase() === "other ") continue;
     clauses.push({ powerBonus: parseInt(sm[2], 10) || 0, toughnessBonus: parseInt(sm[3], 10) || 0, colorFilter: null, typeFilter: word, includesSelf: true });
   }
+  // Mirror Box -- "Each legendary creature you control gets +1/+1," the SINGULAR "each X creature
+  // ... gets" phrasing (not the plural "X creatures ... get" every branch above expects) -- a
+  // separate regex rather than trying to make bareTypeRe's plural-only grammar handle both.
+  const eachSingularRe = /each (\w+) creature you control gets ([+-]\d+)\/([+-]\d+)/gi;
+  let em;
+  while ((em = eachSingularRe.exec(t))) {
+    clauses.push({ powerBonus: parseInt(em[2], 10) || 0, toughnessBonus: parseInt(em[3], 10) || 0, colorFilter: null, typeFilter: em[1].toLowerCase(), includesSelf: true });
+  }
   return clauses;
 }
 // Sedge Sliver -- "All Sliver creatures have 'This creature gets +1/+1 as long as you control a
@@ -6011,6 +6019,21 @@ function spellCostReductionFor(lobby, ownerId, card) {
     reduction += Object.values(lobby.cards)
       .filter((c) => c.owner === ownerId && c.zoneType === "creature")
       .reduce((sum, c) => sum + parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus, 0);
+  }
+  return reduction;
+}
+// Training Grounds -- "Activated abilities of creatures you control cost {2} less to activate.
+// This effect can't reduce the mana in that cost to less than one mana." Same text-scan, no-
+// fixed-name-list precedent as spellCostReductionFor above, just for activated abilities instead
+// of spell casts -- checked by the activateAbility handler, scoped there to creature-owned
+// abilities only (this function doesn't need to re-check that).
+function activatedAbilityCostReductionFor(lobby, ownerId) {
+  let reduction = 0;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    const m = (c.text || "").match(/activated abilities of creatures you control cost \{(\d+)\} less to activate/i);
+    if (m) reduction += parseInt(m[1], 10) || 0;
   }
   return reduction;
 }
@@ -6171,6 +6194,15 @@ function staticBonusFor(lobby, card) {
     if (grantedPT && (card.type || "").toLowerCase().includes(grantedPT.typeWord)) {
       const hasLand = Object.values(lobby.cards).some((x) => x.owner === card.owner && x.zoneType === "mana" && (x.type || "").toLowerCase().includes(grantedPT.landType));
       if (hasLand) { powerBonus += grantedPT.powerBonus; toughnessBonus += grantedPT.toughnessBonus; }
+    }
+    // Mirror Box -- "Each nontoken creature you control gets +1/+1 for each other creature you
+    // control with the same name as that creature." A GRANTED self-referential DYNAMIC bonus (same
+    // "every permanent computes its own per-creature bonus" shape as Sedge Sliver's land-based
+    // grant just above), computed fresh for `card` -- applies only while Mirror Box (`c`) is
+    // actually present among card's controller's permanents, and only to nontoken creatures.
+    if (/each nontoken creature you control gets \+1\/\+1 for each other creature you control with the same name/i.test(c.text || "") && !(card.type || "").toLowerCase().includes("token")) {
+      const sameNameCount = Object.values(lobby.cards).filter((x) => x.id !== card.id && x.owner === card.owner && x.zoneType === "creature" && archiveKey(x.name) === archiveKey(card.name)).length;
+      powerBonus += sameNameCount; toughnessBonus += sameNameCount;
     }
     // "Other creatures..." is enforced structurally by skipping card.id -- but a self-inclusive
     // anthem (Rising of the Day's own "Legendary creatures you control get +1/+0", no "other")
@@ -10480,6 +10512,18 @@ io.on("connection", (socket) => {
     if (cost.mana) {
       const parsedCost = parseManaCost(cost.mana);
       xVal = parsedCost.x ? Math.max(0, parseInt(x, 10) || 0) : 0;
+      // Training Grounds -- only reduces activated abilities of CREATURES, and never below 1 total
+      // mana in the cost. Only ever reduces generic (same convention as spellCostReductionFor),
+      // floored at 1 if there are no other pips at all, else 0 (the other pips already keep the
+      // total above zero).
+      if (card.zoneType === "creature") {
+        const reduction = activatedAbilityCostReductionFor(lobby, socket.id);
+        if (reduction > 0) {
+          const otherPips = parsedCost.W + parsedCost.U + parsedCost.B + parsedCost.R + parsedCost.G + parsedCost.C + parsedCost.hybrid.length;
+          const minGeneric = otherPips > 0 ? 0 : 1;
+          parsedCost.generic = Math.max(minGeneric, parsedCost.generic - reduction);
+        }
+      }
       const paid = affordWithRestricted(p, parsedCost, xVal, { kind: "activate", card });
       if (!paid) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s ability.`); return; }
       remainingMana = paid.normalPool;
