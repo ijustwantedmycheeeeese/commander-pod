@@ -811,6 +811,15 @@ const CARD_ABILITIES = {
   // the entire Max Speed subsystem ("Start your engines!", the {T} ability) -- this app tracks no
   // concept of speed at all, a disclosed gap wider than just this one card.
   "howlsquad heavy": [{ trigger: "beginningOfCombat", label: "Howlsquad Heavy — create a Goblin token", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] }],
+  // Innkeeper's Talent -- Class enchantment. Level 1 only ("At the beginning of combat on your
+  // turn, put a +1/+1 counter on target creature you control") -- same beginningOfCombat +
+  // targetKind:"ownCreature" + addCountersToTarget shape as Idyllic Grange's own ETB counter.
+  // Levels 2/3 (ward {1} on countered permanents, doubled counters) need the actual Class leveling
+  // mechanism (gaining a level as a sorcery-speed action, tracked state, conditionally-active
+  // abilities past a threshold) -- no precedent exists anywhere in this engine for that shape at
+  // all, a real disclosed gap wider than just this one card, matching every other partial-coverage
+  // multi-ability card in this file.
+  "innkeeper's talent": [{ trigger: "beginningOfCombat", requiresTarget: true, targetKind: "ownCreature", label: "Innkeeper's Talent — put a +1/+1 counter on target creature you control", effects: [{ type: "addCountersToTarget" }] }],
   "helm of the host": [{ trigger: "beginningOfCombat", label: "Helm of the Host — create a nonlegendary token copy of equipped creature with haste", requiresTarget: false, effects: [{ type: "createTokenCopyOfAttachedHost" }] }],
   "astral dragon": [{ trigger: "etb", label: "Astral Dragon — create two 3/3 flying Dragon token copies of target noncreature permanent", requiresTarget: true, targetKind: "noncreaturePermanent", effects: [{ type: "createDragonTokenCopiesOfTarget", count: 2, power: 3, toughness: 3, keywords: ["Flying"] }] }],
   // Wave 15 gap-analysis batch.
@@ -2258,6 +2267,29 @@ const SPELL_ABILITIES = {
   // established for its own "up to two" fetch. Cancelling any of the three stops the chain early,
   // matching "up to three" rather than forcing all of them.
   "buried alive": { label: "Buried Alive — search for up to three creature cards, put them into your graveyard", effects: [{ type: "tutorToHand", toGraveyard: true, typeFilter: "creature", thenEffects: [{ type: "tutorToHand", toGraveyard: true, typeFilter: "creature", thenEffects: [{ type: "tutorToHand", toGraveyard: true, typeFilter: "creature" }] }] }] },
+  // Conflux -- "Search your library for a white card, a blue card, a black card, a red card, and a
+  // green card. Reveal those cards, put them into your hand, then shuffle." Five chained tutorToHand
+  // calls via thenEffects, same nested shape as Buried Alive just above (three deep there, five
+  // here), using the new colorFilter param instead of typeFilter -- each search independently
+  // shuffles at the end (this engine's tutorCard always reshuffles after removing the found card),
+  // a disclosed simplification of "reveal all five, then shuffle once" into five separate reveals
+  // and shuffles with the same net result (no way to see the order between searches either way).
+  "conflux": { label: "Conflux — search for a white, blue, black, red, and green card", effects: [
+    { type: "tutorToHand", colorFilter: "W", thenEffects: [
+      { type: "tutorToHand", colorFilter: "U", thenEffects: [
+        { type: "tutorToHand", colorFilter: "B", thenEffects: [
+          { type: "tutorToHand", colorFilter: "R", thenEffects: [
+            { type: "tutorToHand", colorFilter: "G" }
+          ] }
+        ] }
+      ] }
+    ] }
+  ] },
+  // Reckless Handling -- "Search your library for an artifact card, reveal it, put it into your
+  // hand, shuffle, then discard a card at random. If an artifact card was discarded this way, deals
+  // 2 damage to each opponent." tutorToHand's own typeFilter half needs no changes; the random
+  // discard + conditional damage is a new chained thenEffects (see its own comment).
+  "reckless handling": { label: "Reckless Handling — search for an artifact card, then discard a card at random", effects: [{ type: "tutorToHand", typeFilter: "artifact", thenEffects: [{ type: "discardRandomCardThenDamageIfArtifact", amount: 2 }] }] },
   // "Each player exiles all creature cards from their graveyard, then sacrifices all creatures they
   // control, then puts all cards they exiled this way onto the battlefield." No targeting -- see
   // EFFECTS.livingDeathAll's own comment for the exact ordering this follows.
@@ -4280,6 +4312,32 @@ const EFFECTS = {
     broadcastTurn(lobby);
     pushLog(lobby, `${p.name} must discard ${count} card${count === 1 ? "" : "s"}`);
   },
+  // Reckless Handling -- "discard a card at random. If an artifact card was discarded this way,
+  // [deal] 2 damage to each opponent." A genuinely RANDOM discard, unlike targetPlayerDiscards just
+  // above (always a real player choice via the pendingDiscard picker) -- no real choice exists here
+  // to offer a UI for, so this picks straight from the controller's own hand with randInt and
+  // resolves immediately, no pending state needed. Reuses toEntry (the same graveyard-entry shape
+  // every other hand->graveyard path uses) and EFFECTS.damageEachOpponent verbatim for the
+  // conditional half.
+  discardRandomCardThenDamageIfArtifact(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const handCards = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "hand");
+    if (!handCards.length) return;
+    const chosen = handCards[randInt(handCards.length)];
+    const wasArtifact = (chosen.type || "").toLowerCase().includes("artifact");
+    delete lobby.cards[chosen.id];
+    if (lobby.targets[chosen.id]) { delete lobby.targets[chosen.id]; broadcastTargets(lobby); }
+    io.to(lobby.id).emit("cardRemove", chosen.id);
+    p.graveyard.push(toEntry(chosen));
+    pushLog(lobby, `${p.name} discards ${chosen.name || "a card"} at random`);
+    // damageEachOpponent itself never broadcasts (every other caller relies on executeSpellEffectsNow
+    // doing it once at the very end) -- this call happens OUTSIDE that path (thenEffects fires after
+    // tutorCard's own broadcastPlayers already ran), so a second broadcast here is required or the
+    // life change silently never reaches any client.
+    if (wasArtifact) EFFECTS.damageEachOpponent(lobby, ctx, { amount: params.amount || 0 });
+    broadcastPlayers(lobby);
+  },
   // Brainstorm -- "Draw three cards, then put two cards from your hand on top of your library in
   // any order." The put-back half reuses the exact same pendingDiscard/resolveDiscard picker as
   // targetPlayerDiscards just above, routed to the library instead of the graveyard via the new
@@ -4359,9 +4417,14 @@ const EFFECTS = {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
     if (params.lifeLoss) { applyLifeLoss(lobby, ctx.controllerId, params.lifeLoss); checkEliminations(lobby); }
-    p.pendingTutor = { typeFilter: params.typeFilter || null, toTopOfLibrary: !!params.toTopOfLibrary, toGraveyard: !!params.toGraveyard, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
+    // Conflux -- "search for a white card, a blue card, ... a green card" -- params.colorFilter
+    // (a single color code) is the color-based counterpart to typeFilter, validated in tutorCard
+    // against the found card's own .colors array. Five chained tutorToHand calls (via thenEffects,
+    // same nested shape as Buried Alive's "up to three") each with a different colorFilter covers
+    // the whole "one of each color" search.
+    p.pendingTutor = { typeFilter: params.typeFilter || null, colorFilter: params.colorFilter || null, toTopOfLibrary: !!params.toTopOfLibrary, toGraveyard: !!params.toGraveyard, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
     const sock = io.sockets.sockets.get(ctx.controllerId);
-    if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter });
+    if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter, colorFilter: p.pendingTutor.colorFilter });
     broadcastPlayers(lobby);
   },
   // Goblin Recruiter -- "search your library for any number of Goblin cards, reveal them, then
@@ -11411,6 +11474,11 @@ io.on("connection", (socket) => {
         socket.emit("actionError", `${entry.name || "That card"} doesn't match what you're searching for.`);
         return;
       }
+    }
+    // Conflux -- color-based counterpart to typeFilter just above (see tutorToHand's own comment).
+    if (p.pendingTutor.colorFilter && !(entry.colors || []).includes(p.pendingTutor.colorFilter)) {
+      socket.emit("actionError", `${entry.name || "That card"} doesn't match what you're searching for.`);
+      return;
     }
     p.library.splice(index, 1);
     const { toTopOfLibrary: toTop, toGraveyard, thenEffects, sourceCardId } = p.pendingTutor;
