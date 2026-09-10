@@ -482,6 +482,10 @@ const CARD_ABILITIES = {
   "consecrated sphinx": [{ trigger: "opponentDrawsCard", label: "Consecrated Sphinx — you may draw two cards", requiresTarget: false, effects: [{ type: "drawCards", amount: 2 }] }],
   "esper sentinel": [{ trigger: "opponentFirstNoncreatureSpell", label: "Esper Sentinel — pay {X} or its controller draws a card", xFromPower: true, declinedEffects: [{ type: "drawCards", amount: 1 }] }],
   "rhystic study": [{ trigger: "opponentCastsSpell", label: "Rhystic Study — pay {1} or its controller draws a card", cost: { mana: "{1}" }, costLabel: "{1}", declinedEffects: [{ type: "drawCards", amount: 1 }] }],
+  // Mystic Remora -- the draw-a-card half only (see fireGlobalOpponentNoncreatureSpellTriggers'
+  // own comment); the Cumulative upkeep half is a pure text-scan, no table entry needed at all
+  // (checkCumulativeUpkeep).
+  "mystic remora": [{ trigger: "opponentNoncreatureSpell", label: "Mystic Remora — pay {4} or its controller draws a card", cost: { mana: "{4}" }, costLabel: "{4}", declinedEffects: [{ type: "drawCards", amount: 1 }] }],
   // "Other creatures you control have haste" needs no table entry (already generic). The graveyard-
   // name-match trigger reuses loseLife's existing chosenTargetId override to hit the CASTER, not
   // Kolaghan's own controller -- see fireGlobalOpponentCastsMatchingGraveyardCardTrigger's comment.
@@ -7419,6 +7423,7 @@ function pushToStack(lobby, card, casterId) {
   // above), so this can't misfire for a land drop.
   fireGlobalTrigger(lobby, "youCastSpell", casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
+  fireGlobalOpponentNoncreatureSpellTriggers(lobby, casterId, card);
   fireGlobalOpponentCastsSpellTriggers(lobby, casterId);
   fireGlobalOpponentCastsMatchingGraveyardCardTrigger(lobby, casterId, card);
   // Ledger Shredder -- "whenever A PLAYER casts their second spell each turn" watches every
@@ -7521,6 +7526,24 @@ function fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, spellC
   }
 }
 
+// Mystic Remora -- "Whenever an opponent casts a noncreature spell, you may draw a card unless that
+// player pays {4}." Same overall shape as fireGlobalOpponentFirstNoncreatureSpellTriggers just
+// above (noncreature filter, queueOptionalPayment), but fires on EVERY qualifying opponent spell
+// each turn, not just their first -- so no once-per-turn gate, and consequently no need to track
+// anything on the caster's player object at all.
+function fireGlobalOpponentNoncreatureSpellTriggers(lobby, casterId, spellCard) {
+  if (!lobby.turn.started || (spellCard.type || "").toLowerCase().includes("creature")) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === casterId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "opponentNoncreatureSpell").forEach((ability) => {
+      queueOptionalPayment(lobby, {
+        playerId: casterId, controllerId: c.owner, sourceCard: c, label: ability.label,
+        costLabel: ability.costLabel || "{4}", cost: ability.cost || { mana: "{4}" }, declinedEffects: ability.declinedEffects
+      });
+    });
+  }
+}
 // Rhystic Study and its functional cousins -- "Whenever an opponent casts a spell, you may draw a
 // card unless that player pays {1}." Same optional-payment engine as
 // fireGlobalOpponentFirstNoncreatureSpellTriggers just above (see Esper Sentinel's own entry for
@@ -8217,6 +8240,39 @@ function fireEtbTriggers(lobby, card) {
 function shockLandLifeCost(card) {
   const m = (card.text || "").match(/pay (\d+) life\.\s*if you don't,\s*it enters tapped/i);
   return m ? parseInt(m[1], 10) : null;
+}
+// Cumulative upkeep (CR 702.25) -- "At the beginning of your upkeep, put an age counter on this
+// permanent, then sacrifice it unless you pay its upkeep cost for each age counter on it." A pure
+// text-scan (no CARD_ABILITIES entry needed, same "generic off the printed cost" precedent as
+// entersTapped/shockland life payment) since the mechanism is fully described by the reminder text
+// alone. Age counters are tracked as their own scalar (card.ageCounters), separate from the
+// existing generic card.counters field (which already double-duties as +1/+1 and -1/-1 -- a THIRD
+// meaning on the same field would collide with real +1/+1-counter cards that also happen to have
+// cumulative upkeep). "Pay its upkeep cost for each age counter" simplifies to paying the total
+// (per-counter cost x age counter count) as ONE combined prompt rather than N sequential ones --
+// exactly right for a plain numeric-generic cost like Mystic Remora's {1}; a colored or mixed
+// per-counter cost would need real per-symbol multiplication this doesn't attempt, a disclosed
+// narrowing matching every other "common real case, not full rules-text fidelity" simplification in
+// this file.
+function cumulativeUpkeepCostFromText(text) {
+  const m = (text || "").match(/cumulative upkeep (\{[^}]+\})/i);
+  return m ? m[1] : null;
+}
+function checkCumulativeUpkeep(lobby, activeId) {
+  Object.values(lobby.cards).forEach((c) => {
+    if (c.owner !== activeId || c.zoneType === "hand" || c.zoneType === "stack") return;
+    const perCounterCost = cumulativeUpkeepCostFromText(c.text);
+    if (!perCounterCost) return;
+    c.ageCounters = (c.ageCounters || 0) + 1;
+    broadcastCard(lobby, c);
+    const perAmt = parseManaCost(perCounterCost).generic || 0;
+    const totalAmt = perAmt * c.ageCounters;
+    queueOptionalPayment(lobby, {
+      playerId: activeId, controllerId: activeId, sourceCard: c,
+      label: `${c.name} — pay cumulative upkeep (${c.ageCounters} age counter${c.ageCounters === 1 ? "" : "s"}, {${totalAmt}} total) or sacrifice it`,
+      costLabel: `Pay {${totalAmt}}`, cost: { mana: `{${totalAmt}}` }, declinedEffects: [{ type: "sacrificeSelf" }]
+    });
+  });
 }
 function checkShockLandChoice(lobby, card) {
   if (card.tapped) return;
@@ -9199,6 +9255,17 @@ function shouldAutoAdvance(lobby) {
   const turn = lobby.turn;
   if (!turn.started || turn.order.length === 0) return false;
   if (lobby.stack.length > 0) return false;
+  // Cumulative upkeep (checkCumulativeUpkeep) is a REAL choice point (pay or sacrifice) raised via
+  // queueOptionalPayment, not the stack -- a genuine bug found while building it: without this
+  // check, advancePhase's own auto-advance loop (below) blows straight through Untap/Upkeep/Draw in
+  // one synchronous pass, queuing the payment prompt but never actually stopping for it, repeating
+  // every subsequent lap through Upkeep until SOMETHING else finally halts the loop (Main 1, the
+  // first non-auto-advance phase) -- so a cumulative-upkeep permanent could rack up many age
+  // counters in a single "next phase" click with the player never getting a chance to respond to
+  // any of them. Any pending optional payment (this same queueOptionalPayment engine also backs
+  // Rhystic Study/Esper Sentinel/shockland choices) should halt auto-advance the same way a stack
+  // item does.
+  if (lobby.pendingOptionalPayments && lobby.pendingOptionalPayments.length > 0) return false;
   if (turn.phase === "Untap" || turn.phase === "Upkeep" || turn.phase === "Draw") return true;
   if (turn.phase === "Combat") {
     const activeId = turn.order[turn.activeIndex];
@@ -9377,6 +9444,10 @@ function advanceOnePhase(lobby) {
   // scans a player's own permanents for aristocrats-style non-self-referential triggers; an upkeep
   // trigger is likewise "whoever's upkeep this is", not about the source card's own history.
   if (activePlayer && turn.phase === "Upkeep") fireGlobalTrigger(lobby, "upkeep", activeId);
+  // Cumulative upkeep (Mystic Remora and any future card with the same keyword) -- CR 702.25, a
+  // pure text-scan like entersTapped rather than a table entry, since the mechanism is fully generic
+  // off the printed cost. See checkCumulativeUpkeep's own comment for the age-counter/payment shape.
+  if (activePlayer && turn.phase === "Upkeep") checkCumulativeUpkeep(lobby, activeId);
   // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
   if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
   // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step,
