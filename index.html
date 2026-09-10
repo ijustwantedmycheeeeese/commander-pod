@@ -1337,6 +1337,15 @@
       }).join("");
     }
     function costHasX(costStr) { return /\{X\}/i.test(costStr || ""); }
+    // Toxic Deluge -- "pay X life" as an additional cost isn't in the mana cost string at all, so
+    // costHasX alone can't catch it; text-scanning the printed cost clause (same precedent as every
+    // other client-side keyword/ability text scan in this file) catches it without the server
+    // needing to expose its SPELL_ABILITIES table to the client.
+    function needsXPrompt(card) {
+      if (!card) return false;
+      if (costHasX(card.manaCost)) return true;
+      return /as an additional cost to cast this spell,\s*pay x life/i.test(card.text || "");
+    }
 
     // ---------------- auth ----------------
 
@@ -3486,12 +3495,16 @@
         ? `Exile a ${colorLabel} card from your hand`
         : pd.destination === "battlefieldLand"
         ? `You may put a land onto the battlefield (Growth Spiral)`
+        : pd.destination === "castFree"
+        ? `You may cast a spell (MV ${pd.maxCmc} or less) for free (Rishkar's Expertise)`
         : `Hand size limit — discard ${pd.count} card(s)`;
       let hand = Object.values(allCards).filter((c) => c.owner === myId && c.zoneType === "hand");
       if (pd.destination === "altCostExile") {
         hand = hand.filter((c) => c.id !== pd.altCostCardId && (c.colors || []).includes(pd.colorFilter));
       } else if (pd.destination === "battlefieldLand") {
         hand = hand.filter((c) => (c.type || "").toLowerCase().includes("land"));
+      } else if (pd.destination === "castFree") {
+        hand = hand.filter((c) => !(c.type || "").toLowerCase().includes("land") && (c.cmc || 0) <= pd.maxCmc);
       }
       document.getElementById("discard-modal-grid").innerHTML = hand.map((c) => `
         <div class="discard-card-pick ${selectedDiscardIds.has(c.id) ? "picked" : ""}" onclick="toggleDiscardPick('${c.id}')">
@@ -3506,6 +3519,7 @@
       document.getElementById("discard-modal-confirm").innerText = pd.destination === "libraryTop" ? "Put on Top"
         : pd.destination === "altCostExile" ? "Exile Selected"
         : pd.destination === "battlefieldLand" ? (selectedDiscardIds.size === 0 ? "Skip" : "Put onto Battlefield")
+        : pd.destination === "castFree" ? (selectedDiscardIds.size === 0 ? "Skip" : "Cast for Free")
         : "Discard Selected";
     }
     function toggleDiscardPick(id) {
@@ -5233,7 +5247,7 @@
 
     function requestPlayCard(id) {
       const card = allCards[id];
-      if (card && costHasX(card.manaCost)) {
+      if (card && needsXPrompt(card)) {
         showPromptModal("Choose a value for X:", "0", (val) => socket.emit("playCard", { id, x: parseInt(val) || 0 }));
         return;
       }
@@ -5457,7 +5471,7 @@
             const targetZone = zoneForY(finalY).key;
             if (targetZone === "hand" && cardObj.zoneType !== "hand") return false; // pick-up-to-hand isn't a drag action -- see Return to Hand in the right-click menu
             if (targetZone === cardObj.zoneType) return false;
-            if (cardObj.zoneType === "hand" && targetZone !== "hand" && costHasX(cardObj.manaCost)) {
+            if (cardObj.zoneType === "hand" && targetZone !== "hand" && needsXPrompt(cardObj)) {
               // Unlike every other branch here, this one can't resolve synchronously anymore (the
               // prompt modal is async, not a blocking native prompt()) -- returns false immediately
               // so the caller snaps the card back to its pre-drag position right away, same as a
