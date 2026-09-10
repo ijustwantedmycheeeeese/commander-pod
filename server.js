@@ -2329,6 +2329,21 @@ const SPELL_ABILITIES = {
   // "Return target artifact or enchantment card from your graveyard to your hand." New
   // ownGraveyardTypeList targetKind (see resolveChosenTarget's own comment) plus a matching effect.
   "argivian find": { label: "Argivian Find — return target artifact or enchantment card from your graveyard to hand", effects: [{ type: "returnOwnGraveyardEntryToHand" }], requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact", "enchantment"] },
+  // Whir of Invention -- front half only: the real {X} cost threads through automatically (see
+  // tutorToHand's own maxCmc/params.xAmount comment). Improvise (tap artifacts to help pay the {X})
+  // isn't modeled -- a disclosed narrowing, same "the effect works, the alt-payment shortcut
+  // doesn't" precedent used for every other unmodeled alternate-payment keyword in this file; the
+  // spell still needs the real mana to cast it.
+  "whir of invention": { label: "Whir of Invention — search for an artifact card with mana value X or less, put it onto the battlefield", effects: [{ type: "tutorToHand", typeFilter: "artifact", toBattlefield: true }] },
+  // Reshape -- same toBattlefield/maxCmc shape as Whir of Invention just above, plus a real
+  // additional cost (Deadly Dispute's own sacrificeType precedent).
+  "reshape": { label: "Reshape — sacrifice an artifact, search for an artifact card with mana value X or less, put it onto the battlefield", additionalCost: { sacrificeType: "artifact" }, effects: [{ type: "tutorToHand", typeFilter: "artifact", toBattlefield: true }] },
+  // Chain of Vapor -- front half only ("return target nonland permanent to its owner's hand").
+  // "Then that permanent's controller may sacrifice a land... may copy this spell and choose a new
+  // target" is a genuinely different chained-optional-copy mechanism with no precedent in this
+  // engine -- deliberately deferred, a disclosed narrowing matching every other partial-coverage
+  // card in this file.
+  "chain of vapor": { label: "Chain of Vapor — return target nonland permanent to its owner's hand", effects: [{ type: "bounceTargetToHand" }], requiresTarget: true, targetKind: "permanent" },
   // Bala Ged Recovery // Bala Ged Sanctuary -- "Return target card from your graveyard to your
   // hand." Plain reuse of Eternal Witness's own targetKind:"ownGraveyard" + returnGraveyardCardToHand
   // (zero new code), just as a sorcery instead of an ETB. The land back face (Bala Ged Sanctuary,
@@ -4621,9 +4636,16 @@ const EFFECTS = {
     // against the found card's own .colors array. Five chained tutorToHand calls (via thenEffects,
     // same nested shape as Buried Alive's "up to three") each with a different colorFilter covers
     // the whole "one of each color" search.
-    p.pendingTutor = { typeFilter: params.typeFilter || null, colorFilter: params.colorFilter || null, toTopOfLibrary: !!params.toTopOfLibrary, toGraveyard: !!params.toGraveyard, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
+    // Whir of Invention / Reshape -- "search your library for an artifact card with mana value X
+    // or less, put it onto the battlefield." maxCmc defaults to params.maxCmc but falls back to
+    // params.xAmount (the real cast-time X, already merged in by executeSpellEffectsNow per wave
+    // 17's own X-value threading) -- Whir/Reshape's own {X} cost IS that X, no separate value ever
+    // needs to be specified at the table-entry level. toBattlefield is the destination counterpart
+    // to toTopOfLibrary/toGraveyard just below.
+    const maxCmc = params.maxCmc != null ? params.maxCmc : (params.xAmount != null ? params.xAmount : null);
+    p.pendingTutor = { typeFilter: params.typeFilter || null, colorFilter: params.colorFilter || null, maxCmc, toTopOfLibrary: !!params.toTopOfLibrary, toGraveyard: !!params.toGraveyard, toBattlefield: !!params.toBattlefield, thenEffects: params.thenEffects || null, sourceCardId: ctx.sourceCard && ctx.sourceCard.id };
     const sock = io.sockets.sockets.get(ctx.controllerId);
-    if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter, colorFilter: p.pendingTutor.colorFilter });
+    if (sock) sock.emit("searchLibraryForHand", { typeFilter: p.pendingTutor.typeFilter, colorFilter: p.pendingTutor.colorFilter, maxCmc: p.pendingTutor.maxCmc });
     broadcastPlayers(lobby);
   },
   // Goblin Recruiter -- "search your library for any number of Goblin cards, reveal them, then
@@ -11851,8 +11873,15 @@ io.on("connection", (socket) => {
       socket.emit("actionError", `${entry.name || "That card"} doesn't match what you're searching for.`);
       return;
     }
+    // Whir of Invention / Reshape -- "a card with mana value X or less." maxCmc is threaded in from
+    // the cast-time X value (see tutorToHand's own comment on why an {X}-cost spell's real X is
+    // already available here as params.xAmount by the time it calls tutorToHand).
+    if (p.pendingTutor.maxCmc != null && (entry.cmc || 0) > p.pendingTutor.maxCmc) {
+      socket.emit("actionError", `${entry.name || "That card"} costs more than {${p.pendingTutor.maxCmc}}.`);
+      return;
+    }
     p.library.splice(index, 1);
-    const { toTopOfLibrary: toTop, toGraveyard, thenEffects, sourceCardId } = p.pendingTutor;
+    const { toTopOfLibrary: toTop, toGraveyard, toBattlefield, thenEffects, sourceCardId } = p.pendingTutor;
     shuffle(p.library);
     if (toTop) {
       p.library.unshift(entry);
@@ -11860,6 +11889,13 @@ io.on("connection", (socket) => {
     } else if (toGraveyard) {
       p.graveyard.push(entry);
       pushLog(lobby, `${p.name} searched their library for ${entry.name} and put it into their graveyard`);
+    } else if (toBattlefield) {
+      // Whir of Invention / Reshape -- "put it onto the battlefield" (not into hand). Fires the
+      // found permanent's own ETB, same as any other card that lands on the battlefield via a
+      // search (fetchLand's own real land, Risen Reef's revealed land, etc.).
+      const card = spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: classifyType(entry.type) });
+      pushLog(lobby, `${p.name} searched their library for ${entry.name} and put it onto the battlefield`);
+      fireEtbTriggers(lobby, card);
     } else {
       spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: true, zoneType: "hand" });
       pushLog(lobby, `${p.name} searched their library for ${entry.name}`);
