@@ -509,6 +509,13 @@ const CARD_ABILITIES = {
   // represented the same way every other optional TRIGGERED target choice in this file already is --
   // the queued target choice's own Cancel button declines it.
   "soulherder": [{ trigger: "endStep", requiresTarget: true, targetKind: "otherOwnCreature", label: "Soulherder — exile another target creature you control, then return it to the battlefield", effects: [{ type: "exileThenReturnTarget" }] }],
+  // Springleaf Parade -- the token-creation half needs xMultiplier's own real cast-time X threading
+  // (see fireEtbTriggers' own comment for why a real {X}-cost PERMANENT's ETB needed a small
+  // generalization to reach it at all). The "creature tokens you control have {T}: add any color"
+  // half needs zero table entry -- see grantedAbilityGrantMatches' own new tokensOnly branch.
+  // Changeling itself (is every creature type) isn't modeled -- the token is just named/typed
+  // Shapeshifter, a disclosed narrowing.
+  "springleaf parade": [{ trigger: "etb", requiresTarget: false, label: "Springleaf Parade — create X 1/1 colorless Shapeshifter tokens", effects: [{ type: "createToken", name: "Shapeshifter", tokenType: "Token Creature — Shapeshifter", power: "1", toughness: "1", colors: [], xMultiplier: 1 }] }],
   // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step, that
   // player does X," reusing the eachOpponentEndStep event fireGlobalTriggerEachOpponent dispatches
   // (see its own comment) with "that player" baked into chosenTargetId automatically.
@@ -1401,6 +1408,14 @@ const ACTIVATED_ABILITIES = {
     { cost: { mana: "{1}" }, label: "Sensei's Divining Top — look at the top three cards of your library, then put them back in any order", requiresTarget: false, effects: [{ type: "scryN", amount: 3, noBottom: true }] },
     { cost: { tap: true }, label: "Sensei's Divining Top — draw a card, then put this on top of its owner's library", requiresTarget: false, effects: [{ type: "drawCards", amount: 1 }, { type: "putSelfOnTopOfLibrary" }] }
   ],
+  // Nullmage Advocate -- see returnCardsFromOpponentGraveyardToHand's own comment for the
+  // auto-pick narrowings. condition/conditionError mirror Temple of the False God's own
+  // "reject before paying" precedent for a real activation restriction.
+  "nullmage advocate": [{ cost: { tap: true }, requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"],
+    condition: (card, lobby) => Object.keys(lobby.players).some((pid) => pid !== card.owner && (lobby.players[pid].graveyard || []).length >= 2),
+    conditionError: "No opponent has at least two cards in their graveyard.",
+    label: "Nullmage Advocate — return two cards from an opponent's graveyard to their hand, destroy target artifact or enchantment",
+    effects: [{ type: "returnCardsFromOpponentGraveyardToHand", amount: 2 }, { type: "destroyTarget" }] }],
   "ominous cemetery": [
     { cost: { tap: true }, manaAbility: true, label: "Ominous Cemetery — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{5}", tap: true, exile: true }, label: "Ominous Cemetery — target creature's owner shuffles it into their library", requiresTarget: true, targetKind: "creature", effects: [{ type: "shuffleTargetIntoLibrary" }] }
@@ -1902,6 +1917,15 @@ function grantedAbilityGrantMatches(text) {
   while ((m = landRe.exec(text || ""))) {
     matches.push({ typeWord: "land", abilityText: m[1] });
   }
+  // Springleaf Parade-style "Creature tokens you control have '[ability]'" -- a TOKEN-scoped sibling
+  // (own alternative since "tokens" isn't a creature type, and this wording pattern -- "[word]
+  // tokens" rather than "[word] creatures" -- doesn't fit either existing branch above). tokensOnly
+  // is a sentinel getGrantedActivatedAbilities checks for explicitly, the same shape typeWord "land"
+  // already established for Chromatic Lantern.
+  const tokenRe = /(\w+) tokens you control have "([^"]+)"/gi;
+  while ((m = tokenRe.exec(text || ""))) {
+    matches.push({ typeWord: m[1].toLowerCase(), abilityText: m[2], tokensOnly: true });
+  }
   return matches;
 }
 // Maps ONE granted ability's quoted text to a real ACTIVATED_ABILITIES-shaped entry, reusing
@@ -1958,11 +1982,16 @@ function getGrantedActivatedAbilities(card, lobby) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner !== card.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
-    grantedAbilityGrantMatches(c.text).forEach(({ typeWord, abilityText }) => {
+    grantedAbilityGrantMatches(c.text).forEach(({ typeWord, abilityText, tokensOnly }) => {
       if (typeWord === "land") {
         if (!isLand) return;
       } else {
         if (!isCreature) return;
+        // Springleaf Parade -- "Creature TOKENS you control have X," unlike every other typeWord
+        // grant above (which only ever cares about the type LINE, real or token alike). Same
+        // "type in the type line" substring check this app already uses everywhere else to detect
+        // token-ness (excludeTokenSources' own dealingType.includes("token") precedent).
+        if (tokensOnly && !cardType.includes("token")) return;
         const excludeSelf = typeWord === "other";
         if (!excludeSelf && typeWord && !cardType.includes(typeWord)) return;
         if (excludeSelf && c.id === card.id) return;
@@ -2103,6 +2132,8 @@ const SPELL_ABILITIES = {
   // March of Swirling Mist -- see phaseOutTarget's own comment for the one-target/no-cost-reduction
   // narrowings.
   "march of swirling mist": { label: "March of Swirling Mist — target creature phases out", effects: [{ type: "phaseOutTarget" }], requiresTarget: true, targetKind: "creature" },
+  // Painful Truths -- see painfulTruthsConverge's own comment for the Converge mechanism itself.
+  "painful truths": { label: "Painful Truths — draw X cards and lose X life, where X is the number of colors of mana spent to cast this spell", effects: [{ type: "painfulTruthsConverge" }] },
   // Proliferate spell batch (item 6) -- reuses the pre-existing proliferateAll effect (built for
   // Atomize/Contagion Clasp) unchanged.
   "contentious plan": { label: "Contentious Plan — proliferate, draw a card", effects: [{ type: "proliferateAll" }, { type: "drawCards", amount: 1 }] },
@@ -3118,6 +3149,18 @@ const EFFECTS = {
     if (totalLost > 0) applyLifeGain(lobby, ctx.controllerId, totalLost);
     broadcastPlayers(lobby);
   },
+  // Painful Truths -- "Converge — You draw X cards and lose X life, where X is the number of
+  // colors of mana spent to cast this spell." Reads _convergeColorCount, stamped on the card in
+  // attemptPlay itself (the one place the real payment is known) -- the first Converge card in this
+  // file, reusable for any future one the same way.
+  painfulTruthsConverge(lobby, ctx, params) {
+    const card = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    const x = (card && card._convergeColorCount) || 0;
+    if (x <= 0) return;
+    drawN(lobby, ctx.controllerId, x);
+    applyLifeLoss(lobby, ctx.controllerId, x);
+    checkEliminations(lobby);
+  },
   // Teferi's Protection -- "until your next turn, your life total can't change and you gain
   // protection from everything. All permanents you control phase out." Phasing (CR 702.26) is
   // modeled the same way graveyard/exile already are: move the real card objects out of
@@ -3719,6 +3762,23 @@ const EFFECTS = {
     if (!card || !ctx.sourceCard) return;
     card.grantedIndestructibleWhileSourceId = ctx.sourceCard.id;
     broadcastCard(lobby, card);
+  },
+  // Nullmage Advocate -- "Return two target cards from an opponent's graveyard to their hand."
+  // Real Magic leaves "an opponent's" and which two cards both up to a real choice; this app has no
+  // "pick a specific opponent" nor "pick N specific graveyard cards" UI, so both auto-pick (the
+  // first qualifying opponent, that opponent's own first N graveyard entries) -- a disclosed
+  // narrowing, same "auto-pick over a new picker" precedent as autoSacrificeFilter and everywhere
+  // else in this file. The activation condition itself (ACTIVATED_ABILITIES' own condition/
+  // conditionError) already guarantees a qualifying opponent exists before this ever runs.
+  returnCardsFromOpponentGraveyardToHand(lobby, ctx, params) {
+    const amount = params.amount || 1;
+    const opponentId = Object.keys(lobby.players).find((pid) => pid !== ctx.controllerId && (lobby.players[pid].graveyard || []).length >= amount);
+    if (!opponentId) return;
+    const opponent = lobby.players[opponentId];
+    const moving = opponent.graveyard.splice(0, amount);
+    moving.forEach((entry) => spawnBattlefieldCard(lobby, { ...entry, owner: opponentId, faceDown: true, zoneType: "hand" }));
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${opponent.name} returns ${moving.length} card${moving.length === 1 ? "" : "s"} from their graveyard to hand (Nullmage Advocate)`);
   },
   // Kor Haven -- "Prevent all combat damage that would be dealt by target attacking creature this
   // turn." See resolveCombatDamage's own dealingPower helper for where this is actually enforced.
@@ -8020,12 +8080,23 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
     return { ok: false, error: `Not enough life to pay ${xValue} as an additional cost.` };
   }
   const xForMana = payXLife ? 0 : xValue;
+  const beforeMana = { ...p.mana };
   const paid = affordWithRestricted(p, cost, xForMana, { kind: "cast", card });
   if (!paid) {
     return { ok: false, error: `Not enough mana to cast ${card.name || "this card"}.` };
   }
   p.mana = paid.normalPool;
   p.restrictedMana = paid.restrictedMana;
+  // Painful Truths (Converge) -- "X is the number of colors of mana spent to cast this spell."
+  // Computed right here, the one place both the before/after normal-mana-pool state AND
+  // affordWithRestricted's own spentUnits (for any restricted-mana colors) are both available --
+  // nothing else in this file tracks per-cast payment provenance. Stashed on the card object itself,
+  // same "survives through to resolution" precedent cast-time X-value threading (_castXValue) and
+  // Fling's own _sacrificedCreaturePower already use.
+  const convergeColors = new Set();
+  ["W", "U", "B", "R", "G"].forEach((c) => { if ((beforeMana[c] || 0) > (paid.normalPool[c] || 0)) convergeColors.add(c); });
+  paid.spentUnits.forEach((u) => { if (["W", "U", "B", "R", "G"].includes(u.color)) convergeColors.add(u.color); });
+  card._convergeColorCount = convergeColors.size;
   // Delighted Halfling -- "...and that spell can't be countered." Only true when mana carrying
   // this specific bonus was ACTUALLY spent on this cast (not just present in the pool), checked via
   // affordWithRestricted's own spentUnits list. isProtectedFromCountering reads this flag straight
@@ -8977,7 +9048,14 @@ function fireEtbTriggers(lobby, card) {
   checkChromeMoxImprint(lobby, card);
   checkMoxDiamondLandDiscard(lobby, card);
   checkRiot(lobby, card);
-  getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
+  // Springleaf Parade -- a real {X}-cost PERMANENT (not spell) whose own ETB effect scales with X.
+  // _castXValue already survives from attemptPlay through to here on the card object; every prior
+  // {X}-cost card needing this was either an activated ability (fireTrigger's own xValue param) or a
+  // spell (executeSpellEffectsNow's own merge) -- this is the first {X}-cost PERMANENT's ETB to need
+  // it, so fireTrigger's xValue is now threaded through here too. undefined for every other card
+  // (not {X}-cost), so fireTrigger's own `xValue ? ... : ability.effects` fallback keeps every
+  // existing etb ability completely unaffected.
+  getAutomatedAbilities(card.name, "etb").forEach((ability) => fireTrigger(lobby, card, ability, card._castXValue));
   getGrantedTriggeredAbilities(card, lobby, "etb").forEach((ability) => fireTrigger(lobby, card, ability));
   // "When this land/permanent enters, scry N" -- see scryOnEtbFromText's own comment. No target,
   // no table entry -- calls EFFECTS.scryN directly rather than routing through fireTrigger/the
