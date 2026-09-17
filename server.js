@@ -2093,6 +2093,16 @@ const SPELL_ABILITIES = {
   // Temur Battle Rage -- see grantFerociousTrampleToTarget's own comment for the Ferocious check
   // shape (evaluated once, at resolution, not live).
   "temur battle rage": { label: "Temur Battle Rage — target creature gains double strike; Ferocious: also gains trample if you control a creature with power 4 or greater", effects: [{ type: "grantKeywordToTarget", keyword: "Double strike" }, { type: "grantFerociousTrampleToTarget" }], requiresTarget: true, targetKind: "creature" },
+  // Spider Spawning -- front half only, see createSpiderTokensForGraveyardCreatures' own comment
+  // for why Flashback is out of scope.
+  "spider spawning": { label: "Spider Spawning — create a Spider token for each creature card in your graveyard", effects: [{ type: "createSpiderTokensForGraveyardCreatures" }] },
+  // Arachnogenesis -- untargeted (its own text has no "target" at all -- both halves are computed
+  // off real board state at resolution). See its own EFFECTS entry for the token-count/prevention
+  // shapes.
+  "arachnogenesis": { label: "Arachnogenesis — create a Spider token for each creature attacking you, prevent combat damage from non-Spiders this turn", effects: [{ type: "arachnogenesis" }] },
+  // March of Swirling Mist -- see phaseOutTarget's own comment for the one-target/no-cost-reduction
+  // narrowings.
+  "march of swirling mist": { label: "March of Swirling Mist — target creature phases out", effects: [{ type: "phaseOutTarget" }], requiresTarget: true, targetKind: "creature" },
   // Proliferate spell batch (item 6) -- reuses the pre-existing proliferateAll effect (built for
   // Atomize/Contagion Clasp) unchanged.
   "contentious plan": { label: "Contentious Plan — proliferate, draw a card", effects: [{ type: "proliferateAll" }, { type: "drawCards", amount: 1 }] },
@@ -3148,6 +3158,33 @@ const EFFECTS = {
     broadcastCombat(lobby);
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name}'s life total can't change and they gain protection from everything -- all their permanents phase out (Teferi's Protection)`);
+  },
+  // March of Swirling Mist -- "Up to X target creatures phase out." Disclosed one-target narrowing
+  // (this app's target-choice queue takes one target per queued choice, same precedent Angel of the
+  // Ruins/Sylvan Reclamation's own "up to two" clauses already use) -- automates "target creature
+  // phases out" rather than the full up-to-X multi-target version. The additional-cost mana
+  // reduction (exiling blue cards from hand) isn't modeled -- cast for the plain {X}{U} cost, same
+  // "unmodeled alternate payment" precedent as every other such clause in this file. Reuses Teferi's
+  // Protection's own per-player phasedOut array/restoration verbatim -- pushing just this ONE card
+  // into its owner's array (instead of their whole board) phases in at exactly the right moment
+  // (the owner's own next Untap step) with zero new plumbing needed anywhere else.
+  phaseOutTarget(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c) return;
+    const owner = lobby.players[c.owner];
+    if (!owner) return;
+    owner.phasedOut = (owner.phasedOut || []).concat([c]);
+    delete lobby.cards[c.id];
+    delete lobby.targets[c.id];
+    io.to(lobby.id).emit("cardRemove", c.id);
+    delete lobby.combat.attackers[c.id];
+    delete lobby.combat.blocks[c.id];
+    Object.keys(lobby.combat.blocks).forEach((atkId) => {
+      lobby.combat.blocks[atkId] = (lobby.combat.blocks[atkId] || []).filter((bid) => bid !== c.id);
+    });
+    broadcastCombat(lobby);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${c.name || "A creature"} phases out (March of Swirling Mist)`);
   },
   damageEachOpponent(lobby, ctx, params) {
     const sourceCardId = ctx.sourceCard && ctx.sourceCard.id;
@@ -5620,6 +5657,32 @@ const EFFECTS = {
     const p = lobby.players[ctx.controllerId];
     pushLog(lobby, `${p ? p.name : "?"} rolls a d20 for ${(ctx.sourceCard && lobby.cards[ctx.sourceCard.id] && lobby.cards[ctx.sourceCard.id].name) || "Ancient Copper Dragon"}: ${roll} -- creating ${roll} Treasure token${roll === 1 ? "" : "s"}`);
     EFFECTS.createToken(lobby, ctx, { name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg", amount: roll });
+  },
+  // Spider Spawning -- "Create a 1/2 green Spider creature token with reach for each creature card
+  // in your graveyard." Flashback isn't modeled anywhere in this engine (no "cast from graveyard"
+  // flow exists at all) -- a disclosed narrowing, only the front (hand-cast) half is automated.
+  createSpiderTokensForGraveyardCreatures(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const count = (p.graveyard || []).filter((e) => (e.type || "").toLowerCase().includes("creature")).length;
+    if (count > 0) EFFECTS.createToken(lobby, ctx, { name: "Spider", tokenType: "Token Creature — Spider", power: "1", toughness: "2", colors: ["G"], keywords: ["Reach"], amount: count });
+  },
+  // Arachnogenesis -- "Create X 1/2 green Spider tokens with reach, where X is the number of
+  // creatures attacking you. Prevent all combat damage that would be dealt this turn by non-Spider
+  // creatures." The token half counts real current attackers targeting the caster specifically
+  // (lobby.combat.attackers maps attackerId -> defenderId). The prevention half reuses Kor Haven's
+  // own preventCombatDamageUntilEndOfTurn flag (already checked in dealingPower, already swept at
+  // end of turn) applied table-wide to every non-Spider creature instead of one chosen target --
+  // same "per-card flag, broader trigger condition" shape removeHexproofIndestructibleFromOpponents
+  // already established for Shadowspear.
+  arachnogenesis(lobby, ctx, params) {
+    const attackerCount = Object.entries(lobby.combat.attackers || {}).filter(([, defenderId]) => defenderId === ctx.controllerId).length;
+    if (attackerCount > 0) EFFECTS.createToken(lobby, ctx, { name: "Spider", tokenType: "Token Creature — Spider", power: "1", toughness: "2", colors: ["G"], keywords: ["Reach"], amount: attackerCount });
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.zoneType !== "creature" || (c.type || "").toLowerCase().includes("spider")) return;
+      c.preventCombatDamageUntilEndOfTurn = true;
+      broadcastCard(lobby, c);
+    });
   },
   // Kaalia, Zenith Seeker -- "When Kaalia enters, look at the top six cards of your library. You
   // may reveal an Angel card, a Demon card, and/or a Dragon card from among them and put them into
