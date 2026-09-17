@@ -420,6 +420,12 @@ const CARD_ABILITIES = {
   // baked into chosenTargetId by fireGlobalCombatDamageToPlayerTrigger itself (see its own comment).
   "impostor syndrome": [{ trigger: "anyCreatureCombatDamageToPlayer", excludeTokenSources: true, requiresTarget: false, label: "Impostor Syndrome — create a nonlegendary token copy of that creature", effects: [{ type: "createTokenCopyOfTargetCreature", stripLegendary: true }] }],
   "zeriam, golden wind": [{ trigger: "anyCreatureCombatDamageToPlayer", typeFilter: ["griffin"], label: "Zeriam, Golden Wind — create a 2/2 white Griffin token with flying", requiresTarget: false, effects: [{ type: "createToken", name: "Griffin", tokenType: "Token Creature — Griffin", power: "2", toughness: "2", colors: ["W"], keywords: ["Flying"] }] }],
+  // Kediss, Emberclaw Familiar -- commanderSourceOnly gates on the DEALING creature's own
+  // isCommander flag (see fireGlobalCombatDamageToPlayerTrigger's own comment), not Kediss's --
+  // fires for ANY commander this player controls dealing combat damage, Kediss included. Partner
+  // itself needs no code: this engine already allows two commander slots per player unconditionally,
+  // with no partner-eligibility check to enforce.
+  "kediss, emberclaw familiar": [{ trigger: "anyCreatureCombatDamageToPlayer", commanderSourceOnly: true, requiresTarget: false, label: "Kediss, Emberclaw Familiar — deal that much damage to each other opponent", effects: [{ type: "damageEachOtherOpponentSameAmount" }] }],
   "kaalia, zenith seeker": [{ trigger: "etb", label: "Kaalia, Zenith Seeker — look at top 6, take Angels/Demons/Dragons", effects: [{ type: "lookTopNRevealTypesToHand", amount: 6, types: ["Angel", "Demon", "Dragon"] }] }],
   "utvara hellkite": [{ trigger: "otherAttacks", typeFilter: ["Dragon"], label: "Utvara Hellkite — create a 6/6 flying Dragon token, tapped and attacking",
     effects: [{ type: "createAttackingToken", name: "Dragon", tokenType: "Token Creature — Dragon", power: "6", toughness: "6", colors: ["R"], keywords: ["Flying"], img: "https://cards.scryfall.io/normal/front/1/1/11335886-a422-42ff-be14-226602202603.jpg" }] }],
@@ -496,6 +502,13 @@ const CARD_ABILITIES = {
   // Kolaghan's own controller -- see fireGlobalOpponentCastsMatchingGraveyardCardTrigger's comment.
   "dragonlord kolaghan": [{ trigger: "opponentCastsMatchingGraveyardCard", label: "Dragonlord Kolaghan — that player loses 10 life", requiresTarget: false, effects: [{ type: "loseLife", amount: 10 }] }],
   "rakdos, patron of chaos": [{ trigger: "endStep", label: "Rakdos, Patron of Chaos — target opponent may sacrifice two nonland permanents or you draw two cards", requiresTarget: true, targetKind: "player", effects: [{ type: "offerSacrificeOrDraw", sacrificeCount: 2, declinedDraw: 2 }] }],
+  // Soulherder -- the "+1/+1 counter whenever a creature is exiled" half needs no table entry at all
+  // (checkCreatureExiledCounterGrant, a pure text-scan fired from the single exileCardInternal choke
+  // point). Only this end-step blink half needs one. targetKind "otherOwnCreature" already excludes
+  // Soulherder itself, matching "ANOTHER target creature you control." The real "you may" choice is
+  // represented the same way every other optional TRIGGERED target choice in this file already is --
+  // the queued target choice's own Cancel button declines it.
+  "soulherder": [{ trigger: "endStep", requiresTarget: true, targetKind: "otherOwnCreature", label: "Soulherder — exile another target creature you control, then return it to the battlefield", effects: [{ type: "exileThenReturnTarget" }] }],
   // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step, that
   // player does X," reusing the eachOpponentEndStep event fireGlobalTriggerEachOpponent dispatches
   // (see its own comment) with "that player" baked into chosenTargetId automatically.
@@ -2077,6 +2090,9 @@ const ATTACK_ALONE_CARDS = ["master of cruelties"];
 // planeswalker), or "spell" (anything currently on the stack, for counters).
 const SPELL_ABILITIES = {
   "armageddon": { label: "Armageddon — destroy all lands", effects: [{ type: "destroyAllLands" }] },
+  // Temur Battle Rage -- see grantFerociousTrampleToTarget's own comment for the Ferocious check
+  // shape (evaluated once, at resolution, not live).
+  "temur battle rage": { label: "Temur Battle Rage — target creature gains double strike; Ferocious: also gains trample if you control a creature with power 4 or greater", effects: [{ type: "grantKeywordToTarget", keyword: "Double strike" }, { type: "grantFerociousTrampleToTarget" }], requiresTarget: true, targetKind: "creature" },
   // Proliferate spell batch (item 6) -- reuses the pre-existing proliferateAll effect (built for
   // Atomize/Contagion Clasp) unchanged.
   "contentious plan": { label: "Contentious Plan — proliferate, draw a card", effects: [{ type: "proliferateAll" }, { type: "drawCards", amount: 1 }] },
@@ -3729,6 +3745,28 @@ const EFFECTS = {
     const card = lobby.cards[params.chosenTargetId];
     if (card) exileCardInternal(lobby, card);
   },
+  // Soulherder -- "you may exile another target creature you control, then return that card to the
+  // battlefield under its owner's control." A real CR 400.7 blink: the returning permanent is a NEW
+  // object (fresh id via spawnBattlefieldCard, no memory of counters/auras/temporary effects from
+  // before), and its ETB fires again, same as anything else entering the battlefield.
+  exileThenReturnTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const ownerId = card.originalOwner || card.owner;
+    const owner = lobby.players[ownerId];
+    if (!owner) return;
+    const entry = toEntry(card);
+    exileCardInternal(lobby, card);
+    // The card only ever passes THROUGH exile on its way back -- exileCardInternal already fired any
+    // real "whenever a creature is exiled" watcher (Soulherder's own +1/+1 counter included) by the
+    // time this runs, so remove the now-stale exile entry it just pushed rather than leaving a ghost
+    // card sitting there forever.
+    const idx = owner.exile.findIndex((e) => e.id === entry.id);
+    if (idx !== -1) owner.exile.splice(idx, 1);
+    const newCard = spawnBattlefieldCard(lobby, { ...entry, owner: ownerId, zoneType: classifyType(entry.type), faceDown: false });
+    broadcastPlayers(lobby);
+    fireEtbTriggers(lobby, newCard);
+  },
   // Sacrifice (CR 701.19), not destroy -- ignores Indestructible on purpose, unlike destroyTarget.
   // Used for the "pay by sacrificing a permanent of your own choice" branch of an optional-payment
   // cost (Rakdos, Patron of Chaos and its functional cousins) -- see queueOptionalPayment.
@@ -3931,6 +3969,21 @@ const EFFECTS = {
     } else {
       grantTemporaryKeyword(lobby, card, params.keyword);
     }
+  },
+  // Temur Battle Rage -- "Ferocious — that creature also gains trample until end of turn if you
+  // control a creature with power 4 or greater." Real Magic checks Ferocious once, AS the spell
+  // resolves, and the grant sticks even if the qualifying creature is gone later that turn (same
+  // "one-time check, not continuously re-evaluated" shape grantTemporaryKeyword already has for
+  // every other temporary grant) -- so this is checked exactly once, here, not live every combat.
+  grantFerociousTrampleToTarget(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const hasFerociousCreature = Object.values(lobby.cards).some((c) => {
+      if (c.owner !== ctx.controllerId || c.zoneType !== "creature") return false;
+      const bonus = attachedBonusFor(lobby, c), stat = staticBonusFor(lobby, c);
+      return parsePT(c.power) + (c.counters || 0) + bonus.powerBonus + stat.powerBonus >= 4;
+    });
+    if (hasFerociousCreature) grantTemporaryKeyword(lobby, card, "Trample");
   },
   // Giver of Runes / Mother of Runes -- "target creature you control gains protection from the
   // color of your choice UNTIL END OF TURN." params.quality (baked into the ACTIVATED_ABILITIES
@@ -4764,6 +4817,16 @@ const EFFECTS = {
       fireDeathTriggers(lobby, card);
       sendToGraveyardInternal(lobby, card);
     }
+  },
+  // Kediss, Emberclaw Familiar -- "it deals that much damage to each OTHER opponent." dealtToPlayerId/
+  // dealtToPlayerAmount are baked in by fireGlobalCombatDamageToPlayerTrigger itself (same "capture
+  // the dynamic bit now" pattern chosenTargetId already uses there for Impostor Syndrome). Reuses
+  // damageTarget's own per-player math (multiplier/reduction/spellDamage emit) for each other
+  // opponent in turn, rather than a flat applyLifeLoss, so this is a real "damage" event like any
+  // other, not bare life loss.
+  damageEachOtherOpponentSameAmount(lobby, ctx, params) {
+    const targets = effectTargets(lobby, ctx.controllerId, "eachOpponent").filter((id) => id !== params.dealtToPlayerId);
+    targets.forEach((id) => EFFECTS.damageTarget(lobby, ctx, { amount: params.dealtToPlayerAmount || 0, chosenTargetId: id }));
   },
   // chosenTargetId here refers to a STACK ITEM's own id (a cast spell or a triggered ability sitting
   // on the stack), not a card in play -- validated as such by resolveChosenTarget's "spell" targetKind
@@ -9632,6 +9695,11 @@ function fireGlobalCombatDamageToPlayerTrigger(lobby, dealingCard, defenderId, a
       // already established (Miirym/Lathliss/Guardian Project's own "nontoken" exclusions), just
       // checked against the DEALING creature's type here instead of an entering one.
       if (ability.excludeTokenSources && dealingType.includes("token")) return;
+      // Kediss, Emberclaw Familiar -- "Whenever a COMMANDER you control deals combat damage to an
+      // opponent..." Gated on the DEALING card's own isCommander flag (not `source`'s -- Kediss
+      // itself need not be the one dealing damage), same shape excludeTokenSources already
+      // established for the dealing card's TYPE, just for commander-ness instead.
+      if (ability.commanderSourceOnly && !dealingCard.isCommander) return;
       if (ability.condition && !ability.condition(source, lobby)) return;
       // Impostor Syndrome's own token-copy effect needs to know WHICH creature dealt the damage --
       // dealingCard.id baked in as chosenTargetId, the same "capture the dynamic bit now" precedent
@@ -9898,6 +9966,13 @@ function sendToGraveyardInternal(lobby, card) {
 // (rather than calling the socket-closure-scoped moveOut) since it needs to be callable from
 // EFFECTS, which is defined outside any single connection's closure.
 function exileCardInternal(lobby, card) {
+  // Soulherder -- "Whenever a creature is exiled from the battlefield, put a +1/+1 counter on this
+  // creature." No "you control"/"another" qualifier on WHICH creature gets exiled, so this checks
+  // BEFORE the card is actually removed (card.zoneType still reflects its real pre-exile state) and
+  // fires for every real creature exile in the game, not just Soulherder's own. Single choke point:
+  // every exile path in this file (exileTarget, Soulherder's own blink below, any future mechanism)
+  // already funnels through this one function.
+  if (card.zoneType === "creature") checkCreatureExiledCounterGrant(lobby);
   delete lobby.cards[card.id];
   if (lobby.targets[card.id]) delete lobby.targets[card.id];
   io.to(lobby.id).emit("cardRemove", card.id);
@@ -9911,6 +9986,13 @@ function exileCardInternal(lobby, card) {
     return;
   }
   owner.exile.push(toEntry(card));
+}
+function checkCreatureExiledCounterGrant(lobby) {
+  Object.values(lobby.cards).forEach((c) => {
+    if (c.zoneType !== "creature" || !/whenever a creature is exiled from the battlefield, put a \+1\/\+1 counter on this creature/i.test(c.text || "")) return;
+    c.counters = (c.counters || 0) + 1;
+    broadcastCard(lobby, c);
+  });
 }
 
 // Bounce returns to the card's true OWNER's hand (not necessarily its current controller -- a
