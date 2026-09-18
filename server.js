@@ -1233,6 +1233,10 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Emergence Zone — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{1}", tap: true, sacrifice: true }, label: "Emergence Zone — you may cast spells this turn as though they had flash", effects: [{ type: "grantFlashUntilEndOfTurn" }] }
   ],
+  // Alchemist's Refuge -- same grantFlashUntilEndOfTurn reuse as Emergence Zone just above, no
+  // sacrifice and no separate mana ability (its own printed cost IS the whole ability, no {T}: Add
+  // half to model).
+  "alchemist's refuge": [{ cost: { mana: "{G}{U}", tap: true }, label: "Alchemist's Refuge — you may cast spells this turn as though they had flash", effects: [{ type: "grantFlashUntilEndOfTurn" }] }],
   "witch's clinic": [
     { cost: { tap: true }, manaAbility: true, label: "Witch's Clinic — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{2}", tap: true }, label: "Witch's Clinic — target commander gains lifelink until end of turn", requiresTarget: true, targetKind: "commander", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Lifelink" }] }
@@ -2812,7 +2816,11 @@ function isSentenceGenericallyAutomated(sentence) {
   if (/whenever this (land|artifact) becomes tapped, it deals \d+ damage to you\.?$/.test(low)) return true;
   if (/^as this (land|artifact) enters, you may pay \d+ life\b/.test(low)) return true;
   if (/^if you don'?t, it enters tapped\.?$/.test(low)) return true;
-  if (/^this (land|artifact) deals \d+ damage to you\.?$/.test(low)) return true;
+  // Elves of Deep Shadow and similar "painful" mana dorks use "this CREATURE deals N damage to
+  // you" -- applyPainlandDamageIfNeeded already handles creature sources too (its own regex has
+  // always included "creature"), this classifier pattern just never matched that voice. Same
+  // "real working mechanism, classifier never recognized it" gap as the untap-step fix just above.
+  if (/^this (land|artifact|creature) deals \d+ damage to you\.?$/.test(low)) return true;
   if (/^\{t\}, pay \d+ life:\s*add\b/.test(low)) return true;
   if (/^(basic landcycling|cycling) \{[^}]+\}\.?$/.test(low)) return true;
   if (/^enchant creature$/.test(low)) return true;
@@ -2894,6 +2902,8 @@ function isSentenceGenericallyAutomated(sentence) {
   // mechanism (a disclosed "charge queued on production, consumed by the next qualifying creature
   // cast" approximation of true per-unit mana provenance).
   if (/^when that mana is spent to cast a creature spell that shares a creature type with your commander, scry \d+\.?$/.test(low)) return true;
+  // Dragonlord Dromoka -- see dromokaRestricts' own comment for the real mechanism.
+  if (/^your opponents can'?t cast spells during your turn\.?$/.test(low)) return true;
   return false;
 }
 function isCardGenericallyAutomated(text) {
@@ -8362,6 +8372,18 @@ function grandAbolisherRestricts(lobby, casterId, cardType) {
     return /during your turn, your opponents can'?t cast spells or activate abilities of artifacts, creatures, or enchantments/i.test(c.text || "");
   });
 }
+// Dragonlord Dromoka -- "Your opponents can't cast spells during your turn." Same "during your
+// turn, restricts anyone who isn't you" shape as grandAbolisherRestricts just above, just with no
+// type-line filtering at all (real Magic's own wording never limits it to artifacts/creatures/
+// enchantments the way Grand Abolisher's does -- this blocks every spell).
+function dromokaRestricts(lobby, casterId) {
+  const activeId = lobby.turn.order[lobby.turn.activeIndex];
+  return Object.values(lobby.cards).some((c) => {
+    if (c.zoneType === "hand" || c.zoneType === "stack") return false;
+    if (c.owner === casterId || c.owner !== activeId) return false;
+    return /your opponents can'?t cast spells during your turn/i.test(c.text || "");
+  });
+}
 // Orim's Chant's "can't cast spells this turn" -- checked at the same call sites as checkTiming
 // (playCard, freeCastCard), but only for actual SPELLS: playing a LAND is never "casting a spell"
 // in real Magic, so a land classification is exempt.
@@ -8372,6 +8394,9 @@ function canCastSpells(lobby, socketId, card) {
   }
   if (grandAbolisherRestricts(lobby, socketId, card.type)) {
     return { ok: false, error: `An opponent's Grand Abolisher stops you from casting that right now.` };
+  }
+  if (dromokaRestricts(lobby, socketId)) {
+    return { ok: false, error: `An opponent's Dragonlord Dromoka stops you from casting spells during their turn.` };
   }
   return { ok: true };
 }
