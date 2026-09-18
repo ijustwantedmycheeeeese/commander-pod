@@ -843,6 +843,24 @@ const CARD_ABILITIES = {
     { trigger: "deathYouControl", typeFilter: "zombie", excludeSelf: true, requiresTarget: false, label: "Wilhelt, the Rotcleaver — create a 2/2 black Zombie token", effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] },
     { trigger: "endStep", requiresTarget: false, label: "Wilhelt, the Rotcleaver — you may sacrifice a Zombie, draw a card", effects: [{ type: "offerSacrificeZombieForCard" }] }
   ],
+  // Headless Rider -- "Whenever this creature or another NONTOKEN Zombie you control dies" --
+  // Undead Augur's own self-inclusive deathYouControl shape (typeFilter "zombie"), PLUS the new
+  // excludeTokenSources check on fireGlobalTrigger just above (a token Zombie this ability's own
+  // token dying would otherwise keep re-triggering it, same infinite-loop concern Miirym's own
+  // excludeTokenSources already guards against on the ETB side).
+  "headless rider": [{ trigger: "deathYouControl", typeFilter: "zombie", excludeTokenSources: true, requiresTarget: false, label: "Headless Rider — create a 2/2 black Zombie token", effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] }],
+  // Bone Miser -- three separate "whenever you discard a [category] card" triggers, all riding the
+  // pre-existing youDiscard event (Archfiend of Ifnir's own precedent) with zero new plumbing: the
+  // creature/land halves use the plain string typeFilter deathYouControl-family abilities already
+  // use, and "noncreature, nonland" is exactly Flux Channeler's own excludeTypeFilter shape (an
+  // array, matched with .some(), unlike typeFilter's single string) applied to two types at once
+  // instead of one. addFixedMana already takes an arbitrary colors array with no dedup, so
+  // ["B","B"] correctly adds two black mana for the land half.
+  "bone miser": [
+    { trigger: "youDiscard", typeFilter: "creature", requiresTarget: false, label: "Bone Miser — create a 2/2 black Zombie token", effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] },
+    { trigger: "youDiscard", typeFilter: "land", requiresTarget: false, label: "Bone Miser — add {B}{B}", effects: [{ type: "addFixedMana", colors: ["B", "B"] }] },
+    { trigger: "youDiscard", excludeTypeFilter: ["creature", "land"], requiresTarget: false, label: "Bone Miser — draw a card", effects: [{ type: "drawCards", amount: 1 }] }
+  ],
   // Wave 11 gap-analysis batch. Deathtouch/Flying need no table entry (KNOWN_KEYWORDS).
   "acidic slime": [{ trigger: "etb", label: "Acidic Slime — destroy target artifact, enchantment, or land", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment", "land"], effects: [{ type: "destroyTarget" }] }],
   // "Destroy target permanent" -- narrowed to creature/artifact, same disclosed simplification as
@@ -1857,6 +1875,15 @@ const ACTIVATED_ABILITIES = {
   // "another" (unlike Pashalik Mons's "a Goblin") means this can't fall back to sacrificing itself.
   "razaketh, the foulblooded": [{ cost: { life: 2, autoSacrificeFilter: "creature", excludeSelf: true }, label: "Razaketh, the Foulblooded — Pay 2 life, Sacrifice another creature: search for a card", effects: [{ type: "tutorToHand" }] }],
   "tortured existence": [{ cost: { mana: "{B}", autoDiscardFilter: "creature" }, requiresTarget: true, targetKind: "ownGraveyardCreature", label: "Tortured Existence — {B}, Discard a creature card: return target creature card from your graveyard to your hand", effects: [{ type: "returnGraveyardCardToHand" }] }],
+  // Cryptbreaker -- two independent activated abilities. The first reuses autoDiscardFilter
+  // verbatim (same shape as Tortured Existence just above). The second introduces the new
+  // tapCreaturesFilter/tapCreaturesCount cost primitive (see the activateAbility handler's own
+  // comment) for "Tap three untapped Zombies you control" -- Cryptbreaker itself is a legal
+  // candidate among the three, since the real wording never says "other."
+  "cryptbreaker": [
+    { cost: { mana: "{1}{B}", tap: true, autoDiscardFilter: "card" }, requiresTarget: false, label: "Cryptbreaker — {1}{B}, {T}, Discard a card: create a 2/2 black Zombie token", effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] },
+    { cost: { tapCreaturesFilter: "zombie", tapCreaturesCount: 3 }, requiresTarget: false, label: "Cryptbreaker — Tap three untapped Zombies you control: draw a card, lose 1 life", effects: [{ type: "drawCards", amount: 1 }, { type: "loseLife", target: "controller", amount: 1 }] }
+  ],
   // Wave 26 -- its plain "{T}: Add {C}" half is untouched by the free-tap-mana shortcut, same
   // reasoning as Desolate Lighthouse (this second ability isn't a manaAbility).
   "hall of heliod's generosity": [{ cost: { mana: "{1}{W}", tap: true }, requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["enchantment"], label: "Hall of Heliod's Generosity — {1}{W}, {T}: Put target enchantment card from your graveyard on top of your library", effects: [{ type: "putOwnGraveyardEntryOnTopOfLibrary" }] }],
@@ -9602,6 +9629,12 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       // whole battlefield (itself included, since it's removed from lobby.cards AFTER this fires),
       // so no separate "selfInclusive" flag is needed the way otherCreatureEtb's is.
       if (ability.typeFilter && !(eventCard && (eventCard.type || "").toLowerCase().includes(ability.typeFilter))) return;
+      // Headless Rider-style "whenever ~ or another NONTOKEN Zombie you control dies" -- same
+      // excludeTokenSources flag/semantics fireGlobalOtherCreatureEtbTriggers already uses (Miirym,
+      // Lathliss, Guardian Project), just checked against the DYING card's own type line instead of
+      // an entering one. Without this, a token Zombie Headless Rider itself just created would
+      // re-trigger it on death, a real infinite-token-generation risk if it ever died in combat.
+      if (ability.excludeTokenSources && eventCard && (eventCard.type || "").toLowerCase().includes("token")) return;
       // Door of Destinies -- "whenever you cast a spell of the CHOSEN type" -- unlike typeFilter just
       // above (a fixed string baked into the table entry), the type here is a per-permanent runtime
       // choice (c.chosenCreatureType, set by chooseCreatureType/targetKind:"creatureType" at ETB), so
@@ -11976,6 +12009,22 @@ io.on("connection", (socket) => {
       autoDiscardCard = candidates[0] || null;
       if (!autoDiscardCard) { socket.emit("actionError", `You have no ${filter === "card" ? "card" : filter} card to discard.`); return; }
     }
+    // Cryptbreaker-style "Tap three untapped Zombies you control" -- a cost that taps OTHER
+    // permanents (not the activating card's own {T} symbol via cost.tap above), so summoning
+    // sickness never applies to the tapped creatures -- same precedent as Sephara's own tapCreatures
+    // alternative-cost (the socket.on("castSpellAltCost"...) handler above, which also never checks
+    // it). The activating card itself is a legal candidate too, since the real wording never says
+    // "other."
+    let tapCreaturesToTap = [];
+    if (cost.tapCreaturesFilter) {
+      const filter = cost.tapCreaturesFilter;
+      const qualifying = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "creature" && !c.tapped && (c.type || "").toLowerCase().includes(filter));
+      if (qualifying.length < cost.tapCreaturesCount) {
+        socket.emit("actionError", `You need ${cost.tapCreaturesCount} untapped ${filter} creatures to activate ${card.name}'s ability (only have ${qualifying.length}).`);
+        return;
+      }
+      tapCreaturesToTap = qualifying.slice(0, cost.tapCreaturesCount);
+    }
 
     if (cost.tap) {
       if (card.tapped) { socket.emit("actionError", `${card.name} is already tapped.`); return; }
@@ -12063,6 +12112,9 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} discards ${autoDiscardCard.name || "a card"} to pay the cost`);
       sendToGraveyardInternal(lobby, autoDiscardCard);
       fireGlobalTrigger(lobby, "youDiscard", socket.id, autoDiscardCard);
+    }
+    if (tapCreaturesToTap.length) {
+      tapCreaturesToTap.forEach((c) => { c.tapped = true; broadcastCard(lobby, c); });
     }
     if (ability.manaAbility) {
       // Real Magic (CR 605): a mana ability never uses the stack -- it resolves the instant it's
