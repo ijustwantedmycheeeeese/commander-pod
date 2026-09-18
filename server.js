@@ -2904,6 +2904,14 @@ function isSentenceGenericallyAutomated(sentence) {
   if (/^when that mana is spent to cast a creature spell that shares a creature type with your commander, scry \d+\.?$/.test(low)) return true;
   // Dragonlord Dromoka -- see dromokaRestricts' own comment for the real mechanism.
   if (/^your opponents can'?t cast spells during your turn\.?$/.test(low)) return true;
+  // Wave 35 -- three more real, already-working mechanisms the classifier never had a matching
+  // pattern for (same "tool gap, not an engine gap" shape as wave 34's untap-step/must-attack/
+  // painland fixes). Quick Sliver's own anyPlayerFlashGrantAppliesTo, Serra Ascendant's own
+  // staticBonusFor/effectiveKeywords life-conditional grant, and Ghalta's own spellCostReductionFor
+  // total-power reduction have all been real, working mechanisms for multiple prior waves already.
+  if (/^any player may cast \w+ spells as though they had flash\.?$/.test(low)) return true;
+  if (/^as long as you have \d+ or more life, this creature gets \+\d+\/\+\d+ and has [a-z]+\.?$/.test(low)) return true;
+  if (/^this spell costs \{x\} less to cast, where x is the total power of creatures you control\.?$/.test(low)) return true;
   return false;
 }
 function isCardGenericallyAutomated(text) {
