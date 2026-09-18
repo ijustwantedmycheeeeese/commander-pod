@@ -419,6 +419,28 @@ const CARD_ABILITIES = {
   // verbatim (Irenicus's Vile Duplication's own effect, wave 11) -- the dealing creature's own id is
   // baked into chosenTargetId by fireGlobalCombatDamageToPlayerTrigger itself (see its own comment).
   "impostor syndrome": [{ trigger: "anyCreatureCombatDamageToPlayer", excludeTokenSources: true, requiresTarget: false, label: "Impostor Syndrome — create a nonlegendary token copy of that creature", effects: [{ type: "createTokenCopyOfTargetCreature", stripLegendary: true }] }],
+  // Toski, Bearer of Secrets -- "Whenever a creature you control deals combat damage to a player,
+  // draw a card." Same anyCreatureCombatDamageToPlayer dispatcher as Old Gnawbone just above, no
+  // typeFilter needed since it applies to ANY creature. Its "attacks each combat if able" half needs
+  // no table entry at all -- see declareAttackers' own new self-must-attack enforcement. Explicit
+  // target: "controller" is REQUIRED here, not just stylistic -- see drawCards' own new comment on
+  // why this dispatcher's ambient chosenTargetId (the dealing creature's id, not a player id) must
+  // be overridden.
+  "toski, bearer of secrets": [{ trigger: "anyCreatureCombatDamageToPlayer", requiresTarget: false, label: "Toski, Bearer of Secrets — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  // Mana Vault -- its own "doesn't untap" and "{T}: Add {C}{C}{C}" halves are already generically
+  // automated (the untap-step text-scan and the plain {T}:Add pattern respectively, no table entry
+  // needed for either). Unlike Grim/Basalt Monolith's own manually-ACTIVATED {N}-cost untap ability
+  // (a player choice, ACTIVATED_ABILITIES table), Mana Vault's own untap option is a real
+  // upkeep-triggered "you may" -- offerPayManaToUntapSelf (new, see its own comment), gated on
+  // card.tapped so the prompt doesn't nag every upkeep once it's already untapped. The draw-step
+  // damage clause reuses the new drawStep trigger dispatch, also gated on card.tapped -- modeled as
+  // loseLife rather than true damage, same "deals N damage to you" -> loseLife convention this file
+  // already uses elsewhere for static self-inflicted amounts with no prevention/doubling interaction
+  // expected.
+  "mana vault": [
+    { trigger: "upkeep", requiresTarget: false, condition: (card) => card.tapped, label: "Mana Vault — you may pay {4} to untap this artifact", effects: [{ type: "offerPayManaToUntapSelf", cost: "{4}", label: "Mana Vault — pay {4} to untap this artifact?" }] },
+    { trigger: "drawStep", requiresTarget: false, condition: (card) => card.tapped, label: "Mana Vault — deals 1 damage to you (tapped)", effects: [{ type: "loseLife", target: "controller", amount: 1 }] }
+  ],
   "zeriam, golden wind": [{ trigger: "anyCreatureCombatDamageToPlayer", typeFilter: ["griffin"], label: "Zeriam, Golden Wind — create a 2/2 white Griffin token with flying", requiresTarget: false, effects: [{ type: "createToken", name: "Griffin", tokenType: "Token Creature — Griffin", power: "2", toughness: "2", colors: ["W"], keywords: ["Flying"] }] }],
   // Kediss, Emberclaw Familiar -- commanderSourceOnly gates on the DEALING creature's own
   // isCommander flag (see fireGlobalCombatDamageToPlayerTrigger's own comment), not Kediss's --
@@ -2858,6 +2880,20 @@ function isSentenceGenericallyAutomated(sentence) {
   if (/^as this land enters, you may reveal an? [a-z]+( or (an? )?[a-z]+)? card from (?:your )?hand\.?$/.test(low)) return true;
   if (/^if you don'?t, this land enters tapped\.?$/.test(low)) return true;
   if (/^you may cast spells as though they had flash\.?$/.test(low)) return true;
+  // Grim Monolith / Basalt Monolith / Mana Vault -- "This artifact doesn't untap during your untap
+  // step." A real, already-working mechanism (the untap-step loop's own text-scan, see its comment)
+  // this classifier simply never recognized -- a pure tool-accuracy fix, same "working mechanism in
+  // a table/check this function forgot to look at" shape as the Propaganda-style gap already fixed
+  // elsewhere in this function's own history.
+  if (/^this (?:artifact|permanent) doesn'?t untap during your untap step\.?$/.test(low)) return true;
+  // Toski, Bearer of Secrets and any future card with the same self-only static wording -- "[Name]
+  // attacks each combat if able." Matches the new declareAttackers enforcement added alongside this
+  // (see its own comment) -- a pure per-creature text-scan, no table entry needed.
+  if (/^[a-z][a-z',. ]* attacks each combat if able\.?$/.test(low)) return true;
+  // Path of Ancestry -- see checkTribalScryManaTrigger/attemptPlay's own comments for the real
+  // mechanism (a disclosed "charge queued on production, consumed by the next qualifying creature
+  // cast" approximation of true per-unit mana provenance).
+  if (/^when that mana is spent to cast a creature spell that shares a creature type with your commander, scry \d+\.?$/.test(low)) return true;
   return false;
 }
 function isCardGenericallyAutomated(text) {
@@ -2881,7 +2917,13 @@ const EFFECTS = {
   // caller, so this is fully backward compatible) reuses effectTargets' own "eachPlayer"/
   // "eachOpponent" scope, same shape loseLife already established, instead of always the controller.
   drawCards(lobby, ctx, params) {
-    const targets = params.chosenTargetId ? [params.chosenTargetId] : effectTargets(lobby, ctx.controllerId, params.target);
+    // Toski, Bearer of Secrets -- anyCreatureCombatDamageToPlayer's own dispatcher unconditionally
+    // bakes chosenTargetId as the DEALING CREATURE's id (for effects like createTokenCopyOfTargetCreature
+    // that need to know which creature dealt damage), not a player id -- a plain "draw a card"
+    // effect on that same dispatcher has no use for it and must fall back to its own explicit
+    // target (or the "controller" default) instead. Only takes priority over an explicit target
+    // when none was given, so every existing caller (none of which sets both) is unaffected.
+    const targets = (!params.target && params.chosenTargetId) ? [params.chosenTargetId] : effectTargets(lobby, ctx.controllerId, params.target);
     targets.forEach((id) => drawN(lobby, id, params.amount || 1));
   },
   // Sylvan Library -- the "accept" half of the draw-step choice (see advanceOnePhase's own Draw-phase
@@ -3953,6 +3995,22 @@ const EFFECTS = {
       label: "Wilhelt, the Rotcleaver — sacrifice a Zombie to draw a card?",
       costLabel: "Sacrifice a Zombie", cost: { autoSacrificeTypeFilter: "zombie" },
       acceptedEffects: [{ type: "drawCards", amount: 1 }]
+    });
+  },
+  // Mana Vault-style "At the beginning of your upkeep, you may pay {N}. If you do, untap this
+  // artifact." Reuses queueOptionalPayment's existing cost.mana handling (Sylvan Library's own
+  // cost.life precedent, just a mana cost instead) -- untapSelf on the accept branch reads
+  // ctx.sourceCard off the queued entry the same way any other accepted-effects branch does, so it
+  // correctly untaps the exact permanent that triggered this, not just "some" Mana Vault. No CR
+  // 603.3c auto-fizzle check needed the way offerSacrificeZombieForCard needs one above -- this
+  // ability's own CARD_ABILITIES entry already gates on card.tapped via its condition, so it's never
+  // even fired when there's nothing useful to offer.
+  offerPayManaToUntapSelf(lobby, ctx, params) {
+    queueOptionalPayment(lobby, {
+      playerId: ctx.controllerId, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: params.label || `Pay ${params.cost || "{4}"} to untap this artifact?`,
+      costLabel: `Pay ${params.cost || "{4}"}`, cost: { mana: params.cost || "{4}" },
+      acceptedEffects: [{ type: "untapSelf" }]
     });
   },
   // Swords to Plowshares -- "Its controller gains life equal to its power": the life goes to the
@@ -6491,6 +6549,26 @@ function commanderColorIdentity(lobby, ownerId) {
   if (p) (p.commanders || []).forEach((cmd) => { if (cmd && Array.isArray(cmd.colorIdentity)) cmd.colorIdentity.forEach((c) => colors.add(c)); });
   return Array.from(colors);
 }
+// Path of Ancestry -- creature TYPE words are exactly the subtypes after a type line's own em dash
+// ("Legendary Creature — Human Wizard" -> human, wizard), same convention typeFilter substring
+// checks elsewhere in this file already rely on informally, just made explicit here since this
+// needs to compare TWO type lines (the commander's and the cast spell's) against each other rather
+// than a fixed string.
+function commanderCreatureTypes(lobby, ownerId) {
+  const p = lobby.players[ownerId];
+  const types = new Set();
+  if (p) (p.commanders || []).forEach((cmd) => {
+    if (!cmd) return;
+    ((cmd.type || "").split("—")[1] || "").trim().split(/\s+/).forEach((w) => { if (w) types.add(w.toLowerCase()); });
+  });
+  return types;
+}
+function sharesCreatureTypeWithCommander(lobby, ownerId, castCard) {
+  const commanderTypes = commanderCreatureTypes(lobby, ownerId);
+  if (!commanderTypes.size) return false;
+  const castTypes = ((castCard.type || "").split("—")[1] || "").trim().split(/\s+/).map((w) => w.toLowerCase());
+  return castTypes.some((t) => commanderTypes.has(t));
+}
 
 // Chromatic Lantern -- "Lands you control have '{T}: Add one mana of any color.'" A blanket grant
 // to every OTHER land the controller owns, checked by name (unlike dependsOnOpponentLands/
@@ -8160,6 +8238,14 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   ["W", "U", "B", "R", "G"].forEach((c) => { if ((beforeMana[c] || 0) > (paid.normalPool[c] || 0)) convergeColors.add(c); });
   paid.spentUnits.forEach((u) => { if (["W", "U", "B", "R", "G"].includes(u.color)) convergeColors.add(u.color); });
   card._convergeColorCount = convergeColors.size;
+  // Path of Ancestry -- see checkTribalScryManaTrigger's own comment for the disclosed
+  // "charge queued on production, consumed by the next qualifying cast" approximation. Checked here
+  // (payment already succeeded) rather than before, since a charge should only ever be consumed by a
+  // spell that actually got cast, not merely attempted.
+  if ((p._pendingTribalScryMana || []).length && classifyType(card.type) === "creature" && sharesCreatureTypeWithCommander(lobby, card.owner, card)) {
+    const scryAmount = p._pendingTribalScryMana.shift();
+    EFFECTS.scryN(lobby, { controllerId: card.owner, sourceCard: { id: card.id } }, { amount: scryAmount });
+  }
   // Delighted Halfling -- "...and that spell can't be countered." Only true when mana carrying
   // this specific bonus was ACTUALLY spent on this cast (not just present in the pool), checked via
   // affordWithRestricted's own spentUnits list. isProtectedFromCountering reads this flag straight
@@ -10456,6 +10542,10 @@ function advanceOnePhase(lobby) {
   if (activePlayer && turn.phase === "Upkeep") checkCumulativeUpkeep(lobby, activeId);
   // Stasis -- see checkFlatUpkeepSacrifice's own comment for the non-cumulative shape.
   if (activePlayer && turn.phase === "Upkeep") checkFlatUpkeepSacrifice(lobby, activeId);
+  // "At the beginning of your draw step" triggers (Mana Vault and any future card with the same
+  // shape) -- same reuse of fireGlobalTrigger as Upkeep/End Step, just for the "Draw" phase, which
+  // had no dispatch at all until now.
+  if (activePlayer && turn.phase === "Draw") fireGlobalTrigger(lobby, "drawStep", activeId);
   // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
   if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
   // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step,
@@ -11696,6 +11786,21 @@ io.on("connection", (socket) => {
     checkEliminations(lobby); // a real way to die, checked immediately -- same as any other life-loss cost
     broadcastPlayers(lobby);
   }
+  // Path of Ancestry -- "When that mana is spent to cast a creature spell that shares a creature
+  // type with your commander, scry 1." This engine's mana pool has no real per-unit provenance
+  // tracking outside the restricted-mana pipeline (which this land doesn't use, since its mana is
+  // ordinary and freely spendable) -- a disclosed approximation queues a "charge" here, at the same
+  // two choke points applyPainlandDamageIfNeeded already runs from, and attemptPlay's own cast-time
+  // check (see its own comment) consumes one charge on the next qualifying creature spell, whether
+  // or not that EXACT mana unit funded that specific cast.
+  function checkTribalScryManaTrigger(lobby, card, playerId) {
+    const m = (card.text || "").match(/when that mana is spent to cast a creature spell that shares a creature type with your commander, scry (\d+)/i);
+    if (!m) return;
+    const p = lobby.players[playerId];
+    if (!p) return;
+    if (!p._pendingTribalScryMana) p._pendingTribalScryMana = [];
+    p._pendingTribalScryMana.push(parseInt(m[1], 10) || 1);
+  }
   // Forbidden Orchard -- "Whenever you tap this land for mana, target opponent creates a 1/1
   // colorless Spirit creature token." Same text-scan/two-choke-point shape as the painland check
   // just above, but this one needs a REAL target choice (the new "opponent" targetKind), not an
@@ -11773,6 +11878,7 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
       applyPainlandDamageIfNeeded(lobby, card, socket.id);
       checkLandTapOpponentTokenTrigger(lobby, card, socket.id);
+      checkTribalScryManaTrigger(lobby, card, socket.id);
     } else if (options ? options.length > 1 : (Array.isArray(card.producedMana) && card.producedMana.length > 1)) {
       const finalOptions = (options || card.producedMana).filter((c) => ["W", "U", "B", "R", "G", "C"].includes(c));
       if (finalOptions.length) socket.emit("chooseMana", { cardId: card.id, cardName: card.name, options: finalOptions });
@@ -11840,6 +11946,7 @@ io.on("connection", (socket) => {
     pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);
     applyPainlandDamageIfNeeded(lobby, card, socket.id);
     checkLandTapOpponentTokenTrigger(lobby, card, socket.id);
+    checkTribalScryManaTrigger(lobby, card, socket.id);
     setUndo(lobby, socket.id, `Tap ${card.name || "a card"} for {${color}}`, () => {
       const c = lobby.cards[cardId];
       if (c && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
@@ -13541,6 +13648,24 @@ io.on("connection", (socket) => {
           return;
         }
       }
+    }
+    // "Attacks each combat if able" (Toski, Bearer of Secrets and any future card with the same
+    // self-only static text) -- same reject-the-whole-declaration enforcement shape as Kardur's own
+    // forced-attack check just above, but scoped to the creature's OWN oracle text instead of an
+    // opponent's effect, so no separate lobby-wide tracking flag is needed -- a pure per-creature
+    // text-scan, freshly re-checked on every declareAttackers call.
+    const selfMustAttack = Object.values(lobby.cards).filter((c) => {
+      if (c.owner !== socket.id || c.zoneType !== "creature" || c.tapped) return false;
+      if (!/attacks each combat if able/i.test(c.text || "")) return false;
+      const hasHaste = effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "haste");
+      return !(c.controllerSince === lobby.turn.turnNumber && !hasHaste);
+    });
+    const submittedIdsForSelfMustAttack = Object.keys(assignments || {});
+    const missingSelfMustAttack = selfMustAttack.filter((c) => !submittedIdsForSelfMustAttack.includes(c.id));
+    if (missingSelfMustAttack.length) {
+      const names = missingSelfMustAttack.map((c) => c.name).join(", ");
+      socket.emit("actionError", `${names} must attack this combat if able.`);
+      return;
     }
     // First pass: which submitted assignments are even legal attackers at all (unchanged checks),
     // without mutating/tapping anything yet -- the attack-tax total right after needs the FULL
