@@ -823,6 +823,26 @@ const CARD_ABILITIES = {
   // sourceNameFilter -- ANY Goblin qualifies, not one specific name. Reuses the existing generic
   // damageTarget effect (Lightning Bolt et al.) targetKind "any".
   "pashalik mons": [{ trigger: "deathYouControl", typeFilter: "goblin", label: "Pashalik Mons — a Goblin died, deal 1 damage to any target", requiresTarget: true, targetKind: "any", effects: [{ type: "damageTarget", amount: 1 }] }],
+  // Undead Augur -- "Whenever this creature OR ANOTHER Zombie you control dies" is exactly
+  // deathYouControl's own default self-inclusive shape (see Pashalik Mons' own comment on why no
+  // separate selfInclusive flag exists -- it already fires for the watching card's own death too).
+  "undead augur": [{ trigger: "deathYouControl", typeFilter: "zombie", requiresTarget: false, label: "Undead Augur — draw a card, lose 1 life", effects: [{ type: "drawCards", amount: 1 }, { type: "loseLife", target: "controller", amount: 1 }] }],
+  // Wayward Servant -- "Whenever ANOTHER Zombie you control enters" -- otherCreatureEtb's own
+  // default EXCLUDES the watching card itself already (Lathliss/Guardian Project's own precedent),
+  // so this needs no extra flag either.
+  "wayward servant": [{ trigger: "otherCreatureEtb", typeFilter: ["zombie"], requiresTarget: false, label: "Wayward Servant — each opponent loses 1 life, you gain 1 life", effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }, { type: "gainLife", target: "controller", amount: 1 }] }],
+  // Wilhelt, the Rotcleaver -- excludeSelf (fireGlobalTrigger's own City of Traitors-style flag)
+  // handles "ANOTHER Zombie" here, unlike Undead Augur's self-inclusive wording just above. Decayed
+  // isn't modeled anywhere in this engine (no enforced "can't block, sacrifice after combat"
+  // restriction exists) -- the created token is a plain Zombie with no real Decayed behavior, and
+  // the real card's own "if it didn't have decayed" gate is dropped along with it (vacuously true
+  // for every zombie this engine can ever create), a disclosed narrowing: unlike the real card, a
+  // token this ability creates dying WOULD trigger it again, since nothing here can tell it apart
+  // from any other Zombie.
+  "wilhelt, the rotcleaver": [
+    { trigger: "deathYouControl", typeFilter: "zombie", excludeSelf: true, requiresTarget: false, label: "Wilhelt, the Rotcleaver — create a 2/2 black Zombie token", effects: [{ type: "createToken", name: "Zombie", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"] }] },
+    { trigger: "endStep", requiresTarget: false, label: "Wilhelt, the Rotcleaver — you may sacrifice a Zombie, draw a card", effects: [{ type: "offerSacrificeZombieForCard" }] }
+  ],
   // Wave 11 gap-analysis batch. Deathtouch/Flying need no table entry (KNOWN_KEYWORDS).
   "acidic slime": [{ trigger: "etb", label: "Acidic Slime — destroy target artifact, enchantment, or land", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment", "land"], effects: [{ type: "destroyTarget" }] }],
   // "Destroy target permanent" -- narrowed to creature/artifact, same disclosed simplification as
@@ -3890,6 +3910,22 @@ const EFFECTS = {
       costLabel: `Sacrifice ${params.sacrificeCount || 2} permanents`,
       cost: { sacrificeCount: params.sacrificeCount || 2 },
       declinedEffects: [{ type: "drawCards", amount: params.declinedDraw || 2 }]
+    });
+  },
+  // Wilhelt, the Rotcleaver -- "At the beginning of your end step, you may sacrifice a Zombie. If
+  // you do, draw a card." A real "you may," so it's on the ACCEPT branch (acceptedEffects, Sylvan
+  // Library's own precedent) rather than declinedEffects -- declining just does nothing, matching
+  // "if you do" being the ONLY branch with a consequence. CR 603.3c auto-fizzle up front (no Zombie
+  // to sacrifice means the trigger doesn't even prompt), same "reject before paying" shape used
+  // throughout activateAbility's own pre-checks.
+  offerSacrificeZombieForCard(lobby, ctx, params) {
+    const hasZombie = Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && (c.type || "").toLowerCase().includes("zombie"));
+    if (!hasZombie) return;
+    queueOptionalPayment(lobby, {
+      playerId: ctx.controllerId, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: "Wilhelt, the Rotcleaver — sacrifice a Zombie to draw a card?",
+      costLabel: "Sacrifice a Zombie", cost: { autoSacrificeTypeFilter: "zombie" },
+      acceptedEffects: [{ type: "drawCards", amount: 1 }]
     });
   },
   // Swords to Plowshares -- "Its controller gains life equal to its power": the life goes to the
@@ -12381,6 +12417,19 @@ io.on("connection", (socket) => {
         });
       }
     }
+    // Wilhelt, the Rotcleaver -- "you may sacrifice a Zombie" is an untyped, auto-picked cost (same
+    // "auto-pick over a new picker UI" precedent as autoSacrificeFilter's own activated-ability
+    // cost), just on the optional-payment side instead. Re-validated here (not trusted from queue
+    // time) same "state may have changed since this was queued" reasoning bounceCardId already uses
+    // just above.
+    if (entry.cost && entry.cost.autoSacrificeTypeFilter) {
+      const filter = entry.cost.autoSacrificeTypeFilter;
+      const candidate = Object.values(lobby.cards).find((c) => c.owner === socket.id && c.zoneType === "creature" && (c.type || "").toLowerCase().includes(filter));
+      if (candidate) {
+        fireDeathTriggers(lobby, candidate);
+        sendToGraveyardInternal(lobby, candidate);
+      }
+    }
     // Sylvan Library -- the symmetric counterpart to declinedEffects just below, for a "you may X"
     // choice framed as a free (cost: {}) optional payment where ACCEPTING is the real effect (draw
     // two additional cards) rather than merely a cost gate. Every prior optional-payment card wanted
@@ -13166,6 +13215,14 @@ io.on("connection", (socket) => {
     if (activeId !== socket.id) return;
     if (lobby.stack.length > 0) return; // can't advance the turn with something pending on the stack
     if (lobby.turn.pendingDiscard) return; // can't advance past End Step until the discard is resolved
+    // Real gap found while building Wilhelt, the Rotcleaver's own end-step trigger: this handler
+    // never checked pendingOptionalPayments, only the stack -- the exact same class of bug wave 18's
+    // shouldAutoAdvance fix and wave 21's passPriority fix already closed elsewhere, just never
+    // closed HERE. A player (or a rapid-fire client) clicking "next phase" again before answering a
+    // just-queued optional-payment prompt (Wilhelt's own "you may sacrifice a Zombie" included) could
+    // blow straight past it into a new turn, leaving the prompt technically still pending but
+    // effectively orphaned behind stale turn state.
+    if (lobby.pendingOptionalPayments && lobby.pendingOptionalPayments.some((e) => e.playerId === socket.id)) return;
     if (lobby.turn.phase === "End Step") {
       const handCount = Object.values(lobby.cards).filter((c) => c.owner === activeId && c.zoneType === "hand").length;
       if (handCount > 7 && !hasNoMaxHandSize(lobby, activeId)) {
