@@ -427,6 +427,32 @@ const CARD_ABILITIES = {
   // why this dispatcher's ambient chosenTargetId (the dealing creature's id, not a player id) must
   // be overridden.
   "toski, bearer of secrets": [{ trigger: "anyCreatureCombatDamageToPlayer", requiresTarget: false, label: "Toski, Bearer of Secrets — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  // Yahenni, Undying Partisan -- deathAnyCreature (fires for any dying PERMANENT, so eventCardTypeFilter
+  // narrows to creatures) + opponentOnly, exactly Gimli, Counter of Kills' own watcher-side shape.
+  // Its "Sacrifice another creature: gains indestructible until end of turn" half is in
+  // ACTIVATED_ABILITIES (autoSacrificeFilter + excludeSelf, Razaketh's precedent).
+  "yahenni, undying partisan": [{ trigger: "deathAnyCreature", opponentOnly: true, eventCardTypeFilter: ["creature"], requiresTarget: false, label: "Yahenni, Undying Partisan — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
+  // Feral Ghoul -- "another creature you control dies" is Wilhelt's own excludeSelf deathYouControl
+  // shape; its own death hands each opponent rad counters equal to its power AT DEATH (bakeSelfPower,
+  // see fireDeathTriggers -- the card is gone from lobby.cards by the time the stack item resolves).
+  "feral ghoul": [
+    { trigger: "deathYouControl", typeFilter: "creature", excludeSelf: true, requiresTarget: false, label: "Feral Ghoul — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] },
+    { trigger: "death", bakeSelfPower: true, requiresTarget: false, label: "Feral Ghoul — each opponent gets rad counters equal to its power", effects: [{ type: "giveRadCounters", target: "eachOpponent" }] }
+  ],
+  // Grismold, the Dreadsower -- "each player creates a 1/1 Plant" reuses createToken's own new
+  // eachPlayer scope; "whenever a creature TOKEN dies" (any controller) is deathAnyCreature narrowed by
+  // eventCardTypeFilter to the "token creature" type-line substring every created token carries.
+  "grismold, the dreadsower": [
+    { trigger: "endStep", requiresTarget: false, label: "Grismold, the Dreadsower — each player creates a 1/1 green Plant token", effects: [{ type: "createToken", target: "eachPlayer", name: "Plant", tokenType: "Token Creature — Plant", power: "1", toughness: "1", colors: ["G"] }] },
+    { trigger: "deathAnyCreature", eventCardTypeFilter: ["token creature"], requiresTarget: false, label: "Grismold, the Dreadsower — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }
+  ],
+  // Mana Crypt -- "At the beginning of your upkeep, flip a coin. If you lose the flip, this artifact
+  // deals 3 damage to you." (Its {T}: Add {C}{C} is already generic.)
+  "mana crypt": [{ trigger: "upkeep", requiresTarget: false, label: "Mana Crypt — flip a coin, lose 3 on a loss", effects: [{ type: "flipCoinLoseLifeOnLoss", amount: 3 }] }],
+  // Rampaging Ferocidon -- "Players can't gain life" is a pure applyLifeGain text-scan; the ETB damage
+  // half needs the new anyCreatureEtb dispatcher (fireGlobalOtherCreatureEtbTriggers only watches the
+  // ENTERING creature's own controller's permanents, but "another creature" means any player's).
+  "rampaging ferocidon": [{ trigger: "anyCreatureEtb", excludeSelf: true, dynamicTargetOwner: true, requiresTarget: false, label: "Rampaging Ferocidon — 1 damage to that creature's controller", effects: [{ type: "damageTarget", amount: 1 }] }],
   // Mana Vault -- its own "doesn't untap" and "{T}: Add {C}{C}{C}" halves are already generically
   // automated (the untap-step text-scan and the plain {T}:Add pattern respectively, no table entry
   // needed for either). Unlike Grim/Basalt Monolith's own manually-ACTIVATED {N}-cost untap ability
@@ -1236,6 +1262,9 @@ const ACTIVATED_ABILITIES = {
   // Alchemist's Refuge -- same grantFlashUntilEndOfTurn reuse as Emergence Zone just above, no
   // sacrifice and no separate mana ability (its own printed cost IS the whole ability, no {T}: Add
   // half to model).
+  // Yahenni, Undying Partisan -- "Sacrifice another creature: gains indestructible until end of turn."
+  // Razaketh's own excludeSelf autoSacrificeFilter cost + grantKeywordToSelf's temporary branch.
+  "yahenni, undying partisan": [{ cost: { autoSacrificeFilter: "creature", excludeSelf: true }, requiresTarget: false, label: "Yahenni, Undying Partisan — Sacrifice another creature: gains indestructible until end of turn", effects: [{ type: "grantKeywordToSelf", keyword: "Indestructible" }] }],
   "alchemist's refuge": [{ cost: { mana: "{G}{U}", tap: true }, label: "Alchemist's Refuge — you may cast spells this turn as though they had flash", effects: [{ type: "grantFlashUntilEndOfTurn" }] }],
   "witch's clinic": [
     { cost: { tap: true }, manaAbility: true, label: "Witch's Clinic — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
@@ -2912,6 +2941,12 @@ function isSentenceGenericallyAutomated(sentence) {
   if (/^any player may cast \w+ spells as though they had flash\.?$/.test(low)) return true;
   if (/^as long as you have \d+ or more life, this creature gets \+\d+\/\+\d+ and has [a-z]+\.?$/.test(low)) return true;
   if (/^this spell costs \{x\} less to cast, where x is the total power of creatures you control\.?$/.test(low)) return true;
+  // Wave 36 -- new generic mechanisms (cantGainLife, Archfiend's end-step match, Megasloth's cost
+  // reduction) plus Bloodletter's already-working life-loss doubling (bloodletterMultiplierFor).
+  if (/^(players|your opponents) can'?t gain life\.?$/.test(low)) return true;
+  if (/^at the beginning of each end step, each opponent loses life equal to the life that player lost this turn\.?$/.test(low)) return true;
+  if (/^this spell costs \{1\} less to cast for each counter among players and permanents\.?$/.test(low)) return true;
+  if (/^if an opponent would lose life during your turn, they lose twice that much life instead\.?$/.test(low)) return true;
   return false;
 }
 function isCardGenericallyAutomated(text) {
@@ -3379,6 +3414,15 @@ const EFFECTS = {
     // cast-time X value (see attemptPlay/executeSpellEffectsNow's own xAmount threading) instead of
     // a fixed params.amount.
     const baseAmount = params.xMultiplier != null ? (params.xAmount || 0) * params.xMultiplier : (params.amount || 1);
+    // Grismold, the Dreadsower -- "each player creates a 1/1 Plant token." params.target (absent for
+    // every existing caller, so fully backward compatible) reuses effectTargets' own eachPlayer/
+    // eachOpponent scope; tokens are owned by (and multiplied for) each recipient, not the ability's
+    // controller. Re-enters itself once per recipient with target cleared, so the single-recipient
+    // default path below is byte-for-byte the old behavior.
+    if (params.target && params.target !== "controller") {
+      effectTargets(lobby, ctx.controllerId, params.target).forEach((rid) => EFFECTS.createToken(lobby, { ...ctx, controllerId: rid }, { ...params, target: undefined }));
+      return;
+    }
     const n = baseAmount * tokenMultiplierFor(lobby, ctx.controllerId);
     for (let i = 0; i < n; i++) {
       const token = spawnBattlefieldCard(lobby, {
@@ -5637,6 +5681,19 @@ const EFFECTS = {
   // than silent. "Nonland" is any permanent whose zoneType isn't "mana" (creature or artifact --
   // covers enchantments/planeswalkers too, per classifyType's own bucketing), Boompile itself
   // included, matching the real card's own lack of a self-exception.
+  // Mana Crypt -- "flip a coin. If you lose the flip, this artifact deals 3 damage to you." Modeled as
+  // applyLifeLoss with the source attributed (so Deflecting Palm-style redirects and Bloodletter-style
+  // replacements see it as damage from a real source, unlike a plain loseLife cost payment).
+  flipCoinLoseLifeOnLoss(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const won = Math.random() < 0.5;
+    pushLog(lobby, `${p.name} flips a coin for ${(ctx.sourceCard && lobby.cards[ctx.sourceCard.id] && lobby.cards[ctx.sourceCard.id].name) || "a coin flip"}: ${won ? "wins" : "loses"}`);
+    if (won) return;
+    applyLifeLoss(lobby, ctx.controllerId, params.amount || 0, ctx.sourceCard && ctx.sourceCard.id);
+    checkEliminations(lobby);
+    broadcastPlayers(lobby);
+  },
   flipCoinDestroyAllNonland(lobby, ctx) {
     const p = lobby.players[ctx.controllerId];
     const won = Math.random() < 0.5;
@@ -7226,6 +7283,17 @@ function spellCostReductionFor(lobby, ownerId, card) {
   // "creatures you control" only ever counts what's already on the battlefield, matching real
   // Magic's own timing. Uses each creature's real effective power (base + counters + equipment/
   // aura/anthem bonuses), same computation Bonders' Enclave's own condition already uses.
+  // Lumbering Megasloth -- "This spell costs {1} less to cast for each counter among players and
+  // permanents." Every counter on every player (poison + rad) and on every permanent on the table
+  // (this engine's single scalar card.counters), caster's opponents' included -- same self-
+  // referential card-being-cast's-own-text scan as Ghalta just below. Counted once at cast time.
+  if (/this spell costs \{1\} less to cast for each counter among players and permanents/i.test(card.text || "")) {
+    const playerCounters = Object.values(lobby.players).reduce((sum, pl) => sum + Math.max(0, pl.poison || 0) + (pl.radCounters || 0), 0);
+    const permanentCounters = Object.values(lobby.cards)
+      .filter((c) => c.zoneType !== "hand" && c.zoneType !== "stack")
+      .reduce((sum, c) => sum + Math.abs(c.counters || 0), 0);
+    reduction += playerCounters + permanentCounters;
+  }
   if (/this spell costs \{x\} less to cast, where x is the total power of creatures you control/i.test(card.text || "")) {
     reduction += Object.values(lobby.cards)
       .filter((c) => c.owner === ownerId && c.zoneType === "creature")
@@ -9262,6 +9330,7 @@ function fireEtbTriggers(lobby, card) {
   if (drawAmount) drawN(lobby, card.owner, drawAmount);
   fireGlobalOtherCreatureEtbTriggers(lobby, card);
   fireOpponentCreatureEtbTriggers(lobby, card);
+  fireAnyCreatureEtbTriggers(lobby, card);
   // Landfall (Tireless Tracker, etc.) -- "whenever a land enters the battlefield under your
   // control." zoneType "mana" is this app's own bucket for every land (see classifyType), already
   // set on `card` by every one of this function's callers before they call it, so no separate
@@ -9536,6 +9605,24 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
 // its own small function rather than folding an "opponent" mode into that one, since Authority's
 // shape has none of the power/amountSource/keywordFilter machinery that function exists to support
 // and adding an unused option set there for one card isn't worth the complexity.
+// Rampaging Ferocidon -- "Whenever ANOTHER creature enters, this creature deals 1 damage to that
+// creature's controller." fireGlobalOtherCreatureEtbTriggers only ever scans the ENTERING creature's
+// own controller's permanents, so a watcher reacting to EVERY player's creatures needs its own scan
+// of the whole table -- excludeSelf (the watcher itself entering) and dynamicTargetOwner (baking the
+// entering creature's controller into chosenTargetId) are the same flags fireGlobalTriggerAllPlayers
+// already established.
+function fireAnyCreatureEtbTriggers(lobby, enteringCard) {
+  if (!lobby.turn.started || enteringCard.zoneType !== "creature") return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack") continue;
+    getAutomatedAbilities(c.name, "anyCreatureEtb").forEach((ability) => {
+      if (ability.excludeSelf && c.id === enteringCard.id) return;
+      const fireAbility = ability.dynamicTargetOwner ? { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: enteringCard.owner })) } : ability;
+      fireTrigger(lobby, c, fireAbility);
+    });
+  }
+}
 function fireOpponentCreatureEtbTriggers(lobby, enteringCard) {
   if (!lobby.turn.started || enteringCard.zoneType !== "creature") return;
   for (const id in lobby.cards) {
@@ -9652,7 +9739,16 @@ function fireDeathTriggers(lobby, card) {
   // sendToGraveyardInternal/exileCardInternal actually delete the card, so the client still has
   // the card's board position to play the burst at when this arrives.
   if (card.zoneType === "creature") io.to(lobby.id).emit("creatureDied", { id: card.id, colors: card.colors || [] });
-  getAutomatedAbilities(card.name, "death").forEach((ability) => fireTrigger(lobby, card, ability));
+  getAutomatedAbilities(card.name, "death").forEach((ability) => {
+    // Feral Ghoul -- "each opponent gets a number of rad counters equal to ITS power": the card is
+    // already gone from lobby.cards by the time this ability resolves off the stack, so its own power
+    // (base + counters + equipment/aura/anthem, same computation Ghalta's cost reduction uses) is
+    // baked into each effect's amount at fire time instead of read back later.
+    const fireAbility = ability.bakeSelfPower
+      ? { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, amount: Math.max(0, parsePT(card.power) + (card.counters || 0) + attachedBonusFor(lobby, card).powerBonus + staticBonusFor(lobby, card).powerBonus) })) }
+      : ability;
+    fireTrigger(lobby, card, fireAbility);
+  });
   fireGlobalTrigger(lobby, "deathYouControl", card.owner, card);
   // Poison-Tip Archer -- "whenever ANOTHER creature dies" (any player's, not just this one's own
   // controller) -- same fireGlobalTriggerAllPlayers dispatcher built for Ledger Shredder's connive,
@@ -9825,6 +9921,26 @@ function fireGlobalTriggerAllPlayers(lobby, eventType, eventCard) {
 // one of activeId's opponents from THEIR perspective -- "that player" always means activeId, baked
 // into chosenTargetId at fire time, same dynamic-per-event-target precedent as
 // fireGlobalTriggerAllPlayers' own dynamicTargetOwner just above.
+// Archfiend of Despair's second clause -- snapshot every opponent's lifeLostThisTurn FIRST, then
+// apply the matching loss, so two Archfiends (or the loss itself being counted into the running
+// total) can't feed back into each other mid-resolution. Each Archfiend controller's opponents lose
+// life equal to their own life lost this turn.
+function fireEachEndStepLifeLossMatch(lobby) {
+  if (!lobby.turn.started) return;
+  const losses = [];
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (!/at the beginning of each end step, each opponent loses life equal to the life that player lost this turn/i.test(c.text || "")) continue;
+    for (const pid in lobby.players) {
+      if (pid === c.owner || lobby.players[pid].eliminated) continue;
+      const lost = lobby.players[pid].lifeLostThisTurn || 0;
+      if (lost > 0) losses.push({ pid, lost, src: c.name });
+    }
+  }
+  losses.forEach((l) => { pushLog(lobby, `${lobby.players[l.pid].name} loses ${l.lost} life (${l.src})`); applyLifeLoss(lobby, l.pid, l.lost); });
+  if (losses.length) { checkEliminations(lobby); broadcastPlayers(lobby); }
+}
 function fireGlobalTriggerEachOpponent(lobby, eventType, activeId) {
   if (!lobby.turn.started) return;
   for (const id in lobby.cards) {
@@ -9858,10 +9974,26 @@ function broadcastMonarch(lobby) {
 // source (an EFFECTS.gainLife resolution, or the manual +life button in statChange) instead of two
 // divergent raw `p.life +=` sites. Only actual gains route through here -- life loss never fires
 // this, matching the real "whenever you gain life" wording these triggers exist to cover.
-function applyLifeGain(lobby, playerId, amount) {
+// Rampaging Ferocidon ("Players can't gain life") / Archfiend of Despair ("Your opponents can't gain
+// life") -- a pure text-scan replacement/prevention on applyLifeGain, the single hook every real life
+// gain (lifelink, gain-life effects, ETB gain) already funnels through. Scoped to real wording:
+// "players" affects everyone, "your opponents" only affects whoever isn't the permanent's controller.
+function cantGainLife(lobby, playerId) {
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack") continue;
+    const text = c.text || "";
+    if (/(^|\n|\. )players can'?t gain life/i.test(text)) return true;
+    if (c.owner !== playerId && /(^|\n|\. )your opponents can'?t gain life/i.test(text)) return true;
+  }
+  return false;
+}
+function applyLifeGain(lobby, playerId, amount, opts) {
   const p = lobby.players[playerId];
   if (!p || amount <= 0) return;
   if (p.lifeLocked) return; // Teferi's Protection -- "your life total can't change"
+  // The manual +life button (statChange) is bookkeeping, not a game action -- never blocked.
+  if (!(opts && opts.manual) && cantGainLife(lobby, playerId)) return;
   p.life += amount;
   fireGlobalTrigger(lobby, "selfGainsLife", playerId);
 }
@@ -9910,6 +10042,8 @@ function applyLifeLoss(lobby, playerId, amount, sourceCardId) {
     return false;
   }
   p.life -= amount;
+  // Archfiend of Despair -- per-turn running total of life ACTUALLY lost, reset every Untap step.
+  p.lifeLostThisTurn = (p.lifeLostThisTurn || 0) + amount;
   fireVilisDrawTrigger(lobby, playerId, amount);
   return true;
 }
@@ -10501,6 +10635,7 @@ function advanceOnePhase(lobby) {
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
+    for (const pid in lobby.players) lobby.players[pid].lifeLostThisTurn = 0; // Archfiend of Despair
     activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
     // Real pre-existing bug found while building Rites of Flourishing: landDropBonus (Explore's own
     // "you may play an additional land THIS TURN") was never reset anywhere per turn in this file --
@@ -10581,6 +10716,9 @@ function advanceOnePhase(lobby) {
   if (activePlayer && turn.phase === "Draw") fireGlobalTrigger(lobby, "drawStep", activeId);
   // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
   if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
+  // Archfiend of Despair -- "At the beginning of EACH end step, each opponent loses life equal to the
+  // life that player lost this turn." Fires on every player's end step, for every controller of one.
+  if (activePlayer && turn.phase === "End Step") fireEachEndStepLifeLossMatch(lobby);
   // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step,
   // that player does X." Every player's end step qualifies as "an opponent's end step" from some
   // OTHER player's perspective, so this fires on every single End Step (not gated to the ability's
@@ -11500,7 +11638,7 @@ io.on("connection", (socket) => {
     if (!p || !["life", "cmdr", "poison"].includes(key)) return;
     const before = p[key];
     const stackLenBefore = lobby.stack.length;
-    if (key === "life" && val > 0) applyLifeGain(lobby, socket.id, val);
+    if (key === "life" && val > 0) applyLifeGain(lobby, socket.id, val, { manual: true });
     else if (key === "life" && val < 0) applyLifeLoss(lobby, socket.id, -val);
     else p[key] += val;
     // Manual life adjustment can trigger elimination just like combat can; the manual cmdr/poison
