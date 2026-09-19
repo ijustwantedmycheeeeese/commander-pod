@@ -4684,7 +4684,7 @@
       if (!el) return;
       const cards = [...deckEditor.library, ...deckEditor.commanders.filter(Boolean)];
       if (!cards.length) { el.innerText = ""; return; }
-      const automated = cards.filter((c) => automatedCardNames.has((c.name || "").toLowerCase().trim()) || isCardGenericallyAutomated(c.text)).length;
+      const automated = cards.filter((c) => automatedCardNames.has((c.name || "").toLowerCase().trim()) || automatedCardNames.has((c.name || "").toLowerCase().trim().split(" // ")[0]) || isCardGenericallyAutomated(c.text)).length;
       el.innerText = `— ${automated}/${cards.length} with some automation`;
     }
     function deRenderLibrary() {
