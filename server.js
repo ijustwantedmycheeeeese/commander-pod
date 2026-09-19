@@ -451,6 +451,23 @@ const CARD_ABILITIES = {
     { trigger: "death", requiresTarget: false, label: "Mogg War Marshal — create a 1/1 red Goblin creature token", effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
     { trigger: "upkeep", requiresTarget: false, label: "Mogg War Marshal — echo {1}{R}", effects: [{ type: "offerEchoPayment", cost: "{1}{R}" }] }
   ],
+  "kiora, behemoth beckoner": [{ trigger: "otherCreatureEtb", minPower: 4, requiresTarget: false, label: "Kiora, Behemoth Beckoner — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  // ---- Sagas (trigger "sagaChapter<N>"; the final chapter also sacrifices the Saga -- see addSagaLoreCounter) ----
+  "urza's saga": [{ trigger: "sagaChapter3", requiresTarget: false, label: "Urza's Saga — III: search for an artifact with mana cost {0} or {1}, put it onto the battlefield", effects: [{ type: "tutorToHand", typeFilter: ["artifact"], toBattlefield: true, maxCmc: 1 }] }],
+  "vault 12: the necropolis": [
+    { trigger: "sagaChapter1", requiresTarget: false, label: "Vault 12 — I: each player gets three rad counters", effects: [{ type: "giveRadCounters", amount: 3, target: "eachPlayer" }] },
+    { trigger: "sagaChapter2", requiresTarget: false, label: "Vault 12 — II: create X 2/2 Zombie Mutants, X = total rad counters", effects: [{ type: "createZombieMutantsPerRadCounter" }] },
+    { trigger: "sagaChapter3", requiresTarget: false, label: "Vault 12 — III: two +1/+1 counters on each of your Zombies and Mutants", effects: [{ type: "addCountersToOwnTypes", typeWords: ["zombie", "mutant"], amount: 2 }] }
+  ],
+  "zealous conscripts": [{ trigger: "etb", requiresTarget: true, targetKind: "anyPermanent", label: "Zealous Conscripts — gain control of target permanent until end of turn, untap it, it gains haste", effects: [{ type: "gainControlOfTarget", untilEndOfTurn: true, untap: true, grantHaste: true }] }],
+  "treachery": [{ trigger: "etb", requiresTarget: false, label: "Treachery — untap up to five lands", effects: [{ type: "untapUpToLands", amount: 5 }] }],
+  "vault 87: forced evolution": [
+    { trigger: "sagaChapter1", requiresTarget: true, targetKind: "creature", label: "Vault 87 — I: gain control of target non-Mutant creature for as long as you control this Saga", effects: [{ type: "gainControlOfTarget", whileSource: true, excludeTypeWord: "mutant" }] },
+    { trigger: "sagaChapter2", requiresTarget: true, targetKind: "ownCreature", label: "Vault 87 — II: +1/+1 counter on target creature you control, it becomes a Mutant", effects: [{ type: "counterAndBecomeMutant" }] },
+    { trigger: "sagaChapter3", requiresTarget: false, label: "Vault 87 — III: draw cards equal to the greatest power among your Mutants", effects: [{ type: "drawEqualToGreatestMutantPower" }] }
+  ],
+  // Willbreaker -- fired by chooseTargetFor when a spell/ability its controller controls targets an opponent's creature.
+  "willbreaker": [{ trigger: "youTargetOpponentCreature", requiresTarget: false, label: "Willbreaker — gain control of that creature for as long as you control Willbreaker", effects: [{ type: "gainControlOfTarget", whileSource: true }] }],
   // ---- Wave 45 triggers ----
   "drop of honey": [{ trigger: "upkeep", requiresTarget: false, label: "Drop of Honey — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
   "porphyry nodes": [{ trigger: "upkeep", requiresTarget: false, label: "Porphyry Nodes — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
@@ -1421,6 +1438,45 @@ const ACTIVATED_ABILITIES = {
     { cost: { mana: "{1}", removeSelfCounter: 1 }, requiresTarget: false, label: "Pentavus — {1}, remove a +1/+1 counter: create a 1/1 flying Pentavite artifact creature token", effects: [{ type: "createToken", name: "Pentavite", tokenType: "Token Artifact Creature — Pentavite", power: "1", toughness: "1", colors: [], keywords: ["Flying"] }] },
     { cost: { mana: "{1}", autoSacrificeFilter: "pentavite" }, requiresTarget: false, label: "Pentavus — {1}, sacrifice a Pentavite: put a +1/+1 counter on this creature", effects: [{ type: "addCountersToSelf", amount: 1 }] }
   ],
+  "goblin charbelcher": [{ cost: { mana: "{3}", tap: true }, requiresTarget: true, targetKind: "any", label: "Goblin Charbelcher — {3},{T}: reveal until a land, damage equal to the nonland cards (double for a Mountain) to any target", effects: [{ type: "goblinCharbelcher" }] }],
+  "urza's saga": [
+    { cost: { tap: true }, manaAbility: true, requiresTarget: false, label: "Urza's Saga — {T}: add {C} (gained with chapter I)", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{2}", tap: true }, requiresTarget: false, condition: (card) => (card.counters || 0) >= 2, label: "Urza's Saga — {2},{T}: create a 0/0 Construct artifact creature token that gets +1/+1 for each artifact you control (gained with chapter II)", effects: [{ type: "createToken", name: "Construct", tokenType: "Token Artifact Creature — Construct", power: "0", toughness: "0", colors: [], text: "This token gets +1/+1 for each artifact you control." }] }
+  ],
+  "humble defector": [{ cost: { tap: true }, requiresTarget: true, targetKind: "opponent", condition: (card, lobby) => lobby.turn.order[lobby.turn.activeIndex] === card.owner, label: "Humble Defector — {T}: draw two cards, target opponent gains control of this creature (only during your turn)", effects: [{ type: "drawCards", amount: 2, target: "controller" }, { type: "giveControlOfSelfToTarget" }] }],
+  // ---- Planeswalkers (cost.loyalty: signed loyalty change) ----
+  "garruk, primal hunter": [
+    { cost: { loyalty: 1 }, requiresTarget: false, label: "Garruk, Primal Hunter — +1: create a 3/3 green Beast creature token", effects: [{ type: "createToken", name: "Beast", tokenType: "Token Creature — Beast", power: "3", toughness: "3", colors: ["G"] }] },
+    { cost: { loyalty: -3 }, requiresTarget: false, label: "Garruk, Primal Hunter — −3: draw cards equal to the greatest power among your creatures", effects: [{ type: "drawCardsEqualToGreatestPower" }] },
+    { cost: { loyalty: -6 }, requiresTarget: false, label: "Garruk, Primal Hunter — −6: create a 6/6 green Wurm token for each land you control", effects: [{ type: "createWurmsPerLand" }] }
+  ],
+  "ajani, inspiring leader": [
+    { cost: { loyalty: 2 }, requiresTarget: true, targetKind: "creature", label: "Ajani, Inspiring Leader — +2: gain 2 life, put two +1/+1 counters on target creature", effects: [{ type: "gainLife", target: "controller", amount: 2 }, { type: "addCountersToTarget", amount: 2 }] },
+    { cost: { loyalty: 2 }, requiresTarget: false, label: "Ajani, Inspiring Leader — +2: gain 2 life (no creature target)", effects: [{ type: "gainLife", target: "controller", amount: 2 }] },
+    { cost: { loyalty: -3 }, requiresTarget: true, targetKind: "creature", label: "Ajani, Inspiring Leader — −3: exile target creature, its controller gains 2 life", effects: [{ type: "exileTargetControllerGainsLife", amount: 2 }] },
+    { cost: { loyalty: -10 }, requiresTarget: false, label: "Ajani, Inspiring Leader — −10: creatures you control gain flying and double strike until end of turn", effects: [{ type: "grantTemporaryKeywordsToAllYours", keywords: ["Flying", "Double strike"] }] }
+  ],
+  "kiora, behemoth beckoner": [{ cost: { loyalty: -1 }, requiresTarget: true, targetKind: "anyPermanent", label: "Kiora, Behemoth Beckoner — −1: untap target permanent", effects: [{ type: "untapTarget" }] }],
+  "teferi, time raveler": [
+    { cost: { loyalty: 1 }, requiresTarget: false, label: "Teferi, Time Raveler — +1: until your next turn, you may cast spells as though they had flash", effects: [{ type: "grantFlashUntilNextTurn" }] },
+    { cost: { loyalty: -3 }, requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "creature", "enchantment"], label: "Teferi, Time Raveler — −3: return target artifact, creature, or enchantment to its owner's hand, draw a card", effects: [{ type: "bounceTargetToHand" }, { type: "drawCards", amount: 1, target: "controller" }] }
+  ],
+  "jace, wielder of mysteries": [
+    { cost: { loyalty: 1 }, requiresTarget: true, targetKind: "player", label: "Jace, Wielder of Mysteries — +1: target player mills two cards, draw a card", effects: [{ type: "millTargetPlayerThenDraw", amount: 2 }] },
+    { cost: { loyalty: -8 }, requiresTarget: false, label: "Jace, Wielder of Mysteries — −8: draw seven cards, then win if your library is empty", effects: [{ type: "drawSevenWinIfLibraryEmpty" }] }
+  ],
+  "chandra, awakened inferno": [
+    { cost: { loyalty: 2 }, requiresTarget: false, label: "Chandra, Awakened Inferno — +2: each opponent gets an emblem dealing 1 damage to them each upkeep", effects: [{ type: "giveEachOpponentUpkeepEmblem" }] },
+    { cost: { loyalty: -3 }, requiresTarget: false, label: "Chandra, Awakened Inferno — −3: 3 damage to each non-Elemental creature", effects: [{ type: "damageEachNonElementalCreature", amount: 3 }] },
+    { cost: { loyaltyX: true }, requiresTarget: true, targetKind: "any", label: "Chandra, Awakened Inferno — −X: X damage to target creature or planeswalker (exile it instead if it would die)", effects: [{ type: "damageTargetExileIfDies" }] }
+  ],
+  "vraska, betrayal's sting": [
+    { cost: { loyalty: 0 }, requiresTarget: false, label: "Vraska, Betrayal's Sting — 0: draw a card, lose 1 life, proliferate", effects: [{ type: "drawCards", amount: 1, target: "controller" }, { type: "loseLife", target: "controller", amount: 1 }, { type: "proliferateAll" }] },
+    { cost: { loyalty: -2 }, requiresTarget: true, targetKind: "creature", label: "Vraska, Betrayal's Sting — −2: target creature becomes a Treasure artifact", effects: [{ type: "becomeTreasureArtifact" }] },
+    { cost: { loyalty: -9 }, requiresTarget: true, targetKind: "player", label: "Vraska, Betrayal's Sting — −9: target player gets poison counters up to nine", effects: [{ type: "poisonUpToNine" }] }
+  ],
+  // ---- Wave 46 activated abilities ----
+  "dark-dweller oracle": [{ cost: { mana: "{1}", autoSacrificeFilter: "creature" }, requiresTarget: false, label: "Dark-Dweller Oracle — {1}, sacrifice a creature: exile the top card of your library, you may play it this turn", effects: [{ type: "impulseExileTopToHand", amount: 1 }] }],
   // ---- Wave 45 activated abilities ----
   "kenrith, the returned king": [
     { cost: { mana: "{R}" }, requiresTarget: false, label: "Kenrith — {R}: all creatures gain trample and haste until end of turn", effects: [{ type: "grantTemporaryKeywordsToAllCreatures", keywords: ["Trample", "Haste"] }] },
@@ -2953,6 +3009,13 @@ const SPELL_ABILITIES = {
   "treasure cruise": { label: "Treasure Cruise — draw three cards (Delve)", effects: [{ type: "drawCards", amount: 3, target: "controller" }] },
   // Chemister's Insight -- the front half only; Jump-start (cast from graveyard) isn't modeled anywhere.
   "chemister's insight": { label: "Chemister's Insight — draw two cards", effects: [{ type: "drawCards", amount: 2, target: "controller" }] },
+  // ---- Wave 46 spells ----
+  // "If you control a commander as you cast this spell, you may choose both instead" -- bothIfCommander appends
+  // every OTHER untargeted mode's effects when the caster controls a commander (chooseTargetFor's chooseMode branch).
+  "jeska's will": { label: "Jeska's Will — choose one (both if you control a commander)", bothIfCommander: true, modes: [
+    { label: "Jeska's Will — add {R} for each card in target opponent's hand", requiresTarget: true, targetKind: "opponent", effects: [{ type: "addRedManaPerCardInTargetHand" }] },
+    { label: "Jeska's Will — exile the top three cards of your library, you may play them this turn", requiresTarget: false, effects: [{ type: "impulseExileTopToHand", amount: 3 }] }
+  ] },
   // ---- Wave 45 spells ----
   "serum snare": { label: "Serum Snare — return target nonland permanent to its owner's hand, proliferate if its mana value was 3 or less", effects: [{ type: "bounceTargetProliferateIfSmall" }], requiresTarget: true, targetKind: "anyPermanent" },
   // ---- Wave 44 spells ----
@@ -3236,6 +3299,8 @@ function isSentenceGenericallyAutomated(sentence) {
   // (corrupted cost reduction).
   if (/^all creatures have protection from (?:white|blue|black|red|green)\.?$/.test(low)) return true;
   if (/^you have hexproof\.?( \(.*\))?$/.test(low)) return true;
+  if (/^each opponent can cast spells only any time they could cast a sorcery\.?$/.test(low)) return true; // Teferi, Time Raveler (checkTiming)
+  if (/^compleated \(.*\)$/.test(low)) return true; // Vraska, Betrayal's Sting: paying life for {B/P} isn't modeled (mana only)
   // Leylines (opening-hand battlefield start, keepHand), Leyline of the Void (graveyardRedirectFor), Regal
   // Sliver's monarch fallback fragment, and Scavenger Regent's non-mana Ward (Ward == Hexproof here).
   if (/^if this card is in your opening hand, you may begin the game with it on the battlefield\.?$/.test(low)) return true;
@@ -5457,6 +5522,14 @@ const EFFECTS = {
     const card = lobby.cards[params.chosenTargetId];
     if (!card) return;
     if (card.owner !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId, ctx.sourceCard);
+    // Damage to a planeswalker removes that many loyalty counters instead (CR 120.3c); loyalty 0 is handled by
+    // checkStateBasedSacrificeConditions.
+    if (/planeswalker/i.test(card.type || "") && card._loyaltyInit) {
+      card.counters = Math.max(0, (card.counters || 0) - amount);
+      io.to(lobby.id).emit("spellDamage", { targetId: card.id, amount, sourceCardId });
+      broadcastCard(lobby, card);
+      return;
+    }
     // Emitted for the visual burst regardless of whether this ends up lethal -- a creature target
     // taking sub-lethal damage still has nothing MECHANICAL to represent (see the comment on this
     // effect's doc block above), but there's no reason it shouldn't visibly react.
@@ -6112,6 +6185,165 @@ const EFFECTS = {
       costLabel: `Pay ${params.cost}`, cost: { mana: params.cost },
       declinedEffects: [{ type: "sacrificeSelf" }]
     });
+  },
+  // Goblin Charbelcher -- "Reveal cards from the top of your library until you reveal a land card. This artifact
+  // deals damage equal to the number of nonland cards revealed this way to any target. If the revealed land card
+  // was a Mountain, it deals double that damage instead. Put the revealed cards on the bottom in any order."
+  goblinCharbelcher(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    const revealed = [];
+    let land = null;
+    while (p.library.length) {
+      const e = p.library.shift();
+      revealed.push(e);
+      if (/land/i.test(e.type || "")) { land = e; break; }
+    }
+    const nonland = revealed.length - (land ? 1 : 0);
+    const dmg = nonland * (land && /mountain/i.test(land.type || "") ? 2 : 1);
+    revealed.forEach((e) => p.library.push(e));
+    pushLog(lobby, `${p.name} revealed ${revealed.length} card${revealed.length === 1 ? "" : "s"} (${nonland} nonland${land ? `, then ${land.name}` : ""}) with Goblin Charbelcher for ${dmg} damage`);
+    broadcastPlayers(lobby);
+    if (dmg > 0) EFFECTS.damageTarget(lobby, ctx, { amount: dmg, chosenTargetId: params.chosenTargetId });
+  },
+  // Vault 12: The Necropolis, chapter II -- "Create X 2/2 black Zombie Mutant creature tokens, where X is the total number
+  // of rad counters among players."
+  createZombieMutantsPerRadCounter(lobby, ctx) {
+    const x = Object.values(lobby.players).reduce((sum, pl) => sum + (pl.radCounters || 0), 0);
+    if (x > 0) EFFECTS.createToken(lobby, ctx, { name: "Zombie Mutant", tokenType: "Token Creature — Zombie Mutant", power: "2", toughness: "2", colors: ["B"], amount: x });
+  },
+  // Vault 12: The Necropolis, chapter III -- "Put two +1/+1 counters on each creature you control that's a Zombie or Mutant."
+  addCountersToOwnTypes(lobby, ctx, params) {
+    const words = (params.typeWords || []).map((w) => w.toLowerCase());
+    Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && words.some((w) => (c.type || "").toLowerCase().includes(w)))
+      .forEach((c) => EFFECTS.addCountersToTarget(lobby, ctx, { amount: params.amount || 1, chosenTargetId: c.id }));
+  },
+  // ---- Control-change effects ----
+  // Zealous Conscripts / Vault 87 chapter I / Willbreaker -- "gain control of target permanent [until end of turn |
+  // for as long as you control this]". params: untilEndOfTurn, whileSource, untap, grantHaste, excludeTypeWord.
+  gainControlOfTarget(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c || c.zoneType === "hand" || c.zoneType === "stack") return;
+    if (params.excludeTypeWord && (c.type || "").toLowerCase().includes(params.excludeTypeWord.toLowerCase())) return;
+    const sourceId = params.whileSource && ctx.sourceCard ? ctx.sourceCard.id : null;
+    changeControl(lobby, c, ctx.controllerId, { untilEndOfTurn: !!params.untilEndOfTurn, sourceId });
+    if (params.untap && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
+    if (params.grantHaste) grantTemporaryKeyword(lobby, c, "Haste");
+    broadcastPlayers(lobby);
+  },
+  // Humble Defector -- "Target opponent gains control of this creature."
+  giveControlOfSelfToTarget(lobby, ctx, params) {
+    const c = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (c && params.chosenTargetId && lobby.players[params.chosenTargetId]) changeControl(lobby, c, params.chosenTargetId, {});
+    broadcastPlayers(lobby);
+  },
+  // Vault 87: Forced Evolution, chapter II -- "Put a +1/+1 counter on target creature you control. It becomes a Mutant in
+  // addition to its other types."
+  counterAndBecomeMutant(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c) return;
+    EFFECTS.addCountersToTarget(lobby, ctx, { amount: 1, chosenTargetId: c.id });
+    if (!/mutant/i.test(c.type || "")) { c.type = `${c.type || "Creature"} Mutant`.trim(); broadcastCard(lobby, c); }
+  },
+  // Vault 87 chapter III -- "Draw cards equal to the greatest power among Mutants you control."
+  drawEqualToGreatestMutantPower(lobby, ctx) {
+    const powers = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature" && /mutant/i.test(c.type || "")).map((c) => parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus);
+    const n = Math.max(0, ...powers, 0);
+    if (n > 0) drawN(lobby, ctx.controllerId, n);
+  },
+  // ---- Planeswalker effects ----
+  // Garruk, Primal Hunter -- "Draw cards equal to the greatest power among creatures you control."
+  drawCardsEqualToGreatestPower(lobby, ctx) {
+    const powers = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "creature").map((c) => parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus);
+    const n = Math.max(0, ...powers, 0);
+    if (n > 0) drawN(lobby, ctx.controllerId, n);
+  },
+  // Garruk, Primal Hunter -- "Create a 6/6 green Wurm creature token for each land you control."
+  createWurmsPerLand(lobby, ctx) {
+    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "mana").length;
+    if (n > 0) EFFECTS.createToken(lobby, ctx, { name: "Wurm", tokenType: "Token Creature — Wurm", power: "6", toughness: "6", colors: ["G"], amount: n });
+  },
+  // Ajani, Inspiring Leader -- "Exile target creature. Its controller gains 2 life."
+  exileTargetControllerGainsLife(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c) return;
+    const ownerId = c.owner;
+    EFFECTS.exileTarget(lobby, ctx, params);
+    if (lobby.players[ownerId]) applyLifeGain(lobby, ownerId, params.amount || 2);
+  },
+  // Jace, Wielder of Mysteries -- "Target player mills two cards. Draw a card."
+  millTargetPlayerThenDraw(lobby, ctx, params) {
+    const pid = params.chosenTargetId;
+    if (pid && lobby.players[pid]) millLibraryCards(lobby, pid, params.amount || 2);
+    drawN(lobby, ctx.controllerId, 1);
+  },
+  // Jace, Wielder of Mysteries -- "Draw seven cards. Then if your library has no cards in it, you win the game."
+  drawSevenWinIfLibraryEmpty(lobby, ctx) {
+    drawN(lobby, ctx.controllerId, 7);
+    const p = lobby.players[ctx.controllerId];
+    if (p && p.library.length === 0) {
+      pushLog(lobby, `${p.name}'s library is empty after drawing -- they win the game (Jace, Wielder of Mysteries)`);
+      io.to(lobby.id).emit("gameOver", { winnerId: ctx.controllerId, winnerName: p.name });
+    }
+  },
+  // Chandra, Awakened Inferno -- "+2: Each opponent gets an emblem with 'At the beginning of your upkeep, this
+  // emblem deals 1 damage to you.'" (a per-player counter, pinged in the upkeep dispatch)
+  giveEachOpponentUpkeepEmblem(lobby, ctx) {
+    Object.keys(lobby.players).filter((id) => id !== ctx.controllerId).forEach((id) => { lobby.players[id].emblemUpkeepPings = (lobby.players[id].emblemUpkeepPings || 0) + 1; });
+    broadcastPlayers(lobby);
+  },
+  // Chandra, Awakened Inferno -- "-3: Chandra deals 3 damage to each non-Elemental creature."
+  damageEachNonElementalCreature(lobby, ctx, params) {
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature" && !/elemental/i.test(c.type || "")).forEach((c) => EFFECTS.damageTarget(lobby, ctx, { amount: params.amount || 3, chosenTargetId: c.id }));
+  },
+  // Vraska, Betrayal's Sting -- "-9: If target player has fewer than nine poison counters, they get a number of poison
+  // counters equal to the difference."
+  poisonUpToNine(lobby, ctx, params) {
+    const p = lobby.players[params.chosenTargetId];
+    if (p && (p.poison || 0) < 9) { p.poison = 9; broadcastPlayers(lobby); }
+  },
+  // Vraska, Betrayal's Sting -- "-2: Target creature becomes a Treasure artifact with '{T}, Sacrifice this artifact:
+  // Add one mana of any color' and loses all other card types and abilities." (Renamed to Treasure so the engine's own
+  // Treasure handling applies.)
+  becomeTreasureArtifact(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c) return;
+    c.name = "Treasure"; c.type = "Artifact — Treasure"; c.text = "{T}, Sacrifice this artifact: Add one mana of any color.";
+    c.power = undefined; c.toughness = undefined; c.keywords = []; c.colors = []; c.counters = 0; c.zoneType = "artifact";
+    broadcastCard(lobby, c);
+    broadcastPlayers(lobby);
+  },
+  // Teferi, Time Raveler -- "+1: Until your next turn, you may cast sorcery spells as though they had flash."
+  grantFlashUntilNextTurn(lobby, ctx) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.hasFlashUntilEndOfTurn = true; p._flashUntilNextTurn = true;
+    broadcastPlayers(lobby);
+  },
+  // ---- Wave 46 effects ----
+  // Impulse draw ("Exile the top N cards of your library. You may play them this turn.") -- modeled as putting
+  // the cards into the caster's HAND flagged with the turn they were exiled; they're cast/played with all the
+  // normal rules, and expireImpulseCards exiles any still in hand at the end of that turn. (There is no
+  // cast-from-exile zone in this engine.)
+  impulseExileTopToHand(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    let moved = 0;
+    for (let i = 0; i < (params.amount || 1) && p.library.length; i++) {
+      const entry = p.library.shift();
+      const c = spawnBattlefieldCard(lobby, { ...entry, owner: ctx.controllerId, faceDown: false, zoneType: "hand" });
+      c._impulseTurn = lobby.turn.turnNumber;
+      broadcastCard(lobby, c);
+      moved++;
+    }
+    if (moved) { pushLog(lobby, `${p.name} exiled the top ${moved} card${moved === 1 ? "" : "s"} of their library and may play ${moved === 1 ? "it" : "them"} this turn`); broadcastPlayers(lobby); }
+  },
+  // Jeska's Will, mode 1 -- "Add {R} for each card in target opponent's hand."
+  addRedManaPerCardInTargetHand(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p || !params.chosenTargetId) return;
+    const n = Object.values(lobby.cards).filter((c) => c.owner === params.chosenTargetId && c.zoneType === "hand").length;
+    if (n > 0) { p.mana.R = (p.mana.R || 0) + n; broadcastPlayers(lobby); }
   },
   // ---- Wave 45 effects ----
   // Serum Snare -- "Return target nonland permanent to its owner's hand. If that permanent had mana value 3
@@ -7892,7 +8124,14 @@ function applyExalted(lobby, attackerIds, controllerId) {
 // clears every other "this turn" restriction this app tracks (Orim's Chant's cast-restriction and
 // its kicked "creatures can't attack" clause) -- one shared cleanup point for anything scoped to
 // "this turn", rather than teaching advanceOnePhase about each one individually.
+// Impulse-draw cards (impulseExileTopToHand) still in hand when their turn ends are exiled instead.
+function expireImpulseCards(lobby, playerId) {
+  Object.values(lobby.cards).filter((c) => c.zoneType === "hand" && c._impulseTurn && c._impulseTurn <= lobby.turn.turnNumber && (!playerId || c.owner === playerId)).forEach((c) => exileCardInternal(lobby, c));
+}
 function cleanupTemporaryKeywords(lobby) {
+  expireImpulseCards(lobby);
+  // "Gain control of target permanent until end of turn" (Zealous Conscripts) -- hand it back.
+  Object.values(lobby.cards).filter((c) => c._controlRevertTurn).forEach((c) => revertControl(lobby, c));
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     // Giver of Runes/Mother of Runes' granted protection is "until end of turn" too -- swept
@@ -7925,7 +8164,7 @@ function cleanupTemporaryKeywords(lobby) {
     const p = lobby.players[pid];
     if (p.cantCastSpells) { p.cantCastSpells = false; restrictionsChanged = true; }
     // Emergence Zone -- "this turn," the exact mirror of cantCastSpells just above.
-    if (p.hasFlashUntilEndOfTurn) { p.hasFlashUntilEndOfTurn = false; restrictionsChanged = true; }
+    if (p.hasFlashUntilEndOfTurn && !p._flashUntilNextTurn) { p.hasFlashUntilEndOfTurn = false; restrictionsChanged = true; } // Teferi, Time Raveler persists until its controller's next turn
     // Deflecting Palm -- "this turn," swept here if the chosen source never actually dealt damage.
     if (p.deflectingPalmSource) { p.deflectingPalmSource = null; restrictionsChanged = true; }
   }
@@ -8501,6 +8740,11 @@ function staticBonusFor(lobby, card) {
     const n = colorsAmongPermanentsFor(lobby, card.owner);
     powerBonus += n; toughnessBonus += n;
   }
+  // Construct token (Urza's Saga) -- "This token gets +1/+1 for each artifact you control."
+  if (/(?:this creature|this token) gets \+1\/\+1 for each artifact you control/i.test(card.text || "")) {
+    const n = Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /artifact/i.test(c.type || "")).length;
+    powerBonus += n; toughnessBonus += n;
+  }
   // Serra Ascendant -- the P/T half of the same "as long as you have N or more life" self-
   // referential conditional (see effectiveKeywords' own comment for the keyword half).
   const lifePTMatch = (card.text || "").match(/as long as you have (\d+) or more life, this creature gets \+(\d+)\/\+(\d+)/i);
@@ -9011,6 +9255,7 @@ function playersView(lobby, viewerId) {
 
 function broadcastPlayers(lobby) {
   refreshAllDynamicPT(lobby); // Body of Knowledge/Molimo -- see its own comment for why this is the right choke point
+  checkControlDurations(lobby); // control-change effects with a duration (Treachery, Vault 87, Willbreaker...)
   checkStateBasedSacrificeConditions(lobby); // Tethered Griffin -- see its own comment for why this is the right choke point
   checkLethalToughness(lobby); // Toxic Deluge and any future non-combat toughness reducer -- see its own comment
   checkDarkDepthsIceCounters(lobby); // Dark Depths -- see its own comment
@@ -9112,10 +9357,81 @@ function refreshAllDynamicPT(lobby) {
 // reusable for any future "when you control no [type], sacrifice this creature" card, not just
 // this one. Collects matches first, then destroys them in a second pass -- mutating lobby.cards
 // (deleting entries) while iterating `for...in` over it is unsafe.
+// Control-changing effects with a duration. Control is card.owner (the true owner is remembered in originalOwner, exactly
+// as the manual takeControl does). Durations: `untilEndOfTurn` (reverted in cleanupTemporaryKeywords via _controlRevertTurn)
+// and `sourceId` -- "for as long as you control [source]" / "You control enchanted creature": checkControlDurations (run
+// from broadcastPlayers) hands the permanent back once the source is gone, stops being attached to it, or is no longer
+// controlled by whoever took the permanent.
+function changeControl(lobby, card, newControllerId, dur) {
+  const p = lobby.players[newControllerId];
+  if (!card || !p || card.owner === newControllerId) return false;
+  if (card.originalOwner === null || card.originalOwner === undefined) card.originalOwner = card.owner;
+  card.owner = newControllerId;
+  card.ownerColor = p.color;
+  card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+  if (dur && dur.untilEndOfTurn) card._controlRevertTurn = lobby.turn.turnNumber;
+  if (dur && dur.sourceId) card._controlSourceId = dur.sourceId;
+  broadcastCard(lobby, card);
+  pushLog(lobby, `${p.name} gained control of ${card.name || "a permanent"}`);
+  return true;
+}
+function revertControl(lobby, card) {
+  const trueOwner = card.originalOwner && lobby.players[card.originalOwner];
+  card._controlRevertTurn = null; card._controlSourceId = null;
+  if (!trueOwner) return;
+  card.owner = card.originalOwner;
+  card.ownerColor = trueOwner.color;
+  card.originalOwner = null;
+  card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
+  broadcastCard(lobby, card);
+  pushLog(lobby, `${trueOwner.name} got ${card.name || "a permanent"} back`);
+}
+function checkControlDurations(lobby) {
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    // Treachery-style Aura -- "You control enchanted creature." Applies while attached; the durable link is _controlSourceId.
+    if (c.zoneType !== "hand" && c.zoneType !== "stack" && c.attachedTo && /you control enchanted (?:creature|permanent)/i.test(c.text || "")) {
+      const host = lobby.cards[c.attachedTo];
+      if (host && host.owner !== c.owner) changeControl(lobby, host, c.owner, { sourceId: c.id });
+    }
+  }
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (!c._controlSourceId) continue;
+    const src = lobby.cards[c._controlSourceId];
+    const isAura = src && !!src.attachedTo;
+    const linked = src && src.zoneType !== "hand" && (isAura ? src.attachedTo === c.id : src.owner === c.owner);
+    if (!linked) revertControl(lobby, c);
+  }
+}
+// Sagas (CR 714) -- "As this Saga enters and after your draw step, add a lore counter. Sacrifice after the final
+// chapter." Lore counters are card.counters (a Saga is never a creature); each chapter is an ordinary CARD_ABILITIES
+// entry with trigger "sagaChapter<N>", and the final chapter's ability gets a sacrificeSelf appended so the Saga leaves
+// once that chapter has resolved. Enter: fireEtbTriggers' enter-time block. After draw: the Main 1 dispatch.
+function sagaFinalChapter(card) {
+  const ROMAN = { I: 1, II: 2, III: 3, IV: 4, V: 5 };
+  let max = 0;
+  for (const m of (card.text || "").matchAll(/(?:^|\n)((?:I|II|III|IV|V)(?:, (?:I|II|III|IV|V))*) — /g)) m[1].split(", ").forEach((r) => { if (ROMAN[r] > max) max = ROMAN[r]; });
+  return max;
+}
+function addSagaLoreCounter(lobby, card) {
+  card.counters = (card.counters || 0) + 1;
+  card._loreTurn = lobby.turn.turnNumber;
+  broadcastCard(lobby, card);
+  const n = card.counters, fin = sagaFinalChapter(card);
+  const abilities = getAutomatedAbilities(card.name, "sagaChapter" + n);
+  abilities.forEach((ability) => fireTrigger(lobby, card, n === fin ? { ...ability, effects: (ability.effects || []).concat([{ type: "sacrificeSelf" }]) } : ability));
+  if (!abilities.length && fin && n >= fin) { fireDeathTriggers(lobby, card); sendToGraveyardInternal(lobby, card); }
+}
 function checkStateBasedSacrificeConditions(lobby) {
   const toSacrifice = [];
   for (const id in lobby.cards) {
     const card = lobby.cards[id];
+    // CR 704.5i -- a planeswalker with 0 loyalty is put into its owner's graveyard.
+    if (card.zoneType !== "hand" && card.zoneType !== "stack" && /planeswalker/i.test(card.type || "") && card._loyaltyInit && (card.counters || 0) <= 0) {
+      toSacrifice.push(card);
+      continue;
+    }
     if (card.zoneType !== "creature") continue;
     const m = (card.text || "").match(/when you control no (.+?), sacrifice this creature/i);
     if (!m) continue;
@@ -9126,7 +9442,7 @@ function checkStateBasedSacrificeConditions(lobby) {
   }
   toSacrifice.forEach((card) => {
     if (!lobby.cards[card.id]) return; // already gone (e.g. two matching cards checked in the same pass)
-    pushLog(lobby, `${card.name || "A creature"} is sacrificed (its own state-trigger condition is no longer met)`);
+    pushLog(lobby, /planeswalker/i.test(card.type || "") ? `${card.name} has no loyalty left and is put into the graveyard` : `${card.name || "A creature"} is sacrificed (its own state-trigger condition is no longer met)`);
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
   });
@@ -9526,10 +9842,12 @@ function checkTiming(lobby, socketId, card) {
   // Emergence Zone -- "you may cast SPELLS this turn as though they had flash" never applies to a
   // land drop (playing a land is never "casting a spell" in real Magic), same exemption
   // canCastSpells's own cantCastSpells check already makes below.
-  const isInstantSpeed = text.includes("instant") || (Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash"))
+  // Teferi, Time Raveler -- "Each opponent can cast spells only any time they could cast a sorcery."
+  const sorceryOnly = Object.values(lobby.cards).some((c) => c.owner !== socketId && c.zoneType !== "hand" && c.zoneType !== "stack" && /each opponent can cast spells only any time they could cast a sorcery/i.test(c.text || ""));
+  const isInstantSpeed = !sorceryOnly && (text.includes("instant") || (Array.isArray(card.keywords) && card.keywords.some((k) => (k || "").toLowerCase() === "flash"))
     || (!text.includes("land") && lobby.players[socketId] && lobby.players[socketId].hasFlashUntilEndOfTurn)
     || anyPlayerFlashGrantAppliesTo(lobby, card)
-    || (!text.includes("land") && ownFlashGrant(lobby, socketId));
+    || (!text.includes("land") && ownFlashGrant(lobby, socketId)));
   if (lobby.stack.length > 0) {
     // A priority round is active: only the current holder may act, and only with an
     // instant-speed spell (which includes land drops? no -- lands are never instant-speed, so
@@ -9869,6 +10187,7 @@ function castSpell(lobby, card, casterId, logSuffix) {
       queueTargetChoice(lobby, {
         kind: "chooseMode", controllerId: casterId, spellCard: card, sourceCard: card,
         label: spellAbility.label, modes: spellAbility.modes, targetKind: "mode",
+        bothIfCommander: !!spellAbility.bothIfCommander,
         logSuffix: logSuffix || ""
       });
       return;
@@ -10520,6 +10839,13 @@ function fireEtbTriggers(lobby, card) {
   // "This creature enters with [N|X] +1/+1 counters on it" (Pentavus, Walking Ballista...) -- inline for the
   // same reason as Dark Depths above (a 0/0 body would die to state-based checks before a stacked ETB
   // trigger resolved). X reads the cast-time X value.
+  if (/\bsaga\b/i.test(card.type || "")) addSagaLoreCounter(lobby, card);
+  // Planeswalker starting loyalty (printed loyalty -> loyalty counters, stored in card.counters).
+  if (/planeswalker/i.test(card.type || "") && card.loyalty != null && card.loyalty !== "" && !isNaN(parseInt(card.loyalty, 10))) {
+    card.counters = parseInt(card.loyalty, 10);
+    card._loyaltyInit = true;
+    broadcastCard(lobby, card);
+  }
   const enterCounters = (card.text || "").match(/enters with (an?|one|two|three|four|five|six|seven|eight|nine|ten|x|\d+) \+1\/\+1 counters? on it/i);
   if (enterCounters) {
     const wordNums = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
@@ -10774,6 +11100,8 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
       if (ability.colorFilter && !(enteringCard.colors || []).includes(ability.colorFilter)) return;
       // Welcoming Vampire -- "with power 2 or less."
       if (ability.maxPower != null && power > ability.maxPower) return;
+      // Kiora, Behemoth Beckoner -- "with power 4 or greater."
+      if (ability.minPower != null && power < ability.minPower) return;
       // Guardian Project needs the ENTERING creature itself (its name), not just the ability
       // holder -- every existing otherCreatureEtb condition ignores extra args, so this is
       // backward compatible.
@@ -11904,6 +12232,7 @@ function advanceOnePhase(lobby) {
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
+    if (activePlayer._flashUntilNextTurn) { activePlayer._flashUntilNextTurn = false; activePlayer.hasFlashUntilEndOfTurn = false; } // Teferi, Time Raveler +1 expires
     for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; lobby.players[pid].spellsCastThisTurn = 0; lobby.players[pid].noncreatureSpellsCastThisTurn = 0; lobby.players[pid].lifeGainedThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind
     activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
     // Real pre-existing bug found while building Rites of Flourishing: landDropBonus (Explore's own
@@ -11976,6 +12305,12 @@ function advanceOnePhase(lobby) {
   // scans a player's own permanents for aristocrats-style non-self-referential triggers; an upkeep
   // trigger is likewise "whoever's upkeep this is", not about the source card's own history.
   if (activePlayer && turn.phase === "Upkeep") fireGlobalTrigger(lobby, "upkeep", activeId);
+  // Chandra, Awakened Inferno's emblem -- "At the beginning of your upkeep, this emblem deals 1 damage to you."
+  if (activePlayer && turn.phase === "Upkeep" && activePlayer.emblemUpkeepPings > 0) {
+    applyLifeLoss(lobby, activeId, activePlayer.emblemUpkeepPings);
+    pushLog(lobby, `${activePlayer.name}'s Chandra emblem deals ${activePlayer.emblemUpkeepPings} damage to them`);
+    broadcastPlayers(lobby);
+  }
   // Ophiomancer -- "At the beginning of EACH upkeep": fires on every player's upkeep for its own
   // controller (the ability's own condition decides whether it actually does anything).
   if (activePlayer && turn.phase === "Upkeep") {
@@ -11995,6 +12330,10 @@ function advanceOnePhase(lobby) {
   // shape) -- same reuse of fireGlobalTrigger as Upkeep/End Step, just for the "Draw" phase, which
   // had no dispatch at all until now.
   if (activePlayer && turn.phase === "Draw") fireGlobalTrigger(lobby, "drawStep", activeId);
+  // Sagas -- "after your draw step, add a lore counter" (once per turn per Saga).
+  if (activePlayer && turn.phase === "Main 1") {
+    Object.values(lobby.cards).filter((c) => c.owner === activeId && c.zoneType !== "hand" && c.zoneType !== "stack" && /\bsaga\b/i.test(c.type || "") && c._loreTurn !== turn.turnNumber).forEach((c) => addSagaLoreCounter(lobby, c));
+  }
   // "At the beginning of your end step" triggers -- same reuse of fireGlobalTrigger as Upkeep above.
   if (activePlayer && turn.phase === "End Step") fireGlobalTrigger(lobby, "endStep", activeId);
   // Archfiend of Despair -- "At the beginning of EACH end step, each opponent loses life equal to the
@@ -13595,6 +13934,17 @@ io.on("connection", (socket) => {
       tapCreaturesToTap = qualifying.slice(0, cost.tapCreaturesCount);
     }
 
+    // Planeswalker loyalty abilities -- cost.loyalty is the signed loyalty change (+N adds, -N removes) and
+    // cost.loyaltyX is "-X" with X taken from the activation. Sorcery speed on your own turn, one per
+    // planeswalker per turn; loyalty is card.counters (a planeswalker never carries +1/+1 counters).
+    let loyaltyDelta = null;
+    if (cost.loyalty !== undefined || cost.loyaltyX) {
+      loyaltyDelta = cost.loyaltyX ? -Math.max(0, parseInt(x, 10) || 0) : cost.loyalty;
+      if (!/planeswalker/i.test(card.type || "")) { socket.emit("actionError", `${card.name} isn't a planeswalker.`); return; }
+      if (lobby.turn.order[lobby.turn.activeIndex] !== socket.id || !["Main 1", "Main 2"].includes(lobby.turn.phase) || lobby.stack.length > 0) { socket.emit("actionError", "Loyalty abilities can only be activated during your own main phase with an empty stack."); return; }
+      if (card._loyaltyTurn === lobby.turn.turnNumber) { socket.emit("actionError", `${card.name} has already activated a loyalty ability this turn.`); return; }
+      if ((card.counters || 0) + loyaltyDelta < 0) { socket.emit("actionError", `${card.name} doesn't have enough loyalty.`); return; }
+    }
     if (cost.removeSelfMinusCounter && (card.counters || 0) > -cost.removeSelfMinusCounter) { socket.emit("actionError", `${card.name} has no -1/-1 counter to remove.`); return; }
     if (cost.removeSelfCounter && (card.counters || 0) < cost.removeSelfCounter) { socket.emit("actionError", `${card.name} has no +1/+1 counter to remove.`); return; }
     if (cost.tap) {
@@ -13617,7 +13967,7 @@ io.on("connection", (socket) => {
     // ignores whatever x the client happens to send rather than demanding phantom extra mana.
     let remainingMana = null;
     let paidRestricted = null;
-    let xVal = 0;
+    let xVal = cost.loyaltyX ? Math.max(0, parseInt(x, 10) || 0) : 0; // Chandra's "-X" loyalty cost
     if (cost.mana) {
       const parsedCost = parseManaCost(cost.mana);
       xVal = parsedCost.x ? Math.max(0, parseInt(x, 10) || 0) : 0;
@@ -13665,6 +14015,7 @@ io.on("connection", (socket) => {
     // exiling isn't dying).
     if (cost.exile) { exileCardInternal(lobby, card); }
     // Deathbringer Thoctar -- "Remove a +1/+1 counter from this creature" as a cost (validated before payment).
+    if (loyaltyDelta !== null) { card.counters = (card.counters || 0) + loyaltyDelta; card._loyaltyTurn = lobby.turn.turnNumber; broadcastCard(lobby, card); }
     if (cost.removeSelfMinusCounter) { card.counters = (card.counters || 0) + cost.removeSelfMinusCounter; broadcastCard(lobby, card); }
     if (cost.removeSelfCounter) { card.counters = (card.counters || 0) - cost.removeSelfCounter; broadcastCard(lobby, card); }
     // Arena of Glory's "Exert this land" -- won't untap during its controller's next untap step.
@@ -13794,6 +14145,7 @@ io.on("connection", (socket) => {
     card.attachedTo = targetId;
     broadcastCard(lobby, card);
     pushLog(lobby, `${p.name} attached ${card.name || "a card"} to ${target.name || "a card"}`);
+    broadcastPlayers(lobby); // Treachery-style "you control enchanted creature" takes effect immediately
   });
 
   socket.on("detachCard", (id) => {
@@ -13802,6 +14154,7 @@ io.on("connection", (socket) => {
     if (!card || card.owner !== socket.id || !card.attachedTo) return;
     card.attachedTo = null;
     broadcastCard(lobby, card);
+    broadcastPlayers(lobby); // a Treachery-style Aura stops controlling its host
   });
 
   // Taking control represents an effect like Control Magic -- open to anyone on anyone's
@@ -13935,13 +14288,32 @@ io.on("connection", (socket) => {
     const resolved = resolveChosenTarget(lobby, entry, targetId);
     if (!resolved.ok) { socket.emit("actionError", resolved.error); return; }
     lobby.pendingTargetChoices.splice(idx, 1);
+    // Willbreaker -- "Whenever a creature an opponent controls becomes the target of a spell or ability you control".
+    const targetedCreature = lobby.cards[targetId];
+    if (targetedCreature && targetedCreature.zoneType === "creature" && targetedCreature.owner !== entry.controllerId) {
+      for (const wid in lobby.cards) {
+        const w = lobby.cards[wid];
+        if (w.owner !== entry.controllerId || w.zoneType === "hand" || w.zoneType === "stack") continue;
+        getAutomatedAbilities(w.name, "youTargetOpponentCreature").forEach((ab) => fireTrigger(lobby, w, { ...ab, effects: (ab.effects || []).map((e) => ({ ...e, chosenTargetId: targetId })) }));
+      }
+    }
     // Modal spell: the "target" just chosen is actually a MODE INDEX, not a real target -- pick
     // that mode's own effects and either queue a REAL target choice for it (if that mode needs
     // one) or cast straight to the stack (if it doesn't), instead of the generic chosenTargetId
     // baking-in below, which doesn't apply here at all.
     if (entry.kind === "chooseMode") {
-      const mode = entry.modes[parseInt(targetId, 10)];
+      let baseMode = entry.modes[parseInt(targetId, 10)];
       socket.emit("targetChoiceResolved", id);
+      // Jeska's Will-style "you may choose both if you control a commander": always taken (never worse). The
+      // TARGETED mode (at most one is supported) becomes the base so its target is still asked for, and every
+      // other untargeted mode's effects ride along. Works on a copy -- the table entry itself is never mutated.
+      if (entry.bothIfCommander && controlsCommander(lobby, entry.controllerId)) {
+        const targeted = entry.modes.find((m) => m.requiresTarget);
+        baseMode = targeted || baseMode;
+        const extra = entry.modes.filter((m) => m !== baseMode && !m.requiresTarget).reduce((acc, m) => acc.concat(m.effects || []), []);
+        baseMode = { ...baseMode, effects: (baseMode.effects || []).concat(extra) };
+      }
+      const mode = baseMode;
       if (mode.requiresTarget) {
         // Brokers Charm's "Destroy target enchantment" mode (targetKind:"typeList") surfaced a
         // real gap here: this branch used to forward only targetKind, silently dropping
@@ -14877,6 +15249,7 @@ io.on("connection", (socket) => {
     // effectively orphaned behind stale turn state.
     if (lobby.pendingOptionalPayments && lobby.pendingOptionalPayments.some((e) => e.playerId === socket.id)) return;
     if (lobby.turn.phase === "End Step") {
+      expireImpulseCards(lobby, activeId); // unplayed "may play this turn" cards leave before the hand-size check
       const handCount = Object.values(lobby.cards).filter((c) => c.owner === activeId && c.zoneType === "hand").length;
       if (handCount > 7 && !hasNoMaxHandSize(lobby, activeId)) {
         lobby.turn.pendingDiscard = { playerId: activeId, count: handCount - 7, advanceAfter: true };
