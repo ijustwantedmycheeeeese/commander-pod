@@ -438,6 +438,31 @@ const CARD_ABILITIES = {
   "murmuring mystic": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], requiresTarget: false, label: "Murmuring Mystic — create a 1/1 blue Bird Illusion token with flying", effects: [{ type: "createToken", name: "Bird Illusion", tokenType: "Token Creature — Bird Illusion", power: "1", toughness: "1", colors: ["U"], keywords: ["Flying"] }] }],
   "fearless fledgling": [{ trigger: "landfall", requiresTarget: false, label: "Fearless Fledgling — +1/+1 counter, gains flying until end of turn", effects: [{ type: "addCountersToSelf", amount: 1 }, { type: "grantKeywordToSelf", keyword: "Flying" }] }],
   "redcap thief": [{ trigger: "etb", requiresTarget: false, label: "Redcap Thief — create a Treasure token", effects: [{ type: "createTreasureToken" }] }],
+  "thickest in the thicket": [
+    { trigger: "etb", requiresTarget: true, targetKind: "creature", label: "Thickest in the Thicket — put X +1/+1 counters on target creature, X = its power", effects: [{ type: "addCountersEqualToTargetPower" }] },
+    { trigger: "endStep", requiresTarget: false, label: "Thickest in the Thicket — draw two cards if you control the creature with the greatest power", effects: [{ type: "drawTwoIfGreatestPower" }] }
+  ],
+  "herald's horn": [
+    { trigger: "etb", label: "Herald's Horn — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] },
+    { trigger: "upkeep", requiresTarget: false, label: "Herald's Horn — look at the top card, take it if it's a creature of the chosen type", effects: [{ type: "lookTopNRevealTypesToHand", amount: 1, typeFromChosenCreatureType: true }] }
+  ],
+  "mogg war marshal": [
+    { trigger: "etb", requiresTarget: false, label: "Mogg War Marshal — create a 1/1 red Goblin creature token", effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }, { type: "markEchoPending" }] },
+    { trigger: "death", requiresTarget: false, label: "Mogg War Marshal — create a 1/1 red Goblin creature token", effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"] }] },
+    { trigger: "upkeep", requiresTarget: false, label: "Mogg War Marshal — echo {1}{R}", effects: [{ type: "offerEchoPayment", cost: "{1}{R}" }] }
+  ],
+  // ---- Wave 45 triggers ----
+  "drop of honey": [{ trigger: "upkeep", requiresTarget: false, label: "Drop of Honey — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
+  "porphyry nodes": [{ trigger: "upkeep", requiresTarget: false, label: "Porphyry Nodes — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
+  "the meathook massacre": [
+    { trigger: "etb", requiresTarget: false, label: "The Meathook Massacre — each creature gets -X/-X until end of turn", effects: [{ type: "allCreaturesMinusXUntilEOT" }] },
+    { trigger: "deathYouControl", typeFilter: "creature", requiresTarget: false, label: "The Meathook Massacre — each opponent loses 1 life", effects: [{ type: "loseLife", target: "eachOpponent", amount: 1 }] },
+    { trigger: "deathAnyCreature", opponentOnly: true, eventCardTypeFilter: ["creature"], requiresTarget: false, label: "The Meathook Massacre — you gain 1 life", effects: [{ type: "gainLife", target: "controller", amount: 1 }] }
+  ],
+  "vanquisher's banner": [
+    { trigger: "etb", label: "Vanquisher's Banner — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] },
+    { trigger: "youCastSpell", label: "Vanquisher's Banner — draw a card", requiresTarget: false, dynamicTypeFilterFromChosenCreatureType: true, effects: [{ type: "drawCards", amount: 1, target: "controller" }] }
+  ],
   // ---- Wave 44 triggers ----
   "lotho, corrupt shirriff": [{ trigger: "secondSpellCastByAPlayer", requiresTarget: false, label: "Lotho, Corrupt Shirriff — you lose 1 life and create a Treasure token", effects: [{ type: "loseLife", target: "controller", amount: 1 }, { type: "createTreasureToken" }] }],
   "scourge of fleets": [{ trigger: "etb", requiresTarget: false, label: "Scourge of Fleets — return each opponent creature with toughness X or less (X = your Islands) to hand", effects: [{ type: "bounceOpponentCreaturesToughnessAtMostIslands" }] }],
@@ -1392,6 +1417,18 @@ const ACTIVATED_ABILITIES = {
   // Wave 42 activated abilities.
   "siege-gang commander": [{ cost: { mana: "{1}{R}", autoSacrificeFilter: "goblin" }, requiresTarget: true, targetKind: "any", label: "Siege-Gang Commander — {1}{R}, Sacrifice a Goblin: 2 damage to any target", effects: [{ type: "damageTarget", amount: 2 }] }],
   "fauna shaman": [{ cost: { mana: "{G}", tap: true, autoDiscardFilter: "creature" }, requiresTarget: false, label: "Fauna Shaman — {G}, {T}, discard a creature card: search for a creature card", effects: [{ type: "tutorToHand", typeFilter: "creature" }] }],
+  "pentavus": [
+    { cost: { mana: "{1}", removeSelfCounter: 1 }, requiresTarget: false, label: "Pentavus — {1}, remove a +1/+1 counter: create a 1/1 flying Pentavite artifact creature token", effects: [{ type: "createToken", name: "Pentavite", tokenType: "Token Artifact Creature — Pentavite", power: "1", toughness: "1", colors: [], keywords: ["Flying"] }] },
+    { cost: { mana: "{1}", autoSacrificeFilter: "pentavite" }, requiresTarget: false, label: "Pentavus — {1}, sacrifice a Pentavite: put a +1/+1 counter on this creature", effects: [{ type: "addCountersToSelf", amount: 1 }] }
+  ],
+  // ---- Wave 45 activated abilities ----
+  "kenrith, the returned king": [
+    { cost: { mana: "{R}" }, requiresTarget: false, label: "Kenrith — {R}: all creatures gain trample and haste until end of turn", effects: [{ type: "grantTemporaryKeywordsToAllCreatures", keywords: ["Trample", "Haste"] }] },
+    { cost: { mana: "{1}{G}" }, requiresTarget: true, targetKind: "creature", label: "Kenrith — {1}{G}: put a +1/+1 counter on target creature", effects: [{ type: "addCountersToTarget", amount: 1 }] },
+    { cost: { mana: "{2}{W}" }, requiresTarget: true, targetKind: "player", label: "Kenrith — {2}{W}: target player gains 5 life", effects: [{ type: "gainLifeTargetPlayer", amount: 5 }] },
+    { cost: { mana: "{3}{U}" }, requiresTarget: true, targetKind: "player", label: "Kenrith — {3}{U}: target player draws a card", effects: [{ type: "drawCards", amount: 1 }] },
+    { cost: { mana: "{4}{B}" }, requiresTarget: true, targetKind: "anyGraveyardCreature", label: "Kenrith — {4}{B}: put target creature card from a graveyard onto the battlefield under its owner's control", effects: [{ type: "reanimateFromGraveyard", underOwnerControl: true }] }
+  ],
   // ---- Wave 44 activated abilities ----
   "sneak attack": [{ cost: { mana: "{R}" }, requiresTarget: true, targetKind: "handCard", handTypeFilter: ["creature"], label: "Sneak Attack — {R}: put a creature card from your hand onto the battlefield, it gains haste, sacrifice it at the next end step", effects: [{ type: "sneakAttackPut" }] }],
   "mirror entity": [{ cost: { mana: "{X}" }, requiresTarget: false, label: "Mirror Entity — {X}: creatures you control have base power and toughness X/X until end of turn", effects: [{ type: "setBasePTAllOwnUntilEOT" }] }],
@@ -2916,6 +2953,8 @@ const SPELL_ABILITIES = {
   "treasure cruise": { label: "Treasure Cruise — draw three cards (Delve)", effects: [{ type: "drawCards", amount: 3, target: "controller" }] },
   // Chemister's Insight -- the front half only; Jump-start (cast from graveyard) isn't modeled anywhere.
   "chemister's insight": { label: "Chemister's Insight — draw two cards", effects: [{ type: "drawCards", amount: 2, target: "controller" }] },
+  // ---- Wave 45 spells ----
+  "serum snare": { label: "Serum Snare — return target nonland permanent to its owner's hand, proliferate if its mana value was 3 or less", effects: [{ type: "bounceTargetProliferateIfSmall" }], requiresTarget: true, targetKind: "anyPermanent" },
   // ---- Wave 44 spells ----
   "nuclear fallout": { label: "Nuclear Fallout — each creature gets twice -X/-X until end of turn, each player gets X rad counters", effects: [{ type: "nuclearFallout" }] },
   "phyresis outbreak": { label: "Phyresis Outbreak — each opponent gets a poison counter, then their creatures get -1/-1 for each poison counter their controller has", effects: [{ type: "givePoisonCounters", target: "eachOpponent", amount: 1 }, { type: "opponentCreaturesTemporaryPT", power: -1, toughness: -1, perPoison: true }] },
@@ -3197,6 +3236,14 @@ function isSentenceGenericallyAutomated(sentence) {
   // (corrupted cost reduction).
   if (/^all creatures have protection from (?:white|blue|black|red|green)\.?$/.test(low)) return true;
   if (/^you have hexproof\.?( \(.*\))?$/.test(low)) return true;
+  // Leylines (opening-hand battlefield start, keepHand), Leyline of the Void (graveyardRedirectFor), Regal
+  // Sliver's monarch fallback fragment, and Scavenger Regent's non-mana Ward (Ward == Hexproof here).
+  if (/^if this card is in your opening hand, you may begin the game with it on the battlefield\.?$/.test(low)) return true;
+  if (/^if a card would be put into an opponent'?s graveyard from anywhere, exile it instead\.?$/.test(low)) return true;
+  if (/^otherwise, you become the monarch\."?$/.test(low)) return true;
+  if (/^ward\s*[—-]+\s*discard a card\.?$/.test(low)) return true;
+  if (/^echo (\{[^}]+\})+( \(.*\))?$/.test(low)) return true; // Mogg War Marshal (markEchoPending/offerEchoPayment)
+  if (/^creature spells you cast of the chosen type cost \{1\} less to cast\.?$/.test(low)) return true; // Herald's Horn
   if (/^you may cast \w+ spells without paying their mana costs\.?$/.test(low)) return true; // Dracogenesis
   if (/^all sliver creatures have "this creature gets \+\d+\/\+\d+ as long as you control an? \w+\."$/.test(low)) return true; // Sedge Sliver
   // Wave 44 attack taxes: Sphere of Safety (X = your enchantments) and Norn's Annex ({W/P} per attacker).
@@ -5025,7 +5072,8 @@ const EFFECTS = {
   reanimateFromGraveyard(lobby, ctx, params) {
     const found = findAndRemoveGraveyardEntry(lobby, params.chosenTargetId);
     if (!found) return;
-    const card = spawnBattlefieldCard(lobby, { ...found.entry, owner: ctx.controllerId, zoneType: classifyType(found.entry.type) });
+    // Kenrith -- "...under its OWNER's control" (unlike Necromancy's caster-controls wording).
+    const card = spawnBattlefieldCard(lobby, { ...found.entry, owner: params.underOwnerControl ? found.ownerId : ctx.controllerId, zoneType: classifyType(found.entry.type) });
     broadcastPlayers(lobby); // the graveyard array just shrank
     fireEtbTriggers(lobby, card);
   },
@@ -6030,6 +6078,74 @@ const EFFECTS = {
     effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => { const p = lobby.players[id]; if (p) p.poison = (p.poison || 0) + (params.amount || 1); });
     checkEliminations(lobby);
     broadcastPlayers(lobby);
+  },
+  // Thickest in the Thicket -- "put X +1/+1 counters on target creature, where X is that creature's power."
+  addCountersEqualToTargetPower(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c) return;
+    const power = Math.max(0, parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus);
+    if (power > 0) EFFECTS.addCountersToTarget(lobby, ctx, { ...params, amount: power });
+  },
+  // Thickest in the Thicket -- "draw two cards if you control the creature with the greatest power or tied
+  // for the greatest power."
+  drawTwoIfGreatestPower(lobby, ctx) {
+    const power = (c) => parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus;
+    const all = Object.values(lobby.cards).filter((c) => c.zoneType === "creature");
+    if (!all.length) return;
+    const max = Math.max(...all.map(power));
+    if (all.some((c) => c.owner === ctx.controllerId && power(c) === max)) drawN(lobby, ctx.controllerId, 2);
+  },
+  // Mogg War Marshal (Echo) -- "At the beginning of your upkeep, if this came under your control since the
+  // beginning of your last upkeep, sacrifice it unless you pay its echo cost." markEchoPending is set at ETB;
+  // the first own upkeep afterwards offers the payment (declining sacrifices it).
+  markEchoPending(lobby, ctx) {
+    const c = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (c) c._echoPending = true;
+  },
+  offerEchoPayment(lobby, ctx, params) {
+    const c = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!c || !c._echoPending) return;
+    c._echoPending = false;
+    queueOptionalPayment(lobby, {
+      playerId: ctx.controllerId, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: `${c.name} — pay its echo cost ${params.cost} or sacrifice it`,
+      costLabel: `Pay ${params.cost}`, cost: { mana: params.cost },
+      declinedEffects: [{ type: "sacrificeSelf" }]
+    });
+  },
+  // ---- Wave 45 effects ----
+  // Serum Snare -- "Return target nonland permanent to its owner's hand. If that permanent had mana value 3
+  // or less, proliferate."
+  bounceTargetProliferateIfSmall(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c || c.zoneType === "mana") return;
+    const mv = c.cmc || 0;
+    EFFECTS.bounceTargetToHand(lobby, ctx, params);
+    if (mv <= 3) EFFECTS.proliferateAll(lobby, ctx, {});
+  },
+  // Drop of Honey / Porphyry Nodes -- "destroy the creature with the least power. It can't be regenerated.
+  // If two or more creatures are tied for least power, you choose one of them." (Ties: first found.)
+  destroyLeastPowerCreature(lobby, ctx) {
+    const power = (c) => parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus;
+    const creatures = Object.values(lobby.cards).filter((c) => c.zoneType === "creature");
+    if (!creatures.length) return;
+    const least = creatures.reduce((best, c) => (power(c) < power(best) ? c : best), creatures[0]);
+    EFFECTS.destroyTarget(lobby, ctx, { chosenTargetId: least.id, noRegen: true });
+  },
+  // The Meathook Massacre -- "each creature gets -X/-X until end of turn" (X = the cast-time X).
+  allCreaturesMinusXUntilEOT(lobby, ctx, params) {
+    const x = params.xAmount || 0;
+    if (x <= 0) return;
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => grantTemporaryPT(lobby, c, -x, -x));
+    broadcastPlayers(lobby);
+  },
+  // Kenrith -- "Target player gains 5 life."
+  gainLifeTargetPlayer(lobby, ctx, params) {
+    if (params.chosenTargetId && lobby.players[params.chosenTargetId]) applyLifeGain(lobby, params.chosenTargetId, params.amount || 0);
+  },
+  // Kenrith -- "All creatures gain trample and haste until end of turn." (every controller's creatures)
+  grantTemporaryKeywordsToAllCreatures(lobby, ctx, params) {
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => (params.keywords || []).forEach((k) => grantTemporaryKeyword(lobby, c, k)));
   },
   // ---- Wave 44 effects ----
   // Sneak Attack -- "{R}: You may put a creature card from your hand onto the battlefield. That creature
@@ -8158,6 +8274,8 @@ function spellCostReductionFor(lobby, ownerId, card) {
         && (parsePT(x.power) + (x.counters || 0) + attachedBonusFor(lobby, x).powerBonus + staticBonusFor(lobby, x).powerBonus) >= parseInt(bcMatch[2], 10)).length;
       reduction += (parseInt(bcMatch[1], 10) || 0) * bigCreatures;
     }
+    // Herald's Horn -- "Creature spells you cast of the chosen type cost {1} less to cast."
+    if (c.chosenCreatureType && /creature spells you cast of the chosen type cost \{1\} less to cast/i.test(c.text || "") && typeLower.includes("creature") && typeLower.includes(c.chosenCreatureType.toLowerCase())) reduction += 1;
     const isMatch = (c.text || "").match(/instant and sorcery spells you cast cost \{(\d+)\} less to cast/i);
     if (isMatch && (typeLower.includes("instant") || typeLower.includes("sorcery"))) reduction += parseInt(isMatch[1], 10) || 0;
     for (const m of (c.text || "").matchAll(/(\w+) spells you cast cost \{(\d+)\} less to cast/gi)) {
@@ -10399,6 +10517,16 @@ function fireEtbTriggers(lobby, card) {
   // default 0 counters and sacrificed it immediately, before its own ETB ever got a chance to
   // resolve. Applying the counters synchronously at spawn time closes that window entirely.
   if (/enters with ten ice counters on it/i.test(card.text || "")) { card.counters = (card.counters || 0) + 10; broadcastCard(lobby, card); }
+  // "This creature enters with [N|X] +1/+1 counters on it" (Pentavus, Walking Ballista...) -- inline for the
+  // same reason as Dark Depths above (a 0/0 body would die to state-based checks before a stacked ETB
+  // trigger resolved). X reads the cast-time X value.
+  const enterCounters = (card.text || "").match(/enters with (an?|one|two|three|four|five|six|seven|eight|nine|ten|x|\d+) \+1\/\+1 counters? on it/i);
+  if (enterCounters) {
+    const wordNums = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+    const w = enterCounters[1].toLowerCase();
+    const n = w === "x" ? (card._castXValue || 0) : (wordNums[w] || parseInt(w, 10) || 0);
+    if (n > 0) EFFECTS.addCountersToSelf(lobby, { controllerId: card.owner, sourceCard: { id: card.id } }, { amount: n });
+  }
   const gainLifeAmount = gainLifeOnEtbFromText(card.text);
   // applyLifeGain itself never broadcasts (every other call site handles that downstream via
   // whatever ELSE it does after -- checkEliminations+broadcastPlayers, a spell's own
@@ -11494,6 +11622,8 @@ function graveyardRedirectFor(lobby, card) {
     const key = archiveKey(c.name);
     if (GRAVEYARD_REDIRECT_ALL_PLAYERS.includes(key)) return true;
     if (c.owner === card.owner) continue;
+    // Leyline of the Void -- "If a card would be put into an opponent's graveyard from anywhere, exile it instead."
+    if (/if a card would be put into an opponent's graveyard from anywhere, exile it instead/i.test(c.text || "")) return true;
     // Liesa only redirects CREATURES; Valgavoth redirects any card type ("from anywhere").
     if (card.zoneType === "creature" && GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key)) return true;
     if (GRAVEYARD_REDIRECT_ANY_CARD.includes(key)) return true;
@@ -13986,6 +14116,9 @@ io.on("connection", (socket) => {
     if (zone === "graveyard" && ["creature", "artifact", "mana"].includes(card.zoneType)) {
       fireDeathTriggers(lobby, card);
     }
+    // Rest in Peace-style graveyard replacement (Leyline of the Void, Liesa, Valgavoth...) applies to this manual
+    // "send to graveyard" path too.
+    if (zone === "graveyard" && graveyardRedirectFor(lobby, card)) zone = "exile";
     delete lobby.cards[cardId];
     if (lobby.targets[cardId]) { delete lobby.targets[cardId]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", cardId);
@@ -14310,6 +14443,12 @@ io.on("connection", (socket) => {
     const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
     if (!p) return;
     p.handKept = true;
+    // Leylines -- "If this card is in your opening hand, you may begin the game with it on the battlefield."
+    // Always taken (there is never a reason to decline).
+    Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "hand" && /if this card is in your opening hand, you may begin the game with it on the battlefield/i.test(c.text || "")).forEach((c) => {
+      EFFECTS.putHandCardOntoBattlefield(lobby, { controllerId: socket.id }, { chosenTargetId: c.id });
+      pushLog(lobby, `${p.name} began the game with ${c.name} on the battlefield`);
+    });
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} kept their hand and is ready`);
     beginTurnFlowOnceHandsReady(lobby);
