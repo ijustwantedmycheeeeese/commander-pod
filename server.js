@@ -427,6 +427,12 @@ const CARD_ABILITIES = {
   // why this dispatcher's ambient chosenTargetId (the dealing creature's id, not a player id) must
   // be overridden.
   "toski, bearer of secrets": [{ trigger: "anyCreatureCombatDamageToPlayer", requiresTarget: false, label: "Toski, Bearer of Secrets — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  // Ichor Rats -- "When this creature enters, each player gets a poison counter." (Infect is generic.)
+  "ichor rats": [{ trigger: "etb", requiresTarget: false, label: "Ichor Rats — each player gets a poison counter", effects: [{ type: "givePoisonCounters", target: "eachPlayer", amount: 1 }] }],
+  // Aqueous Form -- "Whenever enchanted creature attacks, scry 1": the new "enchantedCreatureAttacks"
+  // event (fireAttackTriggers scans auras/equipment attached to the attacker). "Can't be blocked" is
+  // already generic (equipEffectsFromText).
+  "aqueous form": [{ trigger: "enchantedCreatureAttacks", requiresTarget: false, label: "Aqueous Form — scry 1", effects: [{ type: "scryN", amount: 1 }] }],
   // Yahenni, Undying Partisan -- deathAnyCreature (fires for any dying PERMANENT, so eventCardTypeFilter
   // narrows to creatures) + opponentOnly, exactly Gimli, Counter of Kills' own watcher-side shape.
   // Its "Sacrifice another creature: gains indestructible until end of turn" half is in
@@ -1282,6 +1288,23 @@ const ACTIVATED_ABILITIES = {
     { cost: { mana: "{R}", tap: true, exert: true }, manaAbility: true, label: "Arena of Glory — {R}, {T}, Exert: Add {R}{R} (creature spell gains haste)", effects: [{ type: "addFixedMana", colors: ["R", "R"] }, { type: "queueHasteMana" }] }
   ],
   "hall of the bandit lord": [{ cost: { tap: true, life: 3 }, manaAbility: true, label: "Hall of the Bandit Lord — {T}, Pay 3 life: Add {C} (creature spell gains haste)", effects: [{ type: "addFixedMana", colors: ["C"] }, { type: "queueHasteMana", permanent: true }] }],
+  // Gloomlake Verge / Hidden Lair -- Tainted Isle's own conditional-mana-ability shape (condition/
+  // conditionError checked by activateAbility before the ability can be used).
+  "gloomlake verge": [
+    { cost: { tap: true }, manaAbility: true, label: "Gloomlake Verge — Add {U}", effects: [{ type: "addFixedMana", colors: ["U"] }] },
+    { cost: { tap: true }, manaAbility: true, condition: (card, lobby) => Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && /island|swamp/i.test(c.type || "")), conditionError: "You need to control an Island or a Swamp to add {B}.", label: "Gloomlake Verge — Add {B}", effects: [{ type: "addFixedMana", colors: ["B"] }] }
+  ],
+  "hidden lair": [
+    { cost: { tap: true }, manaAbility: true, label: "Hidden Lair — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { tap: true }, manaAbility: true, condition: (card, lobby) => card.controllerSince === lobby.turn.turnNumber || Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "mana" && /basic/i.test(c.type || "")), conditionError: "Hidden Lair needs to have entered this turn, or you need to control a basic land.", label: "Hidden Lair — Add {U} or {B}", effects: [{ type: "chooseManaFromColors", colors: ["U", "B"], sourceName: "Hidden Lair" }] }
+  ],
+  // Blighted Woodland -- Myriad Landscape's own two-chained-basic-land search, {3}{G} instead of {2}.
+  "blighted woodland": [
+    { cost: { tap: true }, manaAbility: true, label: "Blighted Woodland — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
+    { cost: { mana: "{3}{G}", tap: true, sacrifice: true }, label: "Blighted Woodland — search for up to two basic lands, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }] }
+  ],
+  // Vanishing -- "{U}{U}: Enchanted creature phases out." phaseOutTarget (wave 29) aimed at the host.
+  "vanishing": [{ cost: { mana: "{U}{U}" }, requiresTarget: false, label: "Vanishing — enchanted creature phases out", effects: [{ type: "phaseOutEnchantedCreature" }] }],
   "alchemist's refuge": [{ cost: { mana: "{G}{U}", tap: true }, label: "Alchemist's Refuge — you may cast spells this turn as though they had flash", effects: [{ type: "grantFlashUntilEndOfTurn" }] }],
   "witch's clinic": [
     { cost: { tap: true }, manaAbility: true, label: "Witch's Clinic — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
@@ -2742,6 +2765,9 @@ const SPELL_ABILITIES = {
   // "Commander tax" free-cast cycle -- see ALT_COSTS/castWithAltCost's own comment for the
   // alternative-cost half; these SPELL_ABILITIES entries are what the spell actually DOES once
   // cast (through either the normal mana-cost path or the free alt-cost path, same as any spell).
+  // Dovin's Veto -- fierce guardianship's own nonCreatureSpell counter ("This spell can't be countered"
+  // is already generic via isProtectedFromCountering).
+  "dovin's veto": { label: "Dovin's Veto — counter target noncreature spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "nonCreatureSpell" },
   "fierce guardianship": { label: "Fierce Guardianship — counter target noncreature spell", effects: [{ type: "counterTargetSpell" }], requiresTarget: true, targetKind: "nonCreatureSpell" },
   "flawless maneuver": { label: "Flawless Maneuver — creatures you control gain indestructible until end of turn", effects: [{ type: "grantIndestructibleToAllYours", keywords: ["Indestructible"], creaturesOnly: true }] },
   // "Force" cycle -- see ALT_COSTS' own comment for the alternative-cost half.
@@ -2967,6 +2993,15 @@ function isSentenceGenericallyAutomated(sentence) {
   // Wave 37 -- Illusionist's Bracers (copy-on-activation text-scan in activateAbility).
   if (/^whenever an ability of equipped creature is activated, if it isn'?t a mana ability, copy that ability\.?$/.test(low)) return true;
   if (/^you may choose new targets for the copy\.?$/.test(low)) return true;
+  // Wave 38 -- already-working generic mechanisms the classifier never recognized (toxicAmountFor,
+  // entersTapped's text-scan, effectiveKeywords' own-text unblockable) plus this wave's new generic
+  // ones (spellCostIncreaseFor, Imoti's cascade grant, attachedBonusFor's dynamic aura counts).
+  if (/^toxic \d+\.?$/.test(low)) return true;
+  if (/^this (creature|permanent|enchantment) enters tapped\.?$/.test(low)) return true;
+  if (/^this creature can'?t be blocked\.?$/.test(low)) return true;
+  if (/^spells your opponents cast cost \{\d+\} more to cast\.?$/.test(low)) return true;
+  if (/^spells you cast with mana value 6 or greater have cascade\.?$/.test(low)) return true;
+  if (/^enchanted creature gets \+1\/\+1 for each (artifact and\/or enchantment|enchantment|artifact) you control( and has [a-z ]+)?\.?$/.test(low)) return true;
   return false;
 }
 function isCardGenericallyAutomated(text) {
@@ -5707,6 +5742,18 @@ const EFFECTS = {
   // Mana Crypt -- "flip a coin. If you lose the flip, this artifact deals 3 damage to you." Modeled as
   // applyLifeLoss with the source attributed (so Deflecting Palm-style redirects and Bloodletter-style
   // replacements see it as damage from a real source, unlike a plain loseLife cost payment).
+  // Ichor Rats -- "each player gets a poison counter." Same effectTargets scope as giveRadCounters.
+  givePoisonCounters(lobby, ctx, params) {
+    effectTargets(lobby, ctx.controllerId, params.target).forEach((id) => { const p = lobby.players[id]; if (p) p.poison = (p.poison || 0) + (params.amount || 1); });
+    checkEliminations(lobby);
+    broadcastPlayers(lobby);
+  },
+  // Vanishing -- "Enchanted creature phases out": phaseOutTarget aimed at whatever this Aura is attached to.
+  phaseOutEnchantedCreature(lobby, ctx, params) {
+    const aura = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (!aura || !aura.attachedTo || !lobby.cards[aura.attachedTo]) return;
+    EFFECTS.phaseOutTarget(lobby, ctx, { ...params, chosenTargetId: aura.attachedTo });
+  },
   // Arena of Glory / Hall of the Bandit Lord -- queues one "gains haste if spent on a creature spell"
   // charge onto the player (consumed in attemptPlay, cleared every phase alongside the mana pool).
   // permanent:true (Hall, "it gains haste") vs the default until-end-of-turn (Arena's own wording).
@@ -6716,7 +6763,9 @@ function parsePT(v) {
 function equipEffectsFromText(text) {
   const t = text || "";
   let powerBonus = 0, toughnessBonus = 0;
-  const ptMatch = t.match(/(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+)/i);
+  // (?! for each) -- "gets +1/+1 for each X you control" is a DYNAMIC count handled separately by
+  // attachedBonusFor (All That Glitters / Ethereal Armor), not a flat +1/+1 to also apply here.
+  const ptMatch = t.match(/(?:equipped|enchanted) creature gets ([+-]\d+)\/([+-]\d+)(?! for each)/i);
   if (ptMatch) { powerBonus = parseInt(ptMatch[1], 10) || 0; toughnessBonus = parseInt(ptMatch[2], 10) || 0; }
   const keywords = [];
   // Whispersilk Cloak-style "can't be blocked" clause -- spelled out longhand in the oracle text
@@ -6900,6 +6949,17 @@ function attachedBonusFor(lobby, card) {
     powerBonus += eff.powerBonus;
     toughnessBonus += eff.toughnessBonus;
     keywords = keywords.concat(eff.keywords);
+    // All That Glitters / Ethereal Armor -- "Enchanted creature gets +1/+1 for each [artifact and/or
+    // enchantment | enchantment | artifact] you control [and has first strike]": a dynamic count of the
+    // Aura's own CONTROLLER's permanents (the Aura itself included, being an enchantment), recomputed on
+    // every read like every other attached bonus here.
+    const dyn = (c.text || "").match(/enchanted creature gets \+1\/\+1 for each (artifact and\/or enchantment|enchantment|artifact) you control(?: and has ([a-z ]+?))?\./i);
+    if (dyn) {
+      const kinds = dyn[1].toLowerCase() === "artifact and/or enchantment" ? ["artifact", "enchantment"] : [dyn[1].toLowerCase()];
+      const n = Object.values(lobby.cards).filter((x) => x.owner === c.owner && x.zoneType !== "hand" && x.zoneType !== "stack" && kinds.some((k) => (x.type || "").toLowerCase().includes(k))).length;
+      powerBonus += n; toughnessBonus += n;
+      if (dyn[2]) { const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === dyn[2].trim().toLowerCase()); if (kw) keywords.push(kw); }
+    }
   }
   return { powerBonus, toughnessBonus, keywords };
 }
@@ -7057,6 +7117,11 @@ function cleanupTemporaryKeywords(lobby) {
 function effectiveKeywords(lobby, card) {
   const bonus = attachedBonusFor(lobby, card);
   let extra = [...(card.keywords || []), ...bonus.keywords, ...(card.temporaryKeywords || []).map((tk) => tk.keyword)];
+  // Blighted Agent -- a creature's OWN "This creature can't be blocked." line (a Scryfall keywords[]
+  // array never lists it, unlike Flying/Infect), same "text-scan a self-referential static" precedent
+  // as the life-conditional grants just below. Only the exact unconditional sentence -- never
+  // "...can't be blocked except by..." or "...as long as...".
+  if (/(^|\n)this creature can'?t be blocked\.?(\n|$)/i.test(card.text || "")) extra.push("Unblockable");
   // Serra Ascendant -- "As long as you have N or more life, this creature ... has [keyword]." A
   // self-referential CONDITIONAL grant (unlike the anthem loop below, which reacts to OTHER
   // permanents) -- narrowly scoped to this exact template, same precedent as every other
@@ -7300,14 +7365,34 @@ function anthemKeywordsFromText(text) {
 // name list, same precedent as dependsOnCommanderColorIdentity), matched against the spell's own
 // type line at cast time. Only ever reduces GENERIC mana -- real cost reduction never touches
 // colored pips unless the text says so explicitly, which none of this app's seeded cards do.
+// Grand Arbiter Augustin IV -- "Spells your opponents cast cost {1} more to cast." The tax mirror of
+// spellCostReductionFor: a text-scan over every permanent controlled by someone OTHER than the caster,
+// summed (two Arbiters tax twice). Generic mana only, applied at the same two cast choke points
+// (attemptPlay, castCommander) the reductions already hook.
+function spellCostIncreaseFor(lobby, casterId) {
+  let increase = 0;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner === casterId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    const m = (c.text || "").match(/spells your opponents cast cost \{(\d+)\} more to cast/i);
+    if (m) increase += parseInt(m[1], 10) || 0;
+  }
+  return increase;
+}
 function spellCostReductionFor(lobby, ownerId, card) {
   let reduction = 0;
   const typeLower = (card.type || "").toLowerCase();
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
-    const m = (c.text || "").match(/(\w+) spells you cast cost \{(\d+)\} less to cast/i);
-    if (m && typeLower.includes(m[1].toLowerCase())) reduction += parseInt(m[2], 10) || 0;
+    // matchAll (not a single match) + color words: Grand Arbiter Augustin IV carries TWO such lines
+    // ("White spells ... {1} less", "Blue spells ... {1} less"), and a COLOR word is matched against the
+    // cast card's colors rather than its type line, which never contains one.
+    for (const m of (c.text || "").matchAll(/(\w+) spells you cast cost \{(\d+)\} less to cast/gi)) {
+      const word = m[1].toLowerCase();
+      const colorLetter = { white: "W", blue: "U", black: "B", red: "R", green: "G" }[word];
+      if (colorLetter ? (card.colors || []).includes(colorLetter) : typeLower.includes(word)) reduction += parseInt(m[2], 10) || 0;
+    }
   }
   // Ghalta, Primal Hunger -- "This spell costs {X} less to cast, where X is the total power of
   // creatures you control." Self-referential (checked on the CARD BEING CAST's own text, not a
@@ -8318,6 +8403,7 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   // Goblin Warchief and its functional cousins -- see spellCostReductionFor's own comment.
   const reduction = spellCostReductionFor(lobby, card.owner, card);
   if (reduction > 0) cost.generic = Math.max(0, cost.generic - reduction);
+  cost.generic += spellCostIncreaseFor(lobby, card.owner);
   // Crop Rotation / Diabolic Intent -- "as an additional cost to cast this spell, sacrifice a
   // [land/creature]." A real additional cost (paid alongside mana, not a triggered effect after the
   // fact), so it's checked and paid here in attemptPlay -- the single choke point both playCard and
@@ -8585,7 +8671,15 @@ function pushToStack(lobby, card, casterId) {
   // caused it." Maelstrom Wanderer's "Cascade, cascade" does the whole process twice --
   // cascadeCountFromText counts literal occurrences of the word rather than assuming 1, since the
   // reminder text for this keyword never repeats the word itself.
+  // Imoti, Celebrant of Bounty -- "Spells you cast with mana value 6 or greater have cascade." A static
+  // grant from a permanent the CASTER controls, so it stacks with the spell's own printed cascade as an
+  // additional, separately-resolving instance (same "both trigger" ruling Maelstrom Nexus's comment
+  // below spells out) rather than replacing it.
   if (/\bcascade\b/i.test(card.text || "")) resolveCascade(lobby, casterId, card);
+  if ((card.cmc || 0) >= 6) {
+    const imotis = Object.values(lobby.cards).filter((c) => c.owner === casterId && c.zoneType !== "hand" && c.zoneType !== "stack" && /spells you cast with mana value 6 or greater have cascade/i.test(c.text || "")).length;
+    if (imotis > 0) resolveCascade(lobby, casterId, card, imotis);
+  }
   // Maelstrom Nexus -- "The first spell you cast each turn has cascade." Checked separately from
   // the spell's own printed cascade text just above (real rulings: if the first spell already has
   // cascade, BOTH cascade abilities trigger, resolved one after another -- not a single doubled
@@ -10143,6 +10237,15 @@ function fireAttackTriggers(lobby, card) {
     const effects = (ability.effects || []).map((e) => ({ ...e, attackerDefenderId: defenderId }));
     fireTrigger(lobby, card, { ...ability, effects });
   });
+  // Aqueous Form -- "Whenever ENCHANTED creature attacks": the trigger lives on an Aura/Equipment
+  // attached to the attacker, not on the attacker itself, so it can't be a normal "attack" entry keyed
+  // by the attacker's own name. Scans everything attached to this card; the attachment is the trigger's
+  // source (and its controller is the attachment's controller).
+  for (const id in lobby.cards) {
+    const att = lobby.cards[id];
+    if (att.attachedTo !== card.id) continue;
+    getAutomatedAbilities(att.name, "enchantedCreatureAttacks").forEach((ability) => fireTrigger(lobby, att, ability));
+  }
 }
 
 // The non-self-referential counterpart to fireAttackTriggers (Utvara Hellkite: "whenever a DRAGON
@@ -13549,6 +13652,7 @@ io.on("connection", (socket) => {
     if (!timing.ok) { socket.emit("actionError", timing.error); return; }
     const cost = parseManaCost(cmd.manaCost);
     cost.generic += cmd.tax || 0; // commander tax: +{2} generic per previous cast from the command zone
+    cost.generic += spellCostIncreaseFor(lobby, socket.id); // Grand Arbiter Augustin IV and friends
     // Jeweled Lotus's own restriction ("spend only to cast your commander") needs isCommander
     // already true on the ctx card at affordability-check time, even though `cmd` itself -- the
     // command-zone entry, not yet a battlefield card -- doesn't normally carry that flag.
