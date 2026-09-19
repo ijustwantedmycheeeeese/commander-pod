@@ -438,6 +438,17 @@ const CARD_ABILITIES = {
   "murmuring mystic": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], requiresTarget: false, label: "Murmuring Mystic — create a 1/1 blue Bird Illusion token with flying", effects: [{ type: "createToken", name: "Bird Illusion", tokenType: "Token Creature — Bird Illusion", power: "1", toughness: "1", colors: ["U"], keywords: ["Flying"] }] }],
   "fearless fledgling": [{ trigger: "landfall", requiresTarget: false, label: "Fearless Fledgling — +1/+1 counter, gains flying until end of turn", effects: [{ type: "addCountersToSelf", amount: 1 }, { type: "grantKeywordToSelf", keyword: "Flying" }] }],
   "redcap thief": [{ trigger: "etb", requiresTarget: false, label: "Redcap Thief — create a Treasure token", effects: [{ type: "createTreasureToken" }] }],
+  // ---- Wave 43 triggers ----
+  "goblin lackey": [{ trigger: "combatDamageToPlayer", label: "Goblin Lackey — put a Goblin permanent card from your hand onto the battlefield", requiresTarget: true, targetKind: "handCard", handTypeFilter: ["goblin"], effects: [{ type: "putHandCardOntoBattlefield" }] }],
+  "dross scorpion": [{ trigger: "deathAnyCreature", eventCardTypeFilter: ["artifact"], requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact"], label: "Dross Scorpion — untap target artifact", effects: [{ type: "untapTarget" }] }],
+  "genesis chamber": [{ trigger: "anyCreatureEtb", ifSourceUntapped: true, nontokenOnly: true, dynamicTargetOwner: true, requiresTarget: false, label: "Genesis Chamber — that creature's controller creates a 1/1 Myr artifact creature token", effects: [{ type: "createTokenForTargetPlayer", name: "Myr", tokenType: "Token Artifact Creature — Myr", power: "1", toughness: "1", colors: [] }] }],
+  "aesi, tyrant of gyre strait": [{ trigger: "landfall", requiresTarget: false, label: "Aesi, Tyrant of Gyre Strait — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  "goblin sharpshooter": [{ trigger: "deathAnyCreature", requiresTarget: false, label: "Goblin Sharpshooter — untap this creature", effects: [{ type: "untapSelf" }] }],
+  "chromatic star": [{ trigger: "death", requiresTarget: false, label: "Chromatic Star — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  "steely resolve": [{ trigger: "etb", label: "Steely Resolve — choose a creature type", requiresTarget: true, targetKind: "creatureType", effects: [{ type: "chooseCreatureType" }] }],
+  "wickerbough elder": [{ trigger: "etb", requiresTarget: false, label: "Wickerbough Elder — enters with a -1/-1 counter", effects: [{ type: "addCountersToSelf", amount: -1 }] }],
+  "ever-watching threshold": [{ trigger: "opponentAttacksYou", requiresTarget: false, label: "Ever-Watching Threshold — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  "gleaming splendor": [{ trigger: "opponentDrawsSecondCard", requiresTarget: false, label: "Gleaming Splendor — create a Treasure token", effects: [{ type: "createTreasureToken" }] }],
   "kresh the bloodbraided": [{ trigger: "deathAnyCreature", excludeSelf: true, eventCardTypeFilter: ["creature"], bakeEventCardPower: true, requiresTarget: false, label: "Kresh the Bloodbraided — put X +1/+1 counters on Kresh (X = that creature's power)", effects: [{ type: "addCountersToSelf" }] }],
   "deathbringer thoctar": [{ trigger: "deathAnyCreature", excludeSelf: true, eventCardTypeFilter: ["creature"], requiresTarget: false, label: "Deathbringer Thoctar — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }],
   "garna, bloodfist of keld": [{ trigger: "deathYouControl", typeFilter: "creature", excludeSelf: true, bakeEventWasAttacking: true, requiresTarget: false, label: "Garna, Bloodfist of Keld — draw if it was attacking, otherwise 1 damage to each opponent", effects: [{ type: "drawIfAttackingElsePingOpponents" }] }],
@@ -1371,6 +1382,23 @@ const ACTIVATED_ABILITIES = {
   // Wave 42 activated abilities.
   "siege-gang commander": [{ cost: { mana: "{1}{R}", autoSacrificeFilter: "goblin" }, requiresTarget: true, targetKind: "any", label: "Siege-Gang Commander — {1}{R}, Sacrifice a Goblin: 2 damage to any target", effects: [{ type: "damageTarget", amount: 2 }] }],
   "fauna shaman": [{ cost: { mana: "{G}", tap: true, autoDiscardFilter: "creature" }, requiresTarget: false, label: "Fauna Shaman — {G}, {T}, discard a creature card: search for a creature card", effects: [{ type: "tutorToHand", typeFilter: "creature" }] }],
+  // ---- Wave 43 activated abilities ----
+  "goblin chirurgeon": [{ cost: { autoSacrificeFilter: "goblin" }, requiresTarget: true, targetKind: "creature", label: "Goblin Chirurgeon — Sacrifice a Goblin: regenerate target creature", effects: [{ type: "grantRegenerationShieldToTarget" }] }],
+  "fanatical devotion": [{ cost: { autoSacrificeFilter: "creature" }, requiresTarget: true, targetKind: "creature", label: "Fanatical Devotion — Sacrifice a creature: regenerate target creature", effects: [{ type: "grantRegenerationShieldToTarget" }] }],
+  "goblin cratermaker": [
+    { cost: { mana: "{1}", sacrifice: true }, requiresTarget: true, targetKind: "creature", label: "Goblin Cratermaker — {1}, Sacrifice: 2 damage to target creature", effects: [{ type: "damageTarget", amount: 2 }] },
+    { cost: { mana: "{1}", sacrifice: true }, requiresTarget: true, targetKind: "colorlessNonlandPermanent", label: "Goblin Cratermaker — {1}, Sacrifice: destroy target colorless nonland permanent", effects: [{ type: "destroyTarget" }] }
+  ],
+  "acorn catapult": [{ cost: { mana: "{1}", tap: true }, requiresTarget: true, targetKind: "any", label: "Acorn Catapult — {1},{T}: 1 damage to any target, its controller creates a 1/1 Squirrel", effects: [{ type: "damageTargetThenSquirrel" }] }],
+  "goblin sharpshooter": [{ cost: { tap: true }, requiresTarget: true, targetKind: "any", label: "Goblin Sharpshooter — {T}: 1 damage to any target", effects: [{ type: "damageTarget", amount: 1 }] }],
+  "chromatic star": [{ cost: { mana: "{1}", tap: true, sacrifice: true }, manaAbility: true, label: "Chromatic Star — {1},{T}, Sacrifice: add one mana of any color", effects: [{ type: "chooseManaAnyColor", sourceName: "Chromatic Star" }] }],
+  "magewright's stone": [{ cost: { mana: "{1}", tap: true }, requiresTarget: true, targetKind: "creature", label: "Magewright's Stone — {1},{T}: untap target creature with a {T} ability", effects: [{ type: "untapTargetWithTapAbility" }] }],
+  "wickerbough elder": [{ cost: { mana: "{G}", removeSelfMinusCounter: 1 }, requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], label: "Wickerbough Elder — {G}, remove a -1/-1 counter: destroy target artifact or enchantment", effects: [{ type: "destroyTarget" }] }],
+  "dreamscape artist": [{ cost: { mana: "{2}{U}", tap: true, autoDiscardFilter: "card", autoSacrificeLandFilter: "land" }, requiresTarget: false, label: "Dreamscape Artist — {2}{U},{T}, discard a card, sacrifice a land: search for up to two basic lands onto the battlefield", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, thenEffects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true }] }] }],
+  "vizkopa guildmage": [
+    { cost: { mana: "{1}{W}{B}" }, requiresTarget: true, targetKind: "creature", label: "Vizkopa Guildmage — target creature gains lifelink until end of turn", effects: [{ type: "grantTemporaryKeywordToTarget", keyword: "Lifelink" }] },
+    { cost: { mana: "{1}{W}{B}" }, requiresTarget: false, label: "Vizkopa Guildmage — whenever you gain life this turn, each opponent loses that much life", effects: [{ type: "drainOnLifeGainThisTurn" }] }
+  ],
   "deathbringer thoctar": [{ cost: { removeSelfCounter: 1 }, requiresTarget: true, targetKind: "any", label: "Deathbringer Thoctar — remove a +1/+1 counter: 1 damage to any target", effects: [{ type: "damageTarget", amount: 1 }] }],
   // Wave 41 activated abilities: Aura of Silence's sacrifice removal and High Noon's sacrifice burn.
   "aura of silence": [{ cost: { sacrifice: true }, requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], label: "Aura of Silence — Sacrifice: destroy target artifact or enchantment", effects: [{ type: "destroyTarget" }] }],
@@ -2873,6 +2901,43 @@ const SPELL_ABILITIES = {
   "treasure cruise": { label: "Treasure Cruise — draw three cards (Delve)", effects: [{ type: "drawCards", amount: 3, target: "controller" }] },
   // Chemister's Insight -- the front half only; Jump-start (cast from graveyard) isn't modeled anywhere.
   "chemister's insight": { label: "Chemister's Insight — draw two cards", effects: [{ type: "drawCards", amount: 2, target: "controller" }] },
+  // ---- Wave 43 spells ----
+  "annul": { label: "Annul — counter target artifact or enchantment spell", effects: [{ type: "counterTargetSpellIf", typeIncludes: ["artifact", "enchantment"] }], requiresTarget: true, targetKind: "spell" },
+  "illumination": { label: "Illumination — counter target artifact or enchantment spell, its controller gains life equal to its mana value", effects: [{ type: "counterTargetSpellIf", typeIncludes: ["artifact", "enchantment"], gainLifeMV: true }], requiresTarget: true, targetKind: "spell" },
+  "red elemental blast": { label: "Red Elemental Blast — choose one", modes: [
+    { label: "Red Elemental Blast — counter target blue spell", requiresTarget: true, targetKind: "spell", effects: [{ type: "counterTargetSpellIf", colorIs: "U" }] },
+    { label: "Red Elemental Blast — destroy target blue permanent", requiresTarget: true, targetKind: "anyPermanent", effects: [{ type: "destroyTargetIfColor", colorIs: "U" }] }
+  ] },
+  "pyroblast": { label: "Pyroblast — choose one", modes: [
+    { label: "Pyroblast — counter target spell if it's blue", requiresTarget: true, targetKind: "spell", effects: [{ type: "counterTargetSpellIf", colorIs: "U" }] },
+    { label: "Pyroblast — destroy target permanent if it's blue", requiresTarget: true, targetKind: "anyPermanent", effects: [{ type: "destroyTargetIfColor", colorIs: "U" }] }
+  ] },
+  "mire in misery": { label: "Mire in Misery — each opponent sacrifices a creature or enchantment", effects: [{ type: "eachOpponentSacrifices", typeIncludes: ["creature", "enchantment"] }] },
+  "vraska's fall": { label: "Vraska's Fall — each opponent sacrifices a creature or planeswalker and gets a poison counter", effects: [{ type: "eachOpponentSacrifices", typeIncludes: ["creature", "planeswalker"] }, { type: "givePoisonCounters", target: "eachOpponent", amount: 1 }] },
+  "distorted curiosity": { label: "Distorted Curiosity — draw two cards (Corrupted: costs {2} less)", effects: [{ type: "drawCards", amount: 2, target: "controller" }] },
+  // "Up to one target creature" -- the target picker has no optional-target concept, so a creature is required.
+  "scale the heights": { label: "Scale the Heights — +1/+1 counter on target creature, gain 2 life, play an additional land, draw a card", effects: [{ type: "addCountersToTarget", amount: 1 }, { type: "gainLife", target: "controller", amount: 2 }, { type: "grantExtraLandDrop" }, { type: "drawCards", amount: 1, target: "controller" }], requiresTarget: true, targetKind: "creature" },
+  "enlightened tutor": { label: "Enlightened Tutor — search for an artifact or enchantment card, put it on top", effects: [{ type: "tutorToHand", typeFilter: ["artifact", "enchantment"], toTopOfLibrary: true }] },
+  // Mastermind's Acquisition's second mode ("from outside the game") has no sideboard to draw from in this app.
+  "mastermind's acquisition": { label: "Mastermind's Acquisition — choose one", modes: [
+    { label: "Mastermind's Acquisition — search your library for a card, put it into your hand", requiresTarget: false, effects: [{ type: "tutorToHand" }] },
+    { label: "Mastermind's Acquisition — a card from outside the game (no sideboard here: does nothing)", requiresTarget: false, effects: [] }
+  ] },
+  "sultai charm": { label: "Sultai Charm — choose one", modes: [
+    { label: "Sultai Charm — destroy target monocolored creature", requiresTarget: true, targetKind: "monocoloredCreature", effects: [{ type: "destroyTarget" }] },
+    { label: "Sultai Charm — destroy target artifact or enchantment", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], effects: [{ type: "destroyTarget" }] },
+    { label: "Sultai Charm — draw two cards, then discard a card", requiresTarget: false, effects: [{ type: "drawCards", amount: 2 }, { type: "targetPlayerDiscards", self: true, amount: 1 }] }
+  ] },
+  "artifact mutation": { label: "Artifact Mutation — destroy target artifact, create X 1/1 Saprolings where X is its mana value", effects: [{ type: "artifactMutation" }], requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact"] },
+  "spikefield hazard": { label: "Spikefield Hazard — 1 damage to any target, exile it instead if it would die this turn", effects: [{ type: "damageTargetExileIfDies", amount: 1 }], requiresTarget: true, targetKind: "any" },
+  "you see a pair of goblins": { label: "You See a Pair of Goblins — choose one", modes: [
+    { label: "Charge Them — creatures you control get +2/+0 until end of turn", requiresTarget: false, effects: [{ type: "grantTemporaryPTAndKeywordsToType", typeFilter: "creature", power: 2, toughness: 0 }] },
+    { label: "Befriend Them — create two 1/1 red Goblin creature tokens", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], amount: 2 }] }
+  ] },
+  "fade from history": { label: "Fade from History — each player with an artifact or enchantment creates a 2/2 Bear, then destroy all artifacts and enchantments", effects: [{ type: "fadeFromHistory" }] },
+  "relentless assault": { label: "Relentless Assault — untap all creatures that attacked this turn, additional combat phase", effects: [{ type: "untapAttackersExtraCombat" }] },
+  "expansion algorithm": { label: "Expansion Algorithm — proliferate X times", effects: [{ type: "proliferateXTimes" }] },
+  "mogg salvage": { label: "Mogg Salvage — destroy target artifact", effects: [{ type: "destroyTarget" }], requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact"] },
   "stubborn denial": { label: "Stubborn Denial — counter target noncreature spell unless its controller pays {1} (Ferocious: counter it outright)", effects: [{ type: "counterUnlessPayOrCondition", payAmount: 1, hardIf: "ferocious" }], requiresTarget: true, targetKind: "nonCreatureSpell" },
   "bring the ending": { label: "Bring the Ending — counter target spell unless its controller pays {2} (Corrupted: counter it outright)", effects: [{ type: "counterUnlessPayOrCondition", payAmount: 2, hardIf: "corrupted" }], requiresTarget: true, targetKind: "spell" },
   "damnation": { label: "Damnation — destroy all creatures, they can't be regenerated", effects: [{ type: "destroyAllCreatures", noRegen: true }] },
@@ -2957,6 +3022,7 @@ const ALT_COSTS = {
   "fierce guardianship": { kind: "commanderFree", label: "Fierce Guardianship — cast for free if you control a commander" },
   "flawless maneuver": { kind: "commanderFree", label: "Flawless Maneuver — cast for free if you control a commander" },
   "deflecting swat": { kind: "commanderFree", label: "Deflecting Swat — cast for free if you control a commander" },
+  "mogg salvage": { kind: "freeIfLandTypes", ownLand: "mountain", opponentLand: "island", label: "Mogg Salvage — cast for free if an opponent controls an Island and you control a Mountain" },
   // "exileColoredCardFromHand" -- see castWithAltCost's own comment for the full interactive flow
   // (queues a real "pick a card to exile" choice, doesn't cast immediately). onlyOffTurn is Force
   // of Negation's own "if it's not your turn" restriction; Force of Will has no such restriction.
@@ -3103,12 +3169,20 @@ function isSentenceGenericallyAutomated(sentence) {
   if (/^as this land enters, you may reveal an? [a-z]+( or (an? )?[a-z]+)? card from (?:your )?hand\.?$/.test(low)) return true;
   if (/^if you don'?t, this land enters tapped\.?$/.test(low)) return true;
   if (/^you may cast spells as though they had flash\.?$/.test(low)) return true;
+  // Wave 43 statics: Absolute Law/Grace (table-wide protection, targeting), Aegis of the Gods (player
+  // hexproof), Aesi/Dryad (extra land drop), Steely Resolve (chosen type shroud), Distorted Curiosity
+  // (corrupted cost reduction).
+  if (/^all creatures have protection from (?:white|blue|black|red|green)\.?$/.test(low)) return true;
+  if (/^you have hexproof\.?( \(.*\))?$/.test(low)) return true;
+  if (/^you may play an additional land on each of your turns\.?$/.test(low)) return true;
+  if (/^creatures of the chosen type have (?:shroud|hexproof|[a-z ,]+)\.?( \(.*\))?$/.test(low)) return true;
+  if (/^corrupted\s*[—-]+\s*this spell costs \{\d+\} less to cast if an opponent has three or more poison counters\.?$/.test(low)) return true;
   // Grim Monolith / Basalt Monolith / Mana Vault -- "This artifact doesn't untap during your untap
   // step." A real, already-working mechanism (the untap-step loop's own text-scan, see its comment)
   // this classifier simply never recognized -- a pure tool-accuracy fix, same "working mechanism in
   // a table/check this function forgot to look at" shape as the Propaganda-style gap already fixed
   // elsewhere in this function's own history.
-  if (/^this (?:artifact|permanent) doesn'?t untap during your untap step\.?$/.test(low)) return true;
+  if (/^this (?:artifact|permanent|creature) doesn'?t untap during your untap step\.?$/.test(low)) return true;
   // Toski, Bearer of Secrets and any future card with the same self-only static wording -- "[Name]
   // attacks each combat if able." Matches the new declareAttackers enforcement added alongside this
   // (see its own comment) -- a pure per-creature text-scan, no table entry needed.
@@ -3143,7 +3217,7 @@ function isSentenceGenericallyAutomated(sentence) {
   // Wave 41 -- table-wide statics and restrictions, all text-scanned at their real choke points
   // (staticBonusFor/effectiveKeywords/declareBlockers/declareAttackers/canCastSpells/activateAbility).
   if (/^all \w+ creatures get [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
-  if (/^all \w+ creatures have [a-z ,]+\.?( \(.*\))?$/.test(low)) return true;
+  if (/^all \w+(?: creatures)? have [a-z ,]+\.?( \(.*\))?$/.test(low)) return true;
   if (/^creatures with \w+ get [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
   if (/^slivers can'?t be blocked except by slivers\.?$/.test(low)) return true;
   if (/^as long as you control an? \w+ creature, this creature gets \+\d+\/\+\d+ and has [a-z]+\.?$/.test(low)) return true;
@@ -5928,6 +6002,84 @@ const EFFECTS = {
     checkEliminations(lobby);
     broadcastPlayers(lobby);
   },
+  // ---- Wave 43 effects ----
+  // Annul / Illumination / Red Elemental Blast / Pyroblast -- a counter that only applies when the target
+  // spell matches (type line substring list and/or a color). A non-matching target is a no-op (the real
+  // cards can't legally target it at all; the picker isn't type-narrowed, same as Negate).
+  counterTargetSpellIf(lobby, ctx, params) {
+    const item = lobby.stack.find((s) => s.id === params.chosenTargetId);
+    if (!item) return;
+    const type = (item.type || "").toLowerCase();
+    if (params.typeIncludes && !params.typeIncludes.some((t) => type.includes(t))) return;
+    if (params.colorIs && !(item.colors || []).includes(params.colorIs)) return;
+    const ownerId = item.owner, mv = item.cmc || 0;
+    EFFECTS.counterTargetSpell(lobby, ctx, params);
+    if (params.gainLifeMV && lobby.players[ownerId] && !lobby.stack.some((s) => s.id === item.id)) applyLifeGain(lobby, ownerId, mv);
+  },
+  // Red Elemental Blast / Pyroblast -- "Destroy target blue permanent."
+  destroyTargetIfColor(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c || !(c.colors || []).includes(params.colorIs)) return;
+    EFFECTS.destroyTarget(lobby, ctx, params);
+  },
+  // Acorn Catapult -- "1 damage to any target. That permanent's controller or that player creates a 1/1
+  // green Squirrel creature token."
+  damageTargetThenSquirrel(lobby, ctx, params) {
+    const asCard = lobby.cards[params.chosenTargetId];
+    const who = lobby.players[params.chosenTargetId] ? params.chosenTargetId : (asCard && asCard.owner);
+    EFFECTS.damageTarget(lobby, ctx, { ...params, amount: 1 });
+    if (who) EFFECTS.createToken(lobby, { ...ctx, controllerId: who }, { name: "Squirrel", tokenType: "Token Creature — Squirrel", power: "1", toughness: "1", colors: ["G"] });
+  },
+  // Magewright's Stone -- "Untap target creature that has an activated ability with {T} in its cost."
+  untapTargetWithTapAbility(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c || !/\{t\}[^:\n]*:/i.test(c.text || "")) return;
+    EFFECTS.untapTarget(lobby, ctx, params);
+  },
+  // Vizkopa Guildmage -- "Whenever you gain life this turn, each opponent loses that much life." Stacks
+  // per activation; applyLifeGain does the draining, and the counter is swept every Untap step.
+  drainOnLifeGainThisTurn(lobby, ctx) {
+    const p = lobby.players[ctx.controllerId];
+    if (p) p.lifeGainDrain = (p.lifeGainDrain || 0) + 1;
+  },
+  // Artifact Mutation -- "Destroy target artifact. It can't be regenerated. Create X 1/1 green Saproling
+  // creature tokens, where X is that artifact's mana value."
+  artifactMutation(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c) return;
+    const mv = c.cmc || 0;
+    EFFECTS.destroyTarget(lobby, ctx, { ...params, noRegen: true });
+    if (mv > 0) EFFECTS.createToken(lobby, ctx, { name: "Saproling", tokenType: "Token Creature — Saproling", power: "1", toughness: "1", colors: ["G"], amount: mv });
+  },
+  // Fade from History -- "Each player who controls an artifact or enchantment creates a 2/2 green Bear
+  // creature token. Then destroy all artifacts and enchantments."
+  fadeFromHistory(lobby, ctx) {
+    const isTarget = (c) => c.zoneType !== "hand" && c.zoneType !== "stack" && c.zoneType !== "mana" && /artifact|enchantment/i.test(c.type || "");
+    const owners = new Set(Object.values(lobby.cards).filter(isTarget).map((c) => c.owner));
+    owners.forEach((pid) => EFFECTS.createToken(lobby, { ...ctx, controllerId: pid }, { name: "Bear", tokenType: "Token Creature — Bear", power: "2", toughness: "2", colors: ["G"] }));
+    Object.values(lobby.cards).filter((c) => isTarget(c) && !/token creature — bear/i.test(c.type || "") && !effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "indestructible")).forEach((c) => { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); });
+  },
+  // Relentless Assault -- "Untap all creatures that attacked this turn. After this main phase, there is
+  // an additional combat phase followed by an additional main phase." (attackedOnTurn is stamped in
+  // declareAttackers.)
+  untapAttackersExtraCombat(lobby, ctx) {
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.zoneType === "creature" && c.tapped && c.attackedOnTurn === lobby.turn.turnNumber) { c.tapped = false; broadcastCard(lobby, c); }
+    });
+    lobby.turn.extraCombatsPending = (lobby.turn.extraCombatsPending || 0) + 1;
+  },
+  // Expansion Algorithm -- "Proliferate X times." (xAmount threaded from the cast.)
+  proliferateXTimes(lobby, ctx, params) {
+    for (let i = 0; i < (params.xAmount || 0); i++) EFFECTS.proliferateAll(lobby, ctx, {});
+  },
+  // Spikefield Hazard -- "1 damage to any target. If a permanent dealt damage this way would die this
+  // turn, exile it instead." (card._exileIfDiesTurn is read by graveyardRedirectFor.)
+  damageTargetExileIfDies(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (c) c._exileIfDiesTurn = lobby.turn.turnNumber;
+    EFFECTS.damageTarget(lobby, ctx, params);
+  },
+
   // ---- Wave 42 effects ----
   // Massacre Wurm / Phyresis Outbreak -- "creatures your opponents control get -X/-X until end of turn"
   // (grantTemporaryPT on each; broadcastPlayers' checkLethalToughness does the dying). perPoison scales
@@ -6325,6 +6477,7 @@ const EFFECTS = {
     Object.keys(lobby.players).filter((id) => id !== ctx.controllerId && !isProtectedFromForcedSacrifice(lobby, id, ctx.controllerId)).forEach((oppId) => {
       const match = Object.values(lobby.cards).find((c) => {
         if (c.owner !== oppId) return false;
+        if (c.zoneType === "hand" || c.zoneType === "stack") return false;
         if (params.zoneTypeFilter && c.zoneType !== params.zoneTypeFilter) return false;
         const type = (c.type || "").toLowerCase();
         if (params.typeIncludes && !params.typeIncludes.some((t) => type.includes(t))) return false;
@@ -7556,9 +7709,15 @@ function effectiveKeywords(lobby, card) {
     for (const id in lobby.cards) {
       const src = lobby.cards[id];
       if (src.zoneType === "hand" || src.zoneType === "stack" || !src.text) continue;
-      for (const m of src.text.matchAll(/all (\w+) creatures have ([a-z ,]+?)(?:\.|\n|$| \()/gi)) {
-        if (!typeLower.includes(m[1].toLowerCase())) continue;
+      for (const m of src.text.matchAll(/all (\w+?)(?: creatures)? have ([a-z ,]+?)(?:\.|\n|$| \()/gi)) {
+        if (!typeLower.includes(m[1].toLowerCase().replace(/s$/, ""))) continue;
         m[2].split(/,| and /).map((s) => s.trim()).forEach((raw) => { const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === raw.toLowerCase()); if (kw) extra.push(kw); });
+      }
+      // Steely Resolve -- "Creatures of the chosen type have shroud." (per-permanent chosen type, set by
+      // chooseCreatureType at ETB.)
+      if (src.chosenCreatureType && typeLower.includes(src.chosenCreatureType.toLowerCase())) {
+        const cm = src.text.match(/creatures of the chosen type have ([a-z ,]+?)(?:\.|\n|$| \()/i);
+        if (cm) cm[1].split(/,| and /).map((s) => s.trim()).forEach((raw) => { const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === raw.toLowerCase()); if (kw) extra.push(kw); });
       }
     }
   }
@@ -7689,6 +7848,7 @@ function targetIsUntargetableBy(lobby, targetCard, controllerId, sourceCard) {
   if (!lobby.settings || !lobby.settings.enforceTargetingRestrictions) return false;
   const kw = effectiveKeywords(lobby, targetCard).map((k) => (k || "").toLowerCase());
   if (kw.includes("shroud")) return true;
+  if (tableProtectionBlocks(lobby, targetCard, sourceCard)) return true;
   if (targetCard.owner === controllerId) return false; // Hexproof/Ward/Protection only ever restrict OPPONENTS
   if (kw.includes("hexproof") || kw.includes("ward")) return true;
   if (sourceMatchesProtection(targetCard, sourceCard)) return true;
@@ -7706,8 +7866,27 @@ function cardTypeProtectionBlocks(lobby, protectedPlayerId, sourceCard) {
   const p = lobby.players[protectedPlayerId];
   if (!p || !sourceCard) return false;
   if (p.protectionFromEverything) return true; // Teferi's Protection
+  // Aegis of the Gods / Leyline of Sanctity -- "You have hexproof": untargetable by the player's
+  // OPPONENTS' spells and abilities (the source's own controller is looked up off the card, since a
+  // triggered ability's sourceCard is only {id}).
+  const srcOwner = sourceCard.owner || (lobby.cards[sourceCard.id] && lobby.cards[sourceCard.id].owner);
+  if (srcOwner && srcOwner !== protectedPlayerId && Object.values(lobby.cards).some((c) => c.owner === protectedPlayerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /(^|\n)you have hexproof/i.test(c.text || ""))) return true;
   if (!p.protectionFromCardType) return false;
   return (sourceCard.type || "").toLowerCase().includes(p.protectionFromCardType.toLowerCase());
+}
+// Absolute Law / Absolute Grace -- "All creatures have protection from [color]." A table-wide static
+// (any controller's permanent, applies to EVERY creature, the enchantment's own controller's included)
+// scoped to targeting like the rest of Protection in this engine.
+function tableProtectionBlocks(lobby, targetCard, sourceCard) {
+  if (!sourceCard || targetCard.zoneType !== "creature") return false;
+  for (const id in lobby.cards) {
+    const src = lobby.cards[id];
+    if (src.zoneType === "hand" || src.zoneType === "stack" || !src.text) continue;
+    for (const m of src.text.matchAll(/all creatures have protection from (white|blue|black|red|green)/gi)) {
+      if ((sourceCard.colors || []).includes(PROTECTION_COLOR_WORDS[m[1].toLowerCase()])) return true;
+    }
+  }
+  return false;
 }
 
 // Parses a permanent's own oracle text for the anthem/lord pattern -- "Other [color] creatures you
@@ -7867,6 +8046,10 @@ function spellCostReductionFor(lobby, ownerId, card) {
   // aura/anthem bonuses), same computation Bonders' Enclave's own condition already uses.
   // Sublime Exhalation -- Undaunted: "This spell costs {1} less to cast for each opponent" (opponents
   // still in the game).
+  // Distorted Curiosity -- "Corrupted -- This spell costs {2} less to cast if an opponent has three or
+  // more poison counters."
+  const corruptCost = (card.text || "").match(/corrupted\s*[—-]+\s*this spell costs \{(\d+)\} less to cast if an opponent has three or more poison counters/i);
+  if (corruptCost && Object.entries(lobby.players).some(([pid, pl]) => pid !== ownerId && (pl.poison || 0) >= 3)) reduction += parseInt(corruptCost[1], 10) || 0;
   if (/\bundaunted\b/i.test(card.text || "")) {
     reduction += Object.entries(lobby.players).filter(([pid, pl]) => pid !== ownerId && !pl.eliminated).length;
   }
@@ -8903,7 +9086,10 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
     // immediately the turn it enters, matching how a real static ability works continuously rather
     // than only from the next untap step onward.
     const ritesBonus = Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /each player may play an additional land on each of their turns/i.test(c.text || "")) ? 1 : 0;
-    const allowed = 1 + (p.landDropBonus || 0) + ritesBonus;
+    // Aesi / Dryad of the Ilysian Grove -- "You may play an additional land on each of your turns" (own
+    // permanents only, each copy stacks).
+    const ownExtraLandBonus = Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /you may play an additional land on each of your turns/i.test(c.text || "")).length;
+    const allowed = 1 + (p.landDropBonus || 0) + ritesBonus + ownExtraLandBonus;
     if ((p.landsPlayedThisTurn || 0) >= allowed) {
       return { ok: false, error: `You've already played your land${allowed > 1 ? "s" : ""} this turn (${allowed} allowed).` };
     }
@@ -9209,7 +9395,6 @@ function pushToStack(lobby, card, casterId) {
   if (!castFromHand) fireGlobalTrigger(lobby, "youCastSpellNotFromHand", casterId, card);
   const castCounter = lobby.players[casterId];
   if (castCounter) {
-    castCounter.spellsCastThisTurn = (castCounter.spellsCastThisTurn || 0) + 1;
     if (!(card.type || "").toLowerCase().includes("creature")) castCounter.noncreatureSpellsCastThisTurn = (castCounter.noncreatureSpellsCastThisTurn || 0) + 1;
   }
   fireCastWatchTriggers(lobby, casterId, card);
@@ -9680,6 +9865,16 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana")) return { ok: false, error: "Choose a permanent." };
     const filter = entry.typeFilter || [];
     if (!filter.some((t) => (c.type || "").toLowerCase().includes(t))) return { ok: false, error: `Choose a ${filter.join("/")} permanent.` };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Sultai Charm ("target monocolored creature") / Goblin Cratermaker ("target colorless nonland
+  // permanent") -- color-COUNT filters, which no type-line substring can express.
+  if (targetKind === "monocoloredCreature" || targetKind === "colorlessNonlandPermanent") {
+    const c = lobby.cards[targetId];
+    const colorCount = c ? (c.colors || []).length : 0;
+    if (targetKind === "monocoloredCreature" && (!c || c.zoneType !== "creature" || colorCount !== 1)) return { ok: false, error: "Choose a monocolored creature." };
+    if (targetKind === "colorlessNonlandPermanent" && (!c || !(c.zoneType === "creature" || c.zoneType === "artifact") || colorCount !== 0)) return { ok: false, error: "Choose a colorless nonland permanent." };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
     return { ok: true };
   }
@@ -10370,6 +10565,8 @@ function fireAnyCreatureEtbTriggers(lobby, enteringCard) {
     if (c.zoneType === "hand" || c.zoneType === "stack") continue;
     getAutomatedAbilities(c.name, "anyCreatureEtb").forEach((ability) => {
       if (ability.excludeSelf && c.id === enteringCard.id) return;
+      if (ability.ifSourceUntapped && c.tapped) return; // Genesis Chamber
+      if (ability.nontokenOnly && /token/i.test(enteringCard.type || "")) return;
       const fireAbility = ability.dynamicTargetOwner ? { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: enteringCard.owner })) } : ability;
       fireTrigger(lobby, c, fireAbility);
     });
@@ -10780,6 +10977,10 @@ function applyLifeGain(lobby, playerId, amount, opts) {
   p.life += amount;
   p.lifeGainedThisTurn = (p.lifeGainedThisTurn || 0) + amount; // Griffin Aerie
   fireGlobalTrigger(lobby, "selfGainsLife", playerId);
+  // Vizkopa Guildmage -- "whenever you gain life this turn, each opponent loses that much life."
+  if (p.lifeGainDrain > 0) {
+    Object.keys(lobby.players).filter((id) => id !== playerId && !lobby.players[id].eliminated).forEach((id) => applyLifeLoss(lobby, id, amount * p.lifeGainDrain));
+  }
 }
 // The loss-side counterpart to applyLifeGain -- same lifeLocked check, no trigger to fire (nothing
 // in this app currently cares about "whenever you lose life"). Every raw `p.life -=` site should
@@ -11150,6 +11351,7 @@ const GRAVEYARD_REDIRECT_ANY_CARD = ["valgavoth, terror eater"];
 const GRAVEYARD_REDIRECT_ALL_PLAYERS = ["rest in peace"];
 function graveyardRedirectFor(lobby, card) {
   if (card.isCommander) return false;
+  if (card._exileIfDiesTurn && card._exileIfDiesTurn === lobby.turn.turnNumber) return true; // Spikefield Hazard
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.zoneType === "hand" || c.zoneType === "stack") continue;
@@ -11472,7 +11674,7 @@ function advanceOnePhase(lobby) {
         // Arena of Glory -- an EXERTED permanent skips exactly one untap step (its own controller's next
         // one), then the flag clears. Checked here, on the real active player's own untap only.
         if (lobby.cards[id].owner === activeId && lobby.cards[id].exerted) { lobby.cards[id].exerted = false; broadcastCard(lobby, lobby.cards[id]); continue; }
-        if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped && !/this (?:artifact|permanent) doesn'?t untap during your untap step/i.test(lobby.cards[id].text || "")) {
+        if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped && !/this (?:artifact|permanent|creature) doesn'?t untap during your untap step/i.test(lobby.cards[id].text || "")) {
           lobby.cards[id].tapped = false;
           broadcastCard(lobby, lobby.cards[id]);
         }
@@ -12713,6 +12915,14 @@ io.on("connection", (socket) => {
     if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
     // "commanderFree" (Fierce Guardianship/Flawless Maneuver) -- a real condition check, no cost of
     // any kind to pay once it's met, unlike the tapCreatures shape below.
+    // Mogg Salvage -- "If an opponent controls an Island and you control a Mountain, you may cast this
+    // spell without paying its mana cost."
+    if (alt.kind === "freeIfLandTypes") {
+      const hasLand = (pid, t) => Object.values(lobby.cards).some((c) => c.owner === pid && c.zoneType === "mana" && (c.type || "").toLowerCase().includes(t));
+      if (!hasLand(socket.id, alt.ownLand) || !Object.keys(lobby.players).some((pid) => pid !== socket.id && hasLand(pid, alt.opponentLand))) { socket.emit("actionError", `${card.name} is only free if an opponent controls an ${alt.opponentLand} and you control a ${alt.ownLand}.`); return; }
+      castSpell(lobby, card, socket.id, ` for free (${alt.opponentLand}/${alt.ownLand} condition)`);
+      return;
+    }
     if (alt.kind === "commanderFree") {
       if (!controlsCommander(lobby, socket.id)) { socket.emit("actionError", `You need to control a commander to cast ${card.name} for free.`); return; }
       castSpell(lobby, card, socket.id, " for free (commander in play)");
@@ -13119,6 +13329,7 @@ io.on("connection", (socket) => {
       tapCreaturesToTap = qualifying.slice(0, cost.tapCreaturesCount);
     }
 
+    if (cost.removeSelfMinusCounter && (card.counters || 0) > -cost.removeSelfMinusCounter) { socket.emit("actionError", `${card.name} has no -1/-1 counter to remove.`); return; }
     if (cost.removeSelfCounter && (card.counters || 0) < cost.removeSelfCounter) { socket.emit("actionError", `${card.name} has no +1/+1 counter to remove.`); return; }
     if (cost.tap) {
       if (card.tapped) { socket.emit("actionError", `${card.name} is already tapped.`); return; }
@@ -13188,6 +13399,7 @@ io.on("connection", (socket) => {
     // exiling isn't dying).
     if (cost.exile) { exileCardInternal(lobby, card); }
     // Deathbringer Thoctar -- "Remove a +1/+1 counter from this creature" as a cost (validated before payment).
+    if (cost.removeSelfMinusCounter) { card.counters = (card.counters || 0) + cost.removeSelfMinusCounter; broadcastCard(lobby, card); }
     if (cost.removeSelfCounter) { card.counters = (card.counters || 0) - cost.removeSelfCounter; broadcastCard(lobby, card); }
     // Arena of Glory's "Exert this land" -- won't untap during its controller's next untap step.
     if (cost.exert) { card.exerted = true; broadcastCard(lobby, card); }
@@ -14743,6 +14955,16 @@ io.on("connection", (socket) => {
     // Combat -> Main 2 phase transition, so it needs its own persistent flag rather than reading
     // combat state directly.
     if (Object.keys(validAttackers).length > 0) p.attackedThisTurn = true;
+    Object.keys(validAttackers).forEach((aid) => { if (lobby.cards[aid]) lobby.cards[aid].attackedOnTurn = lobby.turn.turnNumber; }); // Relentless Assault
+    // Ever-Watching Threshold -- "whenever an opponent attacks, if they attacked you..." -- once per
+    // attacked player who controls such a permanent, however many creatures are sent at them.
+    new Set(Object.values(validAttackers).filter((defId) => lobby.players[defId] && defId !== socket.id)).forEach((defId) => {
+      for (const cid in lobby.cards) {
+        const wc = lobby.cards[cid];
+        if (wc.owner !== defId || wc.zoneType === "hand" || wc.zoneType === "stack") continue;
+        getAutomatedAbilities(wc.name, "opponentAttacksYou").forEach((ability) => fireTrigger(lobby, wc, ability));
+      }
+    });
     // Shared Animosity / Battle Cry / Goblin Piledriver-style pumps -- all three need every
     // attacker known at once (each one's bonus depends on every OTHER attacker), so they're
     // computed once right here rather than as a per-creature trigger like
