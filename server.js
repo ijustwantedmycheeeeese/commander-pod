@@ -96,6 +96,13 @@ function savePileMats() { saveJSON(PILE_MATS_FILE, pileMats); }
 function saveCollection() { saveJSON(COLLECTION_FILE, collection); }
 function saveCardArchive() { saveJSON(CARD_ARCHIVE_FILE, cardArchive); }
 function archiveKey(name) { return (name || "").toLowerCase().trim(); }
+// Double-faced / split cards arrive as "Front // Back", but every ability table is keyed by the FRONT
+// face name alone (Marang River Regent, Blex, Vexing Pest, ...), so a plain archiveKey lookup silently
+// never matched them in a real game. tableGet tries the full name first (a table may deliberately key
+// the whole "a // b" string, e.g. Bala Ged Recovery), then falls back to the front face.
+function frontFaceKey(name) { const k = archiveKey(name); const i = k.indexOf(" // "); return i > 0 ? k.slice(0, i) : k; }
+function frontOrFull(name) { const k = archiveKey(name); return (CARD_ABILITIES[k] || ACTIVATED_ABILITIES[k] || SPELL_ABILITIES[k]) ? k : frontFaceKey(name); }
+function tableGet(table, name) { return table[archiveKey(name)] || table[frontFaceKey(name)]; }
 function archiveCard(fields) {
   if (!fields || !fields.name) return;
   cardArchive[archiveKey(fields.name)] = fields;
@@ -427,6 +434,26 @@ const CARD_ABILITIES = {
   // why this dispatcher's ambient chosenTargetId (the dealing creature's id, not a player id) must
   // be overridden.
   "toski, bearer of secrets": [{ trigger: "anyCreatureCombatDamageToPlayer", requiresTarget: false, label: "Toski, Bearer of Secrets — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  // Wave 39 -- Blex's own "When Blex dies, you gain 4 life" (its anthem clause is generic); Arasta and
+  // Niv-Mizzet ride the new fireCastWatchTriggers ("opponentCastsSpellTrig"/"anyPlayerCastsSpell", both
+  // with spellTypeFilter) and drawN's new "youDrawCard" event; Vexing Radgull/Ancient Gold Dragon reuse
+  // combatDamageToPlayer (dealtToPlayerId baked in); Marcus reuses anyCreatureCombatDamageToPlayer
+  // (chosenTargetId = the dealing creature); Brash Taunter's damagedSelf gained requiresTarget +
+  // amountFromDamage. Nyx Weaver's graveyard ability and Ishkanah's second ability are in ACTIVATED.
+  "blex, vexing pest": [{ trigger: "death", requiresTarget: false, label: "Blex, Vexing Pest — gain 4 life", effects: [{ type: "gainLife", target: "controller", amount: 4 }] }],
+  "arasta of the endless web": [{ trigger: "opponentCastsSpellTrig", spellTypeFilter: ["instant", "sorcery"], requiresTarget: false, label: "Arasta of the Endless Web — create a 1/2 green Spider token with reach", effects: [{ type: "createToken", name: "Spider", tokenType: "Token Creature — Spider", power: "1", toughness: "2", colors: ["G"], keywords: ["Reach"] }] }],
+  "niv-mizzet, parun": [
+    { trigger: "youDrawCard", requiresTarget: true, targetKind: "any", label: "Niv-Mizzet, Parun — deal 1 damage to any target", effects: [{ type: "damageTarget", amount: 1 }] },
+    { trigger: "anyPlayerCastsSpell", spellTypeFilter: ["instant", "sorcery"], requiresTarget: false, label: "Niv-Mizzet, Parun — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }
+  ],
+  "vexing radgull": [{ trigger: "combatDamageToPlayer", requiresTarget: false, label: "Vexing Radgull — two rad counters, or proliferate", effects: [{ type: "radCountersOrProliferate" }] }],
+  "ancient gold dragon": [{ trigger: "combatDamageToPlayer", requiresTarget: false, label: "Ancient Gold Dragon — roll a d20, create that many 1/1 Faerie Dragons", effects: [{ type: "rollD20CreateTokens", name: "Faerie Dragon", tokenType: "Token Creature — Faerie Dragon", power: "1", toughness: "1", colors: ["U"], keywords: ["Flying"] }] }],
+  "marcus, mutant mayor": [{ trigger: "anyCreatureCombatDamageToPlayer", requiresTarget: false, label: "Marcus, Mutant Mayor — draw if it has a +1/+1 counter, else put one on it", effects: [{ type: "drawOrCounterOnDealer" }] }],
+  "brash taunter": [{ trigger: "damagedSelf", requiresTarget: true, targetKind: "opponent", label: "Brash Taunter — deals that much damage to target opponent", effects: [{ type: "damageTarget", amountFromDamage: true }] }],
+  "nyx weaver": [{ trigger: "upkeep", requiresTarget: false, label: "Nyx Weaver — mill two cards", effects: [{ type: "millCards", amount: 2 }] }],
+  "erinis, gloom stalker": [{ trigger: "attack", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["land"], label: "Erinis, Gloom Stalker — return target land card from your graveyard to the battlefield", effects: [{ type: "reanimateFromGraveyard" }] }],
+  // Ishkanah, Grafwidow -- Delirium: four or more card types among cards in your graveyard.
+  "ishkanah, grafwidow": [{ trigger: "etb", requiresTarget: false, condition: (card, lobby) => { const p = lobby.players[card.owner]; const types = new Set(); ((p && p.graveyard) || []).forEach((e) => ["artifact", "creature", "enchantment", "instant", "land", "planeswalker", "sorcery", "battle", "kindred", "tribal"].forEach((t) => { if ((e.type || "").toLowerCase().includes(t)) types.add(t); })); return types.size >= 4; }, label: "Ishkanah, Grafwidow — delirium: create three 1/2 green Spider tokens with reach", effects: [{ type: "createToken", amount: 3, name: "Spider", tokenType: "Token Creature — Spider", power: "1", toughness: "2", colors: ["G"], keywords: ["Reach"] }] }],
   // Ichor Rats -- "When this creature enters, each player gets a poison counter." (Infect is generic.)
   "ichor rats": [{ trigger: "etb", requiresTarget: false, label: "Ichor Rats — each player gets a poison counter", effects: [{ type: "givePoisonCounters", target: "eachPlayer", amount: 1 }] }],
   // Aqueous Form -- "Whenever enchanted creature attacks, scry 1": the new "enchantedCreatureAttacks"
@@ -1137,7 +1164,7 @@ const CARD_ABILITIES = {
   "kyodai, soul of kamigawa": [{ trigger: "etb", label: "Kyodai, Soul of Kamigawa — another target permanent gains indestructible for as long as you control Kyodai", requiresTarget: true, targetKind: "permanent", excludeSelf: true, effects: [{ type: "grantIndestructibleWhileSourceControlled" }] }]
 };
 function getAutomatedAbilities(cardName, triggerType) {
-  const all = CARD_ABILITIES[archiveKey(cardName)] || [];
+  const all = tableGet(CARD_ABILITIES, cardName) || [];
   return all.filter((a) => a.trigger === triggerType);
 }
 
@@ -1303,6 +1330,14 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Blighted Woodland — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{3}{G}", tap: true, sacrifice: true }, label: "Blighted Woodland — search for up to two basic lands, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }] }
   ],
+  // Wave 39 activated abilities. Brash Taunter's fight (fightTarget: mutual damageTarget), Nyx Weaver's
+  // exile-self graveyard recursion (cost.exile + returnGraveyardCardToHand, any card kind), Ishkanah's
+  // Spider-count drain, and Strength Bobblehead's sorcery-speed counters ("Activate only as a sorcery"
+  // as a condition: own turn, main phase, empty stack).
+  "brash taunter": [{ cost: { mana: "{2}{R}", tap: true }, requiresTarget: true, targetKind: "creature", excludeSelf: true, label: "Brash Taunter — fights another target creature", effects: [{ type: "fightTarget" }] }],
+  "nyx weaver": [{ cost: { mana: "{1}{B}{G}", exile: true }, requiresTarget: true, targetKind: "ownGraveyard", label: "Nyx Weaver — return target card from your graveyard to your hand", effects: [{ type: "returnGraveyardCardToHand" }] }],
+  "ishkanah, grafwidow": [{ cost: { mana: "{6}{B}" }, requiresTarget: true, targetKind: "opponent", label: "Ishkanah, Grafwidow — target opponent loses life equal to the number of Spiders you control", effects: [{ type: "loseLifeEqualToTypeCountControlled", typeWord: "spider" }] }],
+  "strength bobblehead": [{ cost: { mana: "{3}", tap: true }, requiresTarget: true, targetKind: "creature", condition: (card, lobby) => lobby.turn.order[lobby.turn.activeIndex] === card.owner && (lobby.turn.phase === "Main 1" || lobby.turn.phase === "Main 2") && lobby.stack.length === 0, conditionError: "Activate only as a sorcery.", label: "Strength Bobblehead — put X +1/+1 counters on target creature (X = Bobbleheads you control)", effects: [{ type: "addCountersEqualToTypeCountControlled", typeWord: "bobblehead" }] }],
   // Vanishing -- "{U}{U}: Enchanted creature phases out." phaseOutTarget (wave 29) aimed at the host.
   "vanishing": [{ cost: { mana: "{U}{U}" }, requiresTarget: false, label: "Vanishing — enchanted creature phases out", effects: [{ type: "phaseOutEnchantedCreature" }] }],
   "alchemist's refuge": [{ cost: { mana: "{G}{U}", tap: true }, label: "Alchemist's Refuge — you may cast spells this turn as though they had flash", effects: [{ type: "grantFlashUntilEndOfTurn" }] }],
@@ -2146,7 +2181,7 @@ function getGrantedActivatedAbilities(card, lobby) {
   return grants;
 }
 function getActivatedAbilities(card, lobby) {
-  const named = ACTIVATED_ABILITIES[archiveKey(card.name)] || [];
+  const named = tableGet(ACTIVATED_ABILITIES, card.name) || [];
   // Thespian's Stage / The Mycosynth Gardens -- "...except it has this ability." Once the card's
   // own name changes via becomeCopyPermanent, the normal name-keyed lookup above would otherwise
   // lose its own re-copy ability entirely, since this engine's activated-ability table is purely
@@ -2166,7 +2201,7 @@ function getActivatedAbilities(card, lobby) {
     Object.values(lobby.cards).forEach((c) => {
       if (c.id === card.id || c.owner !== card.owner || c.zoneType !== "creature") return;
       if (archiveKey(c.name) === archiveKey(card.name)) return;
-      mimicked = mimicked.concat(ACTIVATED_ABILITIES[archiveKey(c.name)] || []);
+      mimicked = mimicked.concat(tableGet(ACTIVATED_ABILITIES, c.name) || []);
     });
   }
   return [...named, ...retained, ...mimicked, ...getGrantedActivatedAbilities(card, lobby)];
@@ -2186,7 +2221,7 @@ const CHANNEL_ABILITIES = {
   "boseiju, who endures": { cost: { mana: "{1}{G}" }, requiresTarget: true, targetKind: "opponentArtifactEnchantmentNonbasicLand", label: "Boseiju, Who Endures — Channel: destroy target artifact, enchantment, or nonbasic land an opponent controls, then that player may search for a basic land", effects: [{ type: "destroyTargetThenOwnerSearchesBasicLand" }] }
 };
 function getChannelAbility(cardName) {
-  return CHANNEL_ABILITIES[archiveKey(cardName)] || null;
+  return tableGet(CHANNEL_ABILITIES, cardName) || null;
 }
 // Otawara/Eiganjo's shared "This ability costs {1} less to activate for each legendary creature you
 // control" -- self-referential on the CHANNELING card's own text (checked here, not scanned off
@@ -2793,7 +2828,7 @@ const SPELL_ABILITIES = {
   "irenicus's vile duplication": { label: "Irenicus's Vile Duplication — create a token copy of target creature you control, with flying, not legendary", effects: [{ type: "createTokenCopyOfTargetCreature", stripLegendary: true, addKeywords: ["Flying"] }], requiresTarget: true, targetKind: "ownCreature" }
 };
 function getSpellAbility(cardName) {
-  return SPELL_ABILITIES[archiveKey(cardName)] || null;
+  return tableGet(SPELL_ABILITIES, cardName) || null;
 }
 // Alternative costs for casting FROM HAND ("you may pay X rather than pay this spell's mana
 // cost") -- a genuinely different shape from SPELL_ABILITIES (which is about what a spell DOES
@@ -2821,7 +2856,7 @@ const ALT_COSTS = {
   "force of negation": { kind: "exileColoredCardFromHand", colorFilter: "U", lifeCost: 0, onlyOffTurn: true, label: "Force of Negation — exile a blue card from your hand, rather than pay its mana cost (opponent's turn only)" }
 };
 function getAltCost(cardName) {
-  return ALT_COSTS[archiveKey(cardName)] || null;
+  return tableGet(ALT_COSTS, cardName) || null;
 }
 // Cards whose real automation lives entirely in a dedicated function rather than any of the three
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
@@ -2846,7 +2881,7 @@ function getAllAutomatedCardNames() {
   ])];
 }
 function isCardAutomated(cardName) {
-  const key = archiveKey(cardName);
+  const key = tableGet(CARD_ABILITIES, cardName) || tableGet(ACTIVATED_ABILITIES, cardName) || tableGet(SPELL_ABILITIES, cardName) ? frontOrFull(cardName) : archiveKey(cardName);
   return !!(CARD_ABILITIES[key] || ACTIVATED_ABILITIES[key] || SPELL_ABILITIES[key]
     || ENTERS_TAPPED_FOR_OPPONENTS.includes(key) || ATTACK_ALONE_CARDS.includes(key) || DAMAGE_DOUBLING_CARDS.includes(key) || SELF_DAMAGE_HALVING_CARDS.includes(key)
     || GRAVEYARD_REDIRECT_CREATURE_ONLY.includes(key) || GRAVEYARD_REDIRECT_ANY_CARD.includes(key) || ALT_COSTS[key] || DEDICATED_FUNCTION_CARDS.includes(key)
@@ -5748,6 +5783,69 @@ const EFFECTS = {
     checkEliminations(lobby);
     broadcastPlayers(lobby);
   },
+  // Ancient Gold Dragon -- "roll a d20. You create a number of 1/1 blue Faerie Dragon tokens with
+  // flying equal to the result." rollD20CreateTreasures' sibling for any token shape (params carry the
+  // token); goes through createToken so doublers/Manufactor-style replacements still apply.
+  rollD20CreateTokens(lobby, ctx, params) {
+    const roll = 1 + Math.floor(Math.random() * 20);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "?"} rolls a d20: ${roll}`);
+    EFFECTS.createToken(lobby, ctx, { ...params, amount: roll });
+  },
+  // Vexing Radgull -- "that player gets two rad counters if they don't have any rad counters.
+  // Otherwise, proliferate." dealtToPlayerId is baked in by fireCombatDamageToPlayerTriggers.
+  radCountersOrProliferate(lobby, ctx, params) {
+    const p = lobby.players[params.dealtToPlayerId];
+    if (!p) return;
+    if (!(p.radCounters > 0)) { p.radCounters = (p.radCounters || 0) + 2; broadcastPlayers(lobby); }
+    else EFFECTS.proliferateAll(lobby, ctx, {});
+  },
+  // Marcus, Mutant Mayor -- "Whenever a creature you control deals combat damage to a player, draw a
+  // card if that creature has a +1/+1 counter on it. If it doesn't, put a +1/+1 counter on it."
+  // chosenTargetId is the DEALING creature (anyCreatureCombatDamageToPlayer bakes it in).
+  drawOrCounterOnDealer(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c) return;
+    if ((c.counters || 0) > 0) { drawN(lobby, ctx.controllerId, 1); return; }
+    const bonus = bonusCountersFor(lobby, c.owner);
+    const mult = counterMultiplierFor(lobby, c.owner);
+    c.counters = (c.counters || 0) + (1 + bonus) * mult;
+    broadcastCard(lobby, c);
+  },
+  // Brash Taunter -- "{2}{R}, {T}: This creature fights another target creature." Each deals damage
+  // equal to its own power to the other, through damageTarget so multipliers/triggers/lethal all apply.
+  fightTarget(lobby, ctx, params) {
+    const me = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    const foe = lobby.cards[params.chosenTargetId];
+    if (!me || !foe || me.id === foe.id) return;
+    const pw = (c) => Math.max(0, parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus);
+    const myPower = pw(me), foePower = pw(foe);
+    pushLog(lobby, `${me.name} fights ${foe.name}`);
+    EFFECTS.damageTarget(lobby, { controllerId: me.owner, sourceCard: { id: me.id } }, { amount: myPower, chosenTargetId: foe.id });
+    EFFECTS.damageTarget(lobby, { controllerId: foe.owner, sourceCard: { id: foe.id } }, { amount: foePower, chosenTargetId: me.id });
+  },
+  // Strength Bobblehead -- "Put X +1/+1 counters on target creature, where X is the number of
+  // Bobbleheads you control."
+  addCountersEqualToTypeCountControlled(lobby, ctx, params) {
+    const target = lobby.cards[params.chosenTargetId];
+    if (!target) return;
+    const word = (params.typeWord || "").toLowerCase();
+    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && (c.type || "").toLowerCase().includes(word)).length;
+    if (n <= 0) return;
+    const bonus = bonusCountersFor(lobby, target.owner);
+    const mult = counterMultiplierFor(lobby, target.owner);
+    target.counters = (target.counters || 0) + (n + bonus) * mult;
+    broadcastCard(lobby, target);
+  },
+  // Ishkanah, Grafwidow -- "Target opponent loses life equal to the number of Spiders you control."
+  loseLifeEqualToTypeCountControlled(lobby, ctx, params) {
+    const word = (params.typeWord || "").toLowerCase();
+    const n = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && (c.type || "").toLowerCase().includes(word)).length;
+    if (n <= 0 || !lobby.players[params.chosenTargetId]) return;
+    applyLifeLoss(lobby, params.chosenTargetId, n, ctx.sourceCard && ctx.sourceCard.id);
+    checkEliminations(lobby);
+    broadcastPlayers(lobby);
+  },
   // Vanishing -- "Enchanted creature phases out": phaseOutTarget aimed at whatever this Aura is attached to.
   phaseOutEnchantedCreature(lobby, ctx, params) {
     const aura = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
@@ -8309,6 +8407,15 @@ function drawN(lobby, ownerId, n) {
   // not count -- turn 1's own Untap reset never runs after them, so they'd otherwise pre-load turn 1.
   const drawnBefore = p.cardsDrawnThisTurn || 0;
   if (p.handKept) p.cardsDrawnThisTurn = drawnBefore + drawn;
+  // Niv-Mizzet, Parun -- "Whenever you draw a card": one trigger per card drawn, for the drawing player's
+  // own permanents ("youDrawCard"). Only once the player has kept (opening-hand draws don't count).
+  if (p.handKept && drawn > 0 && lobby.turn.started) {
+    for (const id in lobby.cards) {
+      const c = lobby.cards[id];
+      if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+      getAutomatedAbilities(c.name, "youDrawCard").forEach((ability) => { for (let i = 0; i < drawn; i++) fireTrigger(lobby, c, ability); });
+    }
+  }
   if (p.handKept && drawn > 0 && drawnBefore < 2 && p.cardsDrawnThisTurn >= 2 && lobby.turn.started) {
     for (const id in lobby.cards) {
       const c = lobby.cards[id];
@@ -8649,6 +8756,7 @@ function pushToStack(lobby, card, casterId) {
   // above), so this can't misfire for a land drop.
   fireGlobalTrigger(lobby, "youCastSpell", casterId, card);
   if (!castFromHand) fireGlobalTrigger(lobby, "youCastSpellNotFromHand", casterId, card);
+  fireCastWatchTriggers(lobby, casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
   fireGlobalOpponentNoncreatureSpellTriggers(lobby, casterId, card);
   fireGlobalOpponentCastsSpellTriggers(lobby, casterId);
@@ -8766,6 +8874,24 @@ function fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, spellC
 // above (noncreature filter, queueOptionalPayment), but fires on EVERY qualifying opponent spell
 // each turn, not just their first -- so no once-per-turn gate, and consequently no need to track
 // anything on the caster's player object at all.
+// Arasta of the Endless Web ("Whenever an OPPONENT casts an instant or sorcery spell") and Niv-Mizzet,
+// Parun ("Whenever A PLAYER casts an instant or sorcery spell") -- plain, cost-free cast watchers with
+// an optional spellTypeFilter, unlike the Rhystic-Study-style optional-payment watchers around this
+// function. "anyPlayerCastsSpell" fires for every caster; "opponentCastsSpellTrig" only when the
+// watching permanent's controller isn't the caster.
+function fireCastWatchTriggers(lobby, casterId, spellCard) {
+  if (!lobby.turn.started) return;
+  const type = (spellCard.type || "").toLowerCase();
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack") continue;
+    const abilities = [...getAutomatedAbilities(c.name, "anyPlayerCastsSpell"), ...(c.owner !== casterId ? getAutomatedAbilities(c.name, "opponentCastsSpellTrig") : [])];
+    abilities.forEach((ability) => {
+      if (ability.spellTypeFilter && !ability.spellTypeFilter.some((t) => type.includes(t))) return;
+      fireTrigger(lobby, c, ability);
+    });
+  }
+}
 function fireGlobalOpponentNoncreatureSpellTriggers(lobby, casterId, spellCard) {
   if (!lobby.turn.started || (spellCard.type || "").toLowerCase().includes("creature")) return;
   for (const id in lobby.cards) {
@@ -9807,8 +9933,12 @@ function fireOpponentSearchTrigger(lobby, searchingPlayerId) {
 function fireCreatureDamagedTrigger(lobby, card, amount) {
   if (!lobby.turn.started || amount <= 0) return;
   getAutomatedAbilities(card.name, "damagedSelf").forEach((ability) => {
-    const effects = (ability.effects || []).map((e) => ({ ...e, damageDealtAmount: amount }));
-    pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
+    // amountFromDamage (Brash Taunter -- "it deals THAT MUCH damage to target opponent"): the effect's own
+    // amount is the damage just taken. requiresTarget abilities queue a real target choice instead of
+    // going straight to the stack.
+    const effects = (ability.effects || []).map((e) => ({ ...e, damageDealtAmount: amount, ...(e.amountFromDamage ? { amount } : {}) }));
+    if (ability.requiresTarget) queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetKind: ability.targetKind });
+    else pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   });
 }
 // Venser, Corpse Puppet / Voidwing Hybrid -- "Whenever you proliferate, [effect]." Called from
