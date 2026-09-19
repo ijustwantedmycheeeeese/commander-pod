@@ -468,6 +468,13 @@ const CARD_ABILITIES = {
   ],
   // Willbreaker -- fired by chooseTargetFor when a spell/ability its controller controls targets an opponent's creature.
   "willbreaker": [{ trigger: "youTargetOpponentCreature", requiresTarget: false, label: "Willbreaker — gain control of that creature for as long as you control Willbreaker", effects: [{ type: "gainControlOfTarget", whileSource: true }] }],
+  // ---- Wave 47 triggers ----
+  "rishadan cutpurse": [{ trigger: "etb", requiresTarget: false, label: "Rishadan Cutpurse — each opponent sacrifices a permanent unless they pay {1}", effects: [{ type: "eachOpponentPaysOrSacrificesPermanent", cost: "{1}" }] }],
+  "phyrexian metamorph": [{ trigger: "etb", requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "creature"], label: "Phyrexian Metamorph — you may have this enter as a copy of any artifact or creature, it's an artifact in addition", effects: [{ type: "becomeCopyPermanent", addType: "Artifact" }] }],
+  "hansk, slayer zealot": [
+    { trigger: "upkeep", requiresTarget: true, targetKind: "opponent", label: "Hansk, Slayer Zealot — target opponent creates three Walker tokens", effects: [{ type: "createTokenForTargetPlayer", name: "Walker", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"], amount: 3 }] },
+    { trigger: "deathAnyCreature", opponentOnly: true, eventCardTypeFilter: ["zombie"], requiresTarget: false, label: "Hansk, Slayer Zealot — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }
+  ],
   // ---- Wave 45 triggers ----
   "drop of honey": [{ trigger: "upkeep", requiresTarget: false, label: "Drop of Honey — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
   "porphyry nodes": [{ trigger: "upkeep", requiresTarget: false, label: "Porphyry Nodes — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
@@ -1475,6 +1482,12 @@ const ACTIVATED_ABILITIES = {
     { cost: { loyalty: -2 }, requiresTarget: true, targetKind: "creature", label: "Vraska, Betrayal's Sting — −2: target creature becomes a Treasure artifact", effects: [{ type: "becomeTreasureArtifact" }] },
     { cost: { loyalty: -9 }, requiresTarget: true, targetKind: "player", label: "Vraska, Betrayal's Sting — −9: target player gets poison counters up to nine", effects: [{ type: "poisonUpToNine" }] }
   ],
+  // ---- Wave 47 activated abilities ----
+  "nykthos, shrine to nyx": [
+    { cost: { mana: "{2}", tap: true }, manaAbility: true, requiresTarget: false, label: "Nykthos — {2},{T}: choose a color, add mana of that color equal to your devotion to it", effects: [{ type: "chooseColorAddDevotion", sourceName: "Nykthos, Shrine to Nyx" }] }
+  ],
+  "nyx lotus": [{ cost: { tap: true }, manaAbility: true, requiresTarget: false, label: "Nyx Lotus — {T}: choose a color, add mana of that color equal to your devotion to it", effects: [{ type: "chooseColorAddDevotion", sourceName: "Nyx Lotus" }] }],
+  "hansk, slayer zealot": [{ cost: { tap: true }, requiresTarget: true, targetKind: "creature", label: "Hansk, Slayer Zealot — {T}: 2 damage to target creature", effects: [{ type: "damageTarget", amount: 2 }] }],
   // ---- Wave 46 activated abilities ----
   "dark-dweller oracle": [{ cost: { mana: "{1}", autoSacrificeFilter: "creature" }, requiresTarget: false, label: "Dark-Dweller Oracle — {1}, sacrifice a creature: exile the top card of your library, you may play it this turn", effects: [{ type: "impulseExileTopToHand", amount: 1 }] }],
   // ---- Wave 45 activated abilities ----
@@ -2688,7 +2701,7 @@ const SPELL_ABILITIES = {
   // other narrowed cost/choice in this app.
   "orim's chant": { label: "Orim's Chant — choose one", modes: [
     { label: "Orim's Chant — target player can't cast spells this turn", requiresTarget: true, targetKind: "player", effects: [{ type: "restrictCantCastSpells" }] },
-    { label: "Orim's Chant, kicked (pay {W} more) — target player can't cast spells, and creatures can't attack, this turn", requiresTarget: true, targetKind: "player", effects: [{ type: "restrictCantCastSpells" }, { type: "restrictCreaturesCantAttack" }] }
+    { label: "Orim's Chant, kicked (pay {W} more) — target player can't cast spells, and creatures can't attack, this turn", extraMana: "{W}", requiresTarget: true, targetKind: "player", effects: [{ type: "restrictCantCastSpells" }, { type: "restrictCreaturesCantAttack" }] }
   ] },
   // "Until your next turn, your life total can't change and you gain protection from everything.
   // All permanents you control phase out. Exile Teferi's Protection." The card exiles ITSELF as
@@ -3009,6 +3022,21 @@ const SPELL_ABILITIES = {
   "treasure cruise": { label: "Treasure Cruise — draw three cards (Delve)", effects: [{ type: "drawCards", amount: 3, target: "controller" }] },
   // Chemister's Insight -- the front half only; Jump-start (cast from graveyard) isn't modeled anywhere.
   "chemister's insight": { label: "Chemister's Insight — draw two cards", effects: [{ type: "drawCards", amount: 2, target: "controller" }] },
+  // ---- Wave 47 spells (extraMana on a mode = an additional cost charged when that mode is picked) ----
+  "mizzium mortars": { label: "Mizzium Mortars — choose one", modes: [
+    { label: "Mizzium Mortars — 4 damage to target creature you don't control", requiresTarget: true, targetKind: "opponentCreature", effects: [{ type: "damageTarget", amount: 4 }] },
+    { label: "Mizzium Mortars, overloaded (pay {2}{R}{R} more, {3}{R}{R}{R} total) — 4 damage to each creature you don't control", extraMana: "{2}{R}{R}", requiresTarget: false, effects: [{ type: "damageEachOpponentCreature", amount: 4 }] }
+  ] },
+  "goblin war party": { label: "Goblin War Party — choose one", modes: [
+    { label: "Goblin War Party — create three 1/1 red Goblin creature tokens", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], amount: 3 }] },
+    { label: "Goblin War Party — creatures you control get +1/+1 and gain haste until end of turn", requiresTarget: false, effects: [{ type: "grantTemporaryPTAndKeywordsToType", typeFilter: "creature", power: 1, toughness: 1, keywords: ["Haste"] }] },
+    { label: "Goblin War Party, entwined (pay {2}{R} more) — both", extraMana: "{2}{R}", requiresTarget: false, effects: [{ type: "createToken", name: "Goblin", tokenType: "Token Creature — Goblin", power: "1", toughness: "1", colors: ["R"], amount: 3 }, { type: "grantTemporaryPTAndKeywordsToType", typeFilter: "creature", power: 1, toughness: 1, keywords: ["Haste"] }] }
+  ] },
+  "rite of replication": { label: "Rite of Replication — choose one", modes: [
+    { label: "Rite of Replication — create a token that's a copy of target creature", requiresTarget: true, targetKind: "creature", effects: [{ type: "createTokenCopyOfTargetCreature" }] },
+    { label: "Rite of Replication, kicked (pay {5} more) — create five tokens that are copies of target creature", extraMana: "{5}", requiresTarget: true, targetKind: "creature", effects: [{ type: "createTokenCopyOfTargetCreature", count: 5 }] }
+  ] },
+  "expel the interlopers": { label: "Expel the Interlopers — choose a number (0-10), destroy all creatures with at least that much power", effects: [{ type: "destroyCreaturesWithPowerAtLeastChosen" }], requiresTarget: true, targetKind: "creatureType" },
   // ---- Wave 46 spells ----
   // "If you control a commander as you cast this spell, you may choose both instead" -- bothIfCommander appends
   // every OTHER untargeted mode's effects when the caster controls a commander (chooseTargetFor's chooseMode branch).
@@ -4774,6 +4802,7 @@ const EFFECTS = {
   // name-keyed.
   becomeCopyPermanent(lobby, ctx, params) {
     const mirror = lobby.cards[ctx.sourceCard.id];
+    if (mirror) mirror._entersAsCopy = false;
     const source = lobby.cards[params.chosenTargetId];
     if (!mirror || !source || mirror.id === source.id) return;
     const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
@@ -4837,9 +4866,10 @@ const EFFECTS = {
     if (params.addKeywords) data.keywords = [...new Set([...(data.keywords || []), ...params.addKeywords])];
     data.owner = ctx.controllerId;
     data.zoneType = classifyType(data.type);
-    spawnBattlefieldCard(lobby, data);
+    // Rite of Replication (kicked) -- "create five of those tokens instead" (params.count).
+    for (let i = 0; i < (params.count || 1); i++) spawnBattlefieldCard(lobby, { ...data });
     const p = lobby.players[ctx.controllerId];
-    pushLog(lobby, `${p ? p.name : "Someone"} creates a token copy of ${source.name || "a creature"}`);
+    pushLog(lobby, `${p ? p.name : "Someone"} creates ${params.count > 1 ? params.count + " token copies" : "a token copy"} of ${source.name || "a creature"}`);
   },
   // Mithril Coat -- "When Mithril Coat enters, attach it to target legendary creature you control."
   // The actual grant ("Equipped creature has indestructible") is already handled generically by
@@ -6319,6 +6349,46 @@ const EFFECTS = {
     if (!p) return;
     p.hasFlashUntilEndOfTurn = true; p._flashUntilNextTurn = true;
     broadcastPlayers(lobby);
+  },
+  // ---- Wave 47 effects ----
+  // Mizzium Mortars (overload) -- "deals 4 damage to each creature you don't control."
+  damageEachOpponentCreature(lobby, ctx, params) {
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature" && c.owner !== ctx.controllerId).forEach((c) => EFFECTS.damageTarget(lobby, ctx, { amount: params.amount || 0, chosenTargetId: c.id }));
+  },
+  // Expel the Interlopers -- "Choose a number between 0 and 10. Destroy all creatures with power greater than or equal to the
+  // chosen number." (the number arrives through the free-text prompt as chosenTargetId)
+  destroyCreaturesWithPowerAtLeastChosen(lobby, ctx, params) {
+    const n = parseInt(params.chosenTargetId, 10);
+    if (!Number.isInteger(n) || n < 0 || n > 10) return;
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => {
+      const power = parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus;
+      if (power >= n) EFFECTS.destroyTarget(lobby, ctx, { chosenTargetId: c.id });
+    });
+  },
+  // Rishadan Cutpurse -- "each opponent sacrifices a permanent of their choice unless they pay {1}." Each opponent gets a pay-or-sacrifice
+  // prompt; declining sacrifices an auto-picked permanent (a tapped land first, then any land, then anything else).
+  eachOpponentPaysOrSacrificesPermanent(lobby, ctx, params) {
+    Object.keys(lobby.players).filter((id) => id !== ctx.controllerId && !lobby.players[id].eliminated).forEach((oppId) => {
+      queueOptionalPayment(lobby, {
+        playerId: oppId, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+        label: `Rishadan Cutpurse — pay ${params.cost || "{1}"} or sacrifice a permanent`,
+        costLabel: `Pay ${params.cost || "{1}"}`, cost: { mana: params.cost || "{1}" },
+        declinedEffects: [{ type: "sacrificeAPermanentOfPlayer", chosenTargetId: oppId }]
+      });
+    });
+  },
+  sacrificeAPermanentOfPlayer(lobby, ctx, params) {
+    const mine = Object.values(lobby.cards).filter((c) => c.owner === params.chosenTargetId && c.zoneType !== "hand" && c.zoneType !== "stack");
+    const pick = mine.find((c) => c.zoneType === "mana" && c.tapped) || mine.find((c) => c.zoneType === "mana") || mine[0];
+    if (pick) { fireDeathTriggers(lobby, pick); sendToGraveyardInternal(lobby, pick); }
+  },
+  // Nykthos, Shrine to Nyx / Nyx Lotus -- "Choose a color. Add an amount of mana of that color equal to your devotion to that color."
+  chooseColorAddDevotion(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    p.pendingFreeManaChoice = { amount: 1, devotion: true };
+    const sock = io.sockets.sockets.get(ctx.controllerId);
+    if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Devotion mana", options: ["W", "U", "B", "R", "G"] });
   },
   // ---- Wave 46 effects ----
   // Impulse draw ("Exile the top N cards of your library. You may play them this turn.") -- modeled as putting
@@ -8132,6 +8202,7 @@ function cleanupTemporaryKeywords(lobby) {
   expireImpulseCards(lobby);
   // "Gain control of target permanent until end of turn" (Zealous Conscripts) -- hand it back.
   Object.values(lobby.cards).filter((c) => c._controlRevertTurn).forEach((c) => revertControl(lobby, c));
+  Object.values(lobby.cards).filter((c) => c._entersAsCopy).forEach((c) => { c._entersAsCopy = false; }); // never chose: it stays a (dying) 0/0
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     // Giver of Runes/Mother of Runes' granted protection is "until end of turn" too -- swept
@@ -9404,6 +9475,17 @@ function checkControlDurations(lobby) {
     if (!linked) revertControl(lobby, c);
   }
 }
+// Devotion to a color (CR 700.5): the number of mana symbols of that color in the mana costs of permanents you control
+// (hybrid and Phyrexian symbols containing the color count).
+function devotionTo(lobby, ownerId, color) {
+  let n = 0;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    for (const sym of (c.manaCost || "").matchAll(/\{([^}]+)\}/g)) if (sym[1].toUpperCase().split("/").includes(color)) n++;
+  }
+  return n;
+}
 // Sagas (CR 714) -- "As this Saga enters and after your draw step, add a lore counter. Sacrifice after the final
 // chapter." Lore counters are card.counters (a Saga is never a creature); each chapter is an ordinary CARD_ABILITIES
 // entry with trigger "sagaChapter<N>", and the final chapter's ability gets a sacrificeSelf appended so the Saga leaves
@@ -9484,6 +9566,7 @@ function checkLethalToughness(lobby) {
   for (const id in lobby.cards) {
     const card = lobby.cards[id];
     if (card.zoneType !== "creature") continue;
+    if (card._entersAsCopy) continue; // a Clone-style 0/0 waiting on its "enter as a copy" choice
     const bonus = attachedBonusFor(lobby, card), stat = staticBonusFor(lobby, card);
     const toughness = parsePT(card.toughness) + (card.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
     if (toughness <= 0) toDie.push(card);
@@ -10839,6 +10922,7 @@ function fireEtbTriggers(lobby, card) {
   // "This creature enters with [N|X] +1/+1 counters on it" (Pentavus, Walking Ballista...) -- inline for the
   // same reason as Dark Depths above (a 0/0 body would die to state-based checks before a stacked ETB
   // trigger resolved). X reads the cast-time X value.
+  if (/you may have this (?:creature|permanent) enter as a copy of/i.test(card.text || "")) card._entersAsCopy = true; // Phyrexian Metamorph-style 0/0 clones survive until they choose
   if (/\bsaga\b/i.test(card.type || "")) addSagaLoreCounter(lobby, card);
   // Planeswalker starting loyalty (printed loyalty -> loyalty counters, stored in card.counters).
   if (/planeswalker/i.test(card.type || "") && card.loyalty != null && card.loyalty !== "" && !isNaN(parseInt(card.loyalty, 10))) {
@@ -13697,7 +13781,8 @@ io.on("connection", (socket) => {
     // producedMana to validate against; any of the 5 colors is always legal here.
     if (cardId === "__free__") {
       if (!p.pendingFreeManaChoice || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
-      const amount = p.pendingFreeManaChoice.amount || 1;
+      // Nykthos / Nyx Lotus -- "Add an amount of mana of that color equal to your devotion to that color."
+      const amount = p.pendingFreeManaChoice.devotion ? devotionTo(lobby, socket.id, color) : (p.pendingFreeManaChoice.amount || 1);
       const remaining = (p.pendingFreeManaChoice.remainingPicks || 1) - 1;
       const restricted = p.pendingFreeManaChoice.restricted;
       const painDamage = p.pendingFreeManaChoice.painDamage || 0;
@@ -14287,6 +14372,18 @@ io.on("connection", (socket) => {
     if (entry.controllerId !== socket.id) return; // only the controller who's actually being prompted may answer
     const resolved = resolveChosenTarget(lobby, entry, targetId);
     if (!resolved.ok) { socket.emit("actionError", resolved.error); return; }
+    // Entwine / Overload / Kicker modeled as an extra MODE with `extraMana`: the additional cost is charged here, when the mode
+    // is picked (the base cost was already paid at cast). Rejecting keeps the choice pending so another mode can be picked.
+    if (entry.kind === "chooseMode") {
+      const chosenMode = entry.modes[parseInt(targetId, 10)];
+      if (chosenMode && chosenMode.extraMana) {
+        const payer = lobby.players[socket.id];
+        const paidExtra = payer && canAffordAndPay(payer.mana, parseManaCost(chosenMode.extraMana), 0);
+        if (!paidExtra) { socket.emit("actionError", `Not enough mana for that mode (it needs an extra ${chosenMode.extraMana}).`); return; }
+        payer.mana = paidExtra;
+        broadcastPlayers(lobby);
+      }
+    }
     lobby.pendingTargetChoices.splice(idx, 1);
     // Willbreaker -- "Whenever a creature an opponent controls becomes the target of a spell or ability you control".
     const targetedCreature = lobby.cards[targetId];
