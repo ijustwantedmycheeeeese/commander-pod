@@ -213,7 +213,7 @@ const PHASES = ["Untap", "Upkeep", "Draw", "Main 1", "Combat", "Main 2", "End St
 // this app) -- a curated list matching Scryfall's own keyword naming so a granted keyword looks
 // identical to one a card was natively printed with. Haste already plugs straight into the
 // existing summoning-sickness check in declareAttackers with zero extra code.
-const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect", "Unblockable"];
+const KNOWN_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect", "Unblockable", "Intimidate"];
 const EMPTY_MANA = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
 
 // ---------------- trigger/effect engine ----------------
@@ -434,6 +434,11 @@ const CARD_ABILITIES = {
   // why this dispatcher's ambient chosenTargetId (the dealing creature's id, not a player id) must
   // be overridden.
   "toski, bearer of secrets": [{ trigger: "anyCreatureCombatDamageToPlayer", requiresTarget: false, label: "Toski, Bearer of Secrets — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  // Up the Beanstalk -- ETB draw plus youCastSpell with the new minCmc filter.
+  "up the beanstalk": [
+    { trigger: "etb", requiresTarget: false, label: "Up the Beanstalk — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] },
+    { trigger: "youCastSpell", minCmc: 5, requiresTarget: false, label: "Up the Beanstalk — draw a card (mana value 5 or greater)", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }
+  ],
   // ---- Wave 40 triggered permanents ----
   "meteor golem": [{ trigger: "etb", requiresTarget: true, targetKind: "opponentNonlandPermanent", label: "Meteor Golem — destroy target nonland permanent an opponent controls", effects: [{ type: "destroyTarget" }] }],
   "mesa enchantress": [{ trigger: "youCastSpell", spellTypeFilter: ["enchantment"], requiresTarget: false, label: "Mesa Enchantress — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
@@ -1343,6 +1348,9 @@ const ACTIVATED_ABILITIES = {
     { cost: { tap: true }, manaAbility: true, label: "Blighted Woodland — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
     { cost: { mana: "{3}{G}", tap: true, sacrifice: true }, label: "Blighted Woodland — search for up to two basic lands, tapped", effects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true, thenEffects: [{ type: "searchLandTypes", types: ["Plains", "Island", "Swamp", "Mountain", "Forest"], basicOnly: true, entersTapped: true }] }] }
   ],
+  // Wave 41 activated abilities: Aura of Silence's sacrifice removal and High Noon's sacrifice burn.
+  "aura of silence": [{ cost: { sacrifice: true }, requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact", "enchantment"], label: "Aura of Silence — Sacrifice: destroy target artifact or enchantment", effects: [{ type: "destroyTarget" }] }],
+  "high noon": [{ cost: { mana: "{4}{R}", sacrifice: true }, requiresTarget: true, targetKind: "any", label: "High Noon — deal 5 damage to any target", effects: [{ type: "damageTarget", amount: 5 }] }],
   // Wave 40 activated abilities.
   "mogg fanatic": [{ cost: { sacrifice: true }, requiresTarget: true, targetKind: "any", label: "Mogg Fanatic — Sacrifice: 1 damage to any target", effects: [{ type: "damageTarget", amount: 1 }] }],
   "phyrexian altar": [{ cost: { autoSacrificeFilter: "creature" }, manaAbility: true, label: "Phyrexian Altar — Sacrifice a creature: add one mana of any color", effects: [{ type: "chooseManaAnyColor", sourceName: "Phyrexian Altar" }] }],
@@ -2963,7 +2971,7 @@ function isCardAutomated(cardName) {
 // index.html's own client-side copy (see updateDeckAutomationCoverage's comment there for why that
 // duplication exists rather than a server round-trip). Keep both in sync when either changes.
 function stripReminderText(text) { return (text || "").replace(/\([^)]*\)/g, "").trim(); }
-const GENERIC_VANILLA_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect", "Unblockable"];
+const GENERIC_VANILLA_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect", "Unblockable", "Intimidate"];
 function isVanillaKeywordLine(low) {
   const parts = low.replace(/\.$/, "").split(",").map((s) => s.trim());
   if (!parts.length) return false;
@@ -3089,6 +3097,21 @@ function isSentenceGenericallyAutomated(sentence) {
   // entersTapped's text-scan, effectiveKeywords' own-text unblockable) plus this wave's new generic
   // ones (spellCostIncreaseFor, Imoti's cascade grant, attachedBonusFor's dynamic aura counts).
   if (/^toxic \d+\.?$/.test(low)) return true;
+  // Wave 41 -- table-wide statics and restrictions, all text-scanned at their real choke points
+  // (staticBonusFor/effectiveKeywords/declareBlockers/declareAttackers/canCastSpells/activateAbility).
+  if (/^all \w+ creatures get [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
+  if (/^all \w+ creatures have [a-z ,]+\.?( \(.*\))?$/.test(low)) return true;
+  if (/^creatures with \w+ get [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
+  if (/^slivers can'?t be blocked except by slivers\.?$/.test(low)) return true;
+  if (/^as long as you control an? \w+ creature, this creature gets \+\d+\/\+\d+ and has [a-z]+\.?$/.test(low)) return true;
+  if (/^each player can'?t cast more than one (noncreature )?spell each turn\.?$/.test(low)) return true;
+  if (/^activated abilities of creatures can'?t be activated\.?$/.test(low)) return true;
+  if (/^your opponents can'?t cast spells from anywhere other than their hands\.?$/.test(low)) return true;
+  if (/^creatures with power greater than the number of cards in your hand can'?t attack\.?$/.test(low)) return true;
+  if (/^artifact and enchantment spells your opponents cast cost \{\d+\} more to cast\.?$/.test(low)) return true;
+  if (/^during your turn, spells you cast cost \{\d+\} less to cast for each creature you control with power \d+ or greater\.?$/.test(low)) return true;
+  if (/^activated abilities of creatures cost \{\d+\} less to activate\.?$/.test(low)) return true;
+  if (/^this effect can'?t reduce the mana in that cost to less than one mana\.?$/.test(low)) return true;
   // Wave 40 -- Goblin Electromancer (spellCostReductionFor), Laboratory Maniac (hasWinOnEmptyDraw).
   if (/^instant and sorcery spells you cast cost \{\d+\} less to cast\.?$/.test(low)) return true;
   if (/^if you would draw a card while your library has no cards in it, you win the game instead\.?$/.test(low)) return true;
@@ -7369,6 +7392,27 @@ function effectiveKeywords(lobby, card) {
   // as the life-conditional grants just below. Only the exact unconditional sentence -- never
   // "...can't be blocked except by..." or "...as long as...".
   if (/(^|\n)this creature can'?t be blocked\.?(\n|$)/i.test(card.text || "")) extra.push("Unblockable");
+  // Winged/Two-Headed/Crystalline Sliver -- "All Sliver creatures have [keyword list]." A table-wide
+  // grant from ANY controller's permanent to every creature of the named type. Only the plain keyword
+  // words survive (KNOWN_KEYWORDS filter), so a quoted-ability grant is never mistaken for one.
+  {
+    const typeLower = (card.type || "").toLowerCase();
+    for (const id in lobby.cards) {
+      const src = lobby.cards[id];
+      if (src.zoneType === "hand" || src.zoneType === "stack" || !src.text) continue;
+      for (const m of src.text.matchAll(/all (\w+) creatures have ([a-z ,]+?)(?:\.|\n|$| \()/gi)) {
+        if (!typeLower.includes(m[1].toLowerCase())) continue;
+        m[2].split(/,| and /).map((s) => s.trim()).forEach((raw) => { const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === raw.toLowerCase()); if (kw) extra.push(kw); });
+      }
+    }
+  }
+  // Griffin Rider -- the keyword half of "As long as you control a Griffin creature, this creature gets
+  // +3/+3 and has flying" (P/T half in staticBonusFor).
+  const griffinCond = (card.text || "").match(/as long as you control an? (\w+) creature, this creature gets \+\d+\/\+\d+ and has ([a-z]+)/i);
+  if (griffinCond && Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (c.type || "").toLowerCase().includes(griffinCond[1].toLowerCase()))) {
+    const kw = KNOWN_KEYWORDS.find((k) => k.toLowerCase() === griffinCond[2].toLowerCase());
+    if (kw) extra.push(kw);
+  }
   // Serra Ascendant -- "As long as you have N or more life, this creature ... has [keyword]." A
   // self-referential CONDITIONAL grant (unlike the anthem loop below, which reacts to OTHER
   // permanents) -- narrowly scoped to this exact template, same precedent as every other
@@ -7616,13 +7660,19 @@ function anthemKeywordsFromText(text) {
 // spellCostReductionFor: a text-scan over every permanent controlled by someone OTHER than the caster,
 // summed (two Arbiters tax twice). Generic mana only, applied at the same two cast choke points
 // (attemptPlay, castCommander) the reductions already hook.
-function spellCostIncreaseFor(lobby, casterId) {
+function spellCostIncreaseFor(lobby, casterId, card) {
   let increase = 0;
+  const type = ((card && card.type) || "").toLowerCase();
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner === casterId || c.zoneType === "hand" || c.zoneType === "stack") continue;
-    const m = (c.text || "").match(/spells your opponents cast cost \{(\d+)\} more to cast/i);
+    // (?<!enchantment ) -- Aura of Silence's typed sentence ends with the same words and must not also
+    // be counted as the unconditional "Spells your opponents cast cost {1} more" (Grand Arbiter).
+    const m = (c.text || "").match(/(?<!enchantment )spells your opponents cast cost \{(\d+)\} more to cast/i);
     if (m) increase += parseInt(m[1], 10) || 0;
+    // Aura of Silence -- "Artifact and enchantment spells your opponents cast cost {2} more to cast."
+    const typed = (c.text || "").match(/artifact and enchantment spells your opponents cast cost \{(\d+)\} more to cast/i);
+    if (typed && (type.includes("artifact") || type.includes("enchantment"))) increase += parseInt(typed[1], 10) || 0;
   }
   return increase;
 }
@@ -7637,6 +7687,14 @@ function spellCostReductionFor(lobby, ownerId, card) {
     // cast card's colors rather than its type line, which never contains one.
     // Goblin Electromancer -- "Instant and sorcery spells you cast cost {1} less to cast." Two type words
     // in one clause, which the single-word pattern below can't see.
+    // Temur Battlecrier -- "During your turn, spells you cast cost {1} less to cast for each creature
+    // you control with power 4 or greater."
+    const bcMatch = (c.text || "").match(/during your turn, spells you cast cost \{(\d+)\} less to cast for each creature you control with power (\d+) or greater/i);
+    if (bcMatch && lobby.turn.order[lobby.turn.activeIndex] === ownerId) {
+      const bigCreatures = Object.values(lobby.cards).filter((x) => x.owner === ownerId && x.zoneType === "creature"
+        && (parsePT(x.power) + (x.counters || 0) + attachedBonusFor(lobby, x).powerBonus + staticBonusFor(lobby, x).powerBonus) >= parseInt(bcMatch[2], 10)).length;
+      reduction += (parseInt(bcMatch[1], 10) || 0) * bigCreatures;
+    }
     const isMatch = (c.text || "").match(/instant and sorcery spells you cast cost \{(\d+)\} less to cast/i);
     if (isMatch && (typeLower.includes("instant") || typeLower.includes("sorcery"))) reduction += parseInt(isMatch[1], 10) || 0;
     for (const m of (c.text || "").matchAll(/(\w+) spells you cast cost \{(\d+)\} less to cast/gi)) {
@@ -7686,6 +7744,14 @@ function activatedAbilityCostReductionFor(lobby, ownerId) {
     if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
     const m = (c.text || "").match(/activated abilities of creatures you control cost \{(\d+)\} less to activate/i);
     if (m) reduction += parseInt(m[1], 10) || 0;
+  }
+  // Heartstone -- "Activated abilities of creatures cost {1} less to activate" (ANY controller's copy
+  // helps every creature on the table, unlike Training Grounds' "you control" scope).
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack") continue;
+    const g = (c.text || "").match(/activated abilities of creatures cost \{(\d+)\} less to activate/i);
+    if (g) reduction += parseInt(g[1], 10) || 0;
   }
   return reduction;
 }
@@ -7965,6 +8031,30 @@ function staticBonusFor(lobby, card) {
         powerBonus += n; toughnessBonus += n;
       }
     }
+  }
+  // Table-wide static anthems, ANY controller (the loop above only ever scans the creature's own
+  // controller's permanents): Sliver lords ("All Sliver creatures get +X/+Y" -- Might/Bonesplitter/
+  // Sinew Sliver, and it buffs EVERY Sliver on the table, opponents' included) and Serra Aviary
+  // ("Creatures with flying get +1/+1"). The flying check reads the card's own printed + temporary
+  // keywords directly (not effectiveKeywords, which itself reads bonuses -- avoids a cycle).
+  const typeLowerForAnthem = (card.type || "").toLowerCase();
+  const ownKeywordsLower = (card.keywords || []).concat((card.temporaryKeywords || []).map((tk) => tk.keyword)).map((k) => (k || "").toLowerCase());
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.zoneType === "hand" || c.zoneType === "stack" || !c.text) continue;
+    for (const m of c.text.matchAll(/all (\w+) creatures get ([+-]\d+)\/([+-]\d+)/gi)) {
+      if (typeLowerForAnthem.includes(m[1].toLowerCase())) { powerBonus += parseInt(m[2], 10) || 0; toughnessBonus += parseInt(m[3], 10) || 0; }
+    }
+    const kwAnthem = c.text.match(/creatures with (\w+) get ([+-]\d+)\/([+-]\d+)/i);
+    if (kwAnthem && ownKeywordsLower.includes(kwAnthem[1].toLowerCase())) { powerBonus += parseInt(kwAnthem[2], 10) || 0; toughnessBonus += parseInt(kwAnthem[3], 10) || 0; }
+  }
+  // Griffin Rider -- "As long as you control a Griffin creature, this creature gets +3/+3 and has
+  // flying." (keyword half in effectiveKeywords) -- same self-referential conditional shape as Serra
+  // Ascendant/Jund Hackblade above; "a Griffin creature" may be the Rider itself only if it's a
+  // Griffin, which it isn't, so any OTHER Griffin qualifies naturally.
+  const typeCond = (card.text || "").match(/as long as you control an? (\w+) creature, this creature gets \+(\d+)\/\+(\d+)/i);
+  if (typeCond && Object.values(lobby.cards).some((c) => c.owner === card.owner && c.zoneType === "creature" && (c.type || "").toLowerCase().includes(typeCond[1].toLowerCase()))) {
+    powerBonus += parseInt(typeCond[2], 10) || 0; toughnessBonus += parseInt(typeCond[3], 10) || 0;
   }
   return { powerBonus, toughnessBonus };
 }
@@ -8668,7 +8758,7 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   // Goblin Warchief and its functional cousins -- see spellCostReductionFor's own comment.
   const reduction = spellCostReductionFor(lobby, card.owner, card);
   if (reduction > 0) cost.generic = Math.max(0, cost.generic - reduction);
-  cost.generic += spellCostIncreaseFor(lobby, card.owner);
+  cost.generic += spellCostIncreaseFor(lobby, card.owner, card);
   // Crop Rotation / Diabolic Intent -- "as an additional cost to cast this spell, sacrifice a
   // [land/creature]." A real additional cost (paid alongside mana, not a triggered effect after the
   // fact), so it's checked and paid here in attemptPlay -- the single choke point both playCard and
@@ -8870,6 +8960,14 @@ function grandAbolisherRestricts(lobby, casterId, cardType) {
 // turn, restricts anyone who isn't you" shape as grandAbolisherRestricts just above, just with no
 // type-line filtering at all (real Magic's own wording never limits it to artifacts/creatures/
 // enchantments the way Grand Abolisher's does -- this blocks every spell).
+// Drannith Magistrate -- "Your opponents can't cast spells from anywhere other than their hands."
+function drannithRestricts(lobby, casterId) {
+  return Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && c.owner !== casterId && /your opponents can'?t cast spells from anywhere other than their hands/i.test(c.text || ""));
+}
+// Cursed Totem -- "Activated abilities of creatures can't be activated." Table-wide, any controller.
+function creatureAbilitiesLocked(lobby) {
+  return Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /activated abilities of creatures can'?t be activated/i.test(c.text || ""));
+}
 function dromokaRestricts(lobby, casterId) {
   const activeId = lobby.turn.order[lobby.turn.activeIndex];
   return Object.values(lobby.cards).some((c) => {
@@ -8891,6 +8989,16 @@ function canCastSpells(lobby, socketId, card) {
   }
   if (dromokaRestricts(lobby, socketId)) {
     return { ok: false, error: `An opponent's Dragonlord Dromoka stops you from casting spells during their turn.` };
+  }
+  // Rule of Law / Eidolon of Rhetoric / High Noon ("Each player can't cast more than one spell each
+  // turn") and Deafening Silence (the noncreature variant) -- per-player running counts, bumped in
+  // pushToStack and reset every Untap (see spellsCastThisTurn there).
+  const castP = lobby.players[socketId];
+  if (castP) {
+    const limitAll = Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /each player can'?t cast more than one spell each turn/i.test(c.text || ""));
+    if (limitAll && (castP.spellsCastThisTurn || 0) >= 1) return { ok: false, error: "Each player can't cast more than one spell each turn." };
+    const limitNoncreature = Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /each player can'?t cast more than one noncreature spell each turn/i.test(c.text || ""));
+    if (limitNoncreature && !(card.type || "").toLowerCase().includes("creature") && (castP.noncreatureSpellsCastThisTurn || 0) >= 1) return { ok: false, error: "Each player can't cast more than one noncreature spell each turn." };
   }
   return { ok: true };
 }
@@ -8928,6 +9036,11 @@ function pushToStack(lobby, card, casterId) {
   // above), so this can't misfire for a land drop.
   fireGlobalTrigger(lobby, "youCastSpell", casterId, card);
   if (!castFromHand) fireGlobalTrigger(lobby, "youCastSpellNotFromHand", casterId, card);
+  const castCounter = lobby.players[casterId];
+  if (castCounter) {
+    castCounter.spellsCastThisTurn = (castCounter.spellsCastThisTurn || 0) + 1;
+    if (!(card.type || "").toLowerCase().includes("creature")) castCounter.noncreatureSpellsCastThisTurn = (castCounter.noncreatureSpellsCastThisTurn || 0) + 1;
+  }
   fireCastWatchTriggers(lobby, casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
   fireGlobalOpponentNoncreatureSpellTriggers(lobby, casterId, card);
@@ -9005,8 +9118,15 @@ function resolveCascade(lobby, casterId, spellCard, forcedTimes) {
     shuffle(p.library);
     if (found) {
       pushLog(lobby, `${p.name} cascades off ${spellCard.name || "a spell"} into ${found.name || "a card"}`);
-      const freeCard = spawnBattlefieldCard(lobby, { ...found, owner: casterId, zoneType: "stack", faceDown: false });
-      castSpell(lobby, freeCard, casterId, " without paying its mana cost (cascade)");
+      if (drannithRestricts(lobby, casterId)) {
+        // Drannith Magistrate -- a cascade cast happens from exile, not the hand: it can't be cast.
+        p.library.push(found);
+        shuffle(p.library);
+        pushLog(lobby, `${found.name || "The card"} can't be cast from exile (Drannith Magistrate)`);
+      } else {
+        const freeCard = spawnBattlefieldCard(lobby, { ...found, owner: casterId, zoneType: "stack", faceDown: false });
+        castSpell(lobby, freeCard, casterId, " without paying its mana cost (cascade)");
+      }
     } else {
       pushLog(lobby, `${p.name} cascades off ${spellCard.name || "a spell"} but finds no qualifying card`);
     }
@@ -10293,6 +10413,8 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       // Guttersnipe-style "whenever you cast an INSTANT OR SORCERY spell" -- same shape as
       // colorFilter just above, checked against the cast card's own type line instead of its colors.
       if (ability.spellTypeFilter && !(eventCard && ability.spellTypeFilter.some((t) => (eventCard.type || "").toLowerCase().includes(t)))) return;
+      // Up the Beanstalk -- "whenever you cast a spell with mana value 5 or greater."
+      if (ability.minCmc != null && !(eventCard && (eventCard.cmc || 0) >= ability.minCmc)) return;
       // Flux Channeler-style "whenever you cast a NONcreature spell" -- the inverse of
       // spellTypeFilter just above (must NOT match, instead of must match).
       if (ability.excludeTypeFilter && eventCard && ability.excludeTypeFilter.some((t) => (eventCard.type || "").toLowerCase().includes(t))) return;
@@ -10463,6 +10585,7 @@ function applyLifeGain(lobby, playerId, amount, opts) {
   // The manual +life button (statChange) is bookkeeping, not a game action -- never blocked.
   if (!(opts && opts.manual) && cantGainLife(lobby, playerId)) return;
   p.life += amount;
+  p.lifeGainedThisTurn = (p.lifeGainedThisTurn || 0) + amount; // Griffin Aerie
   fireGlobalTrigger(lobby, "selfGainsLife", playerId);
 }
 // The loss-side counterpart to applyLifeGain -- same lifeLocked check, no trigger to fire (nothing
@@ -11118,7 +11241,7 @@ function advanceOnePhase(lobby) {
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
-    for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind
+    for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; lobby.players[pid].spellsCastThisTurn = 0; lobby.players[pid].noncreatureSpellsCastThisTurn = 0; lobby.players[pid].lifeGainedThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind
     activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
     // Real pre-existing bug found while building Rites of Flourishing: landDropBonus (Explore's own
     // "you may play an additional land THIS TURN") was never reset anywhere per turn in this file --
@@ -12659,6 +12782,7 @@ io.on("connection", (socket) => {
     }
     const ability = getActivatedAbilities(card, lobby)[abilityIndex];
     if (!ability) return;
+    if (card.zoneType === "creature" && creatureAbilitiesLocked(lobby)) { socket.emit("actionError", "Cursed Totem: activated abilities of creatures can't be activated."); return; }
     // Reject BEFORE paying anything if this ability could never find a legal target right now --
     // Whip of Erebos with an empty graveyard, say. Without this the player would pay the full
     // mana/tap cost for an ability that's about to silently fizzle (fireTrigger's own CR 603.3c
@@ -13962,12 +14086,14 @@ io.on("connection", (socket) => {
       socket.emit("actionError", `${cmd.name} is already on the battlefield.`);
       return;
     }
+    // Drannith Magistrate -- a commander cast from the command zone is a cast from somewhere other than hand.
+    if (drannithRestricts(lobby, socket.id)) { socket.emit("actionError", "An opponent's Drannith Magistrate stops you from casting from the command zone."); return; }
     // Casting a commander is a cast like any other -- same timing/stack rules, not a bypass.
     const timing = checkTiming(lobby, socket.id, cmd);
     if (!timing.ok) { socket.emit("actionError", timing.error); return; }
     const cost = parseManaCost(cmd.manaCost);
     cost.generic += cmd.tax || 0; // commander tax: +{2} generic per previous cast from the command zone
-    cost.generic += spellCostIncreaseFor(lobby, socket.id); // Grand Arbiter Augustin IV and friends
+    cost.generic += spellCostIncreaseFor(lobby, socket.id, cmd); // Grand Arbiter Augustin IV and friends
     // Jeweled Lotus's own restriction ("spend only to cast your commander") needs isCommander
     // already true on the ctx card at affordability-check time, even though `cmd` itself -- the
     // command-zone entry, not yet a battlefield card -- doesn't normally carry that flag.
@@ -14332,6 +14458,17 @@ io.on("connection", (socket) => {
       return !(c.controllerSince === lobby.turn.turnNumber && !hasHaste);
     });
     const submittedIdsForSelfMustAttack = Object.keys(assignments || {});
+    // Ensnaring Bridge -- "Creatures with power greater than the number of cards in YOUR (the Bridge's
+    // controller's) hand can't attack." Any controller's Bridge restricts every attacker on the table;
+    // rejected as a whole declaration, same shape as the other attack restrictions here.
+    for (const attackerId of Object.keys(assignments || {})) {
+      const atk = lobby.cards[attackerId];
+      if (!atk) continue;
+      const atkPower = Math.max(0, parsePT(atk.power) + (atk.counters || 0) + attachedBonusFor(lobby, atk).powerBonus + staticBonusFor(lobby, atk).powerBonus);
+      const bridge = Object.values(lobby.cards).find((b) => b.zoneType !== "hand" && b.zoneType !== "stack" && /creatures with power greater than the number of cards in your hand can'?t attack/i.test(b.text || "")
+        && atkPower > Object.values(lobby.cards).filter((h) => h.owner === b.owner && h.zoneType === "hand").length);
+      if (bridge) { socket.emit("actionError", `${atk.name} can't attack (${bridge.name}: power ${atkPower} is greater than the cards in its controller's hand).`); return; }
+    }
     const missingSelfMustAttack = selfMustAttack.filter((c) => !submittedIdsForSelfMustAttack.includes(c.id));
     if (missingSelfMustAttack.length) {
       const names = missingSelfMustAttack.map((c) => c.name).join(", ");
@@ -14461,6 +14598,15 @@ io.on("connection", (socket) => {
         // equipment, or anthem correctly makes an otherwise-grounded creature a legal blocker too.
         const blkKw = effectiveKeywords(lobby, blockerCard).map((k) => (k || "").toLowerCase());
         if (atkKw.includes("flying") && !blkKw.includes("flying") && !blkKw.includes("reach")) continue;
+        // Intimidate -- "can't be blocked except by artifact creatures and/or creatures that share a
+        // color with it" (Krenko's Enforcer, Nuka-Nuke Launcher's grant).
+        if (attackerCard && atkKw.includes("intimidate")) {
+          const sharesColor = (attackerCard.colors || []).some((col) => (blockerCard.colors || []).includes(col));
+          if (!sharesColor && !(blockerCard.type || "").toLowerCase().includes("artifact")) continue;
+        }
+        // Shifting Sliver -- "Slivers can't be blocked except by Slivers" (any controller's copy).
+        if (attackerCard && (attackerCard.type || "").toLowerCase().includes("sliver") && !(blockerCard.type || "").toLowerCase().includes("sliver")
+          && Object.values(lobby.cards).some((s) => s.zoneType !== "hand" && s.zoneType !== "stack" && /slivers can'?t be blocked except by slivers/i.test(s.text || ""))) continue;
         // Protection's "can't be blocked by [quality]" facet -- the attacker has protection, so a
         // blocker matching one of its protected qualities is illegal, symmetric to the targeting
         // check in resolveChosenTarget (same toggle, same parsedProtectionQualities parsing).

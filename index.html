@@ -1740,7 +1740,7 @@
     // rather than fetched from the server so the deck editor's automation count can be computed
     // instantly, entirely client-side, with no round trip per card (see
     // updateDeckAutomationCoverage's own comment). Update both together when either changes.
-    const GENERIC_VANILLA_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect", "Unblockable"];
+    const GENERIC_VANILLA_KEYWORDS = ["Flying", "Haste", "Indestructible", "Deathtouch", "Lifelink", "Trample", "Vigilance", "Menace", "Reach", "First strike", "Double strike", "Hexproof", "Ward", "Defender", "Flash", "Protection", "Shroud", "Infect", "Unblockable", "Intimidate"];
     function isVanillaKeywordLine(low) {
       const parts = low.replace(/\.$/, "").split(",").map((s) => s.trim());
       if (!parts.length) return false;
