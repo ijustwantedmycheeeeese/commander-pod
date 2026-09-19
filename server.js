@@ -446,6 +446,14 @@ const CARD_ABILITIES = {
     { trigger: "endStep", requiresTarget: false, label: "Grismold, the Dreadsower — each player creates a 1/1 green Plant token", effects: [{ type: "createToken", target: "eachPlayer", name: "Plant", tokenType: "Token Creature — Plant", power: "1", toughness: "1", colors: ["G"] }] },
     { trigger: "deathAnyCreature", eventCardTypeFilter: ["token creature"], requiresTarget: false, label: "Grismold, the Dreadsower — +1/+1 counter", effects: [{ type: "addCountersToSelf", amount: 1 }] }
   ],
+  // Vega, the Watcher / Memory Worm -- "cast a spell from anywhere other than your hand": the new
+  // "youCastSpellNotFromHand" event (pushToStack -- commander casts and cascade's free cast reach it,
+  // hand casts don't). Memory Worm's "then draws" rides targetPlayerDiscards' new thenEffects.
+  "vega, the watcher": [{ trigger: "youCastSpellNotFromHand", requiresTarget: false, label: "Vega, the Watcher — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
+  "memory worm": [{ trigger: "youCastSpellNotFromHand", requiresTarget: true, targetKind: "player", label: "Memory Worm — 2 damage to target player, they discard then draw, +1/+1 counter", effects: [{ type: "damageTarget", amount: 2 }, { type: "targetPlayerDiscards", amount: 1, thenEffects: [{ type: "drawCards", amount: 1 }] }, { type: "addCountersToSelf", amount: 1 }] }],
+  // Faerie Mastermind -- new "opponentDrawsSecondCard" event (drawN, per-player cardsDrawnThisTurn); its
+  // "{3}{U}: each player draws a card" is in ACTIVATED_ABILITIES.
+  "faerie mastermind": [{ trigger: "opponentDrawsSecondCard", requiresTarget: false, label: "Faerie Mastermind — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }],
   // Mana Crypt -- "At the beginning of your upkeep, flip a coin. If you lose the flip, this artifact
   // deals 3 damage to you." (Its {T}: Add {C}{C} is already generic.)
   "mana crypt": [{ trigger: "upkeep", requiresTarget: false, label: "Mana Crypt — flip a coin, lose 3 on a loss", effects: [{ type: "flipCoinLoseLifeOnLoss", amount: 3 }] }],
@@ -1265,6 +1273,15 @@ const ACTIVATED_ABILITIES = {
   // Yahenni, Undying Partisan -- "Sacrifice another creature: gains indestructible until end of turn."
   // Razaketh's own excludeSelf autoSacrificeFilter cost + grantKeywordToSelf's temporary branch.
   "yahenni, undying partisan": [{ cost: { autoSacrificeFilter: "creature", excludeSelf: true }, requiresTarget: false, label: "Yahenni, Undying Partisan — Sacrifice another creature: gains indestructible until end of turn", effects: [{ type: "grantKeywordToSelf", keyword: "Indestructible" }] }],
+  "faerie mastermind": [{ cost: { mana: "{3}{U}" }, requiresTarget: false, label: "Faerie Mastermind — each player draws a card", effects: [{ type: "drawCards", amount: 1, target: "eachPlayer" }] }],
+  // Arena of Glory / Hall of the Bandit Lord -- mana abilities whose mana carries a "gains haste if
+  // spent on a creature spell" charge (queueHasteMana, consumed in attemptPlay). Arena's second
+  // ability also Exerts the land (cost.exert -> won't untap during its controller's next untap step).
+  "arena of glory": [
+    { cost: { tap: true }, manaAbility: true, label: "Arena of Glory — Add {R}", effects: [{ type: "addFixedMana", colors: ["R"] }] },
+    { cost: { mana: "{R}", tap: true, exert: true }, manaAbility: true, label: "Arena of Glory — {R}, {T}, Exert: Add {R}{R} (creature spell gains haste)", effects: [{ type: "addFixedMana", colors: ["R", "R"] }, { type: "queueHasteMana" }] }
+  ],
+  "hall of the bandit lord": [{ cost: { tap: true, life: 3 }, manaAbility: true, label: "Hall of the Bandit Lord — {T}, Pay 3 life: Add {C} (creature spell gains haste)", effects: [{ type: "addFixedMana", colors: ["C"] }, { type: "queueHasteMana", permanent: true }] }],
   "alchemist's refuge": [{ cost: { mana: "{G}{U}", tap: true }, label: "Alchemist's Refuge — you may cast spells this turn as though they had flash", effects: [{ type: "grantFlashUntilEndOfTurn" }] }],
   "witch's clinic": [
     { cost: { tap: true }, manaAbility: true, label: "Witch's Clinic — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] },
@@ -2784,7 +2801,7 @@ function getAltCost(cardName) {
 // main tables (fireBreathOfFuryTrigger, in this case) -- tracked here purely so the coverage
 // indicator (getAllAutomatedCardNames/isCardAutomated) counts them; add to this list alongside any
 // future card built the same way.
-const DEDICATED_FUNCTION_CARDS = ["breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus", "kird ape", "academy manufactor", "rites of flourishing", "marvin, murderous mimic"];
+const DEDICATED_FUNCTION_CARDS = ["illusionist's bracers", "breath of fury", "vilis, broker of blood", "chrome mox", "mox diamond", "grand abolisher", "mirror box", "training grounds", "seedborn muse", "knight of new alara", "jund hackblade", "maelstrom nexus", "kird ape", "academy manufactor", "rites of flourishing", "marvin, murderous mimic"];
 // Union of every card name with SOME automation -- a trigger, an activated ability, a spell
 // effect, OR one of the smaller "checked by name in a dedicated function, not a table" mechanisms
 // this engine has grown (replacement effects, attack/cast restrictions, enters-tapped statics).
@@ -2947,6 +2964,9 @@ function isSentenceGenericallyAutomated(sentence) {
   if (/^at the beginning of each end step, each opponent loses life equal to the life that player lost this turn\.?$/.test(low)) return true;
   if (/^this spell costs \{1\} less to cast for each counter among players and permanents\.?$/.test(low)) return true;
   if (/^if an opponent would lose life during your turn, they lose twice that much life instead\.?$/.test(low)) return true;
+  // Wave 37 -- Illusionist's Bracers (copy-on-activation text-scan in activateAbility).
+  if (/^whenever an ability of equipped creature is activated, if it isn'?t a mana ability, copy that ability\.?$/.test(low)) return true;
+  if (/^you may choose new targets for the copy\.?$/.test(low)) return true;
   return false;
 }
 function isCardGenericallyAutomated(text) {
@@ -5243,7 +5263,10 @@ const EFFECTS = {
     const handCount = Object.values(lobby.cards).filter((c) => c.owner === playerId && c.zoneType === "hand").length;
     const count = Math.min(params.amount || 1, handCount);
     if (count <= 0) return;
-    lobby.turn.pendingDiscard = { playerId, count };
+    // Memory Worm -- "That player discards a card, THEN draws a card": the discard is an async player
+    // pick (pendingDiscard/resolveDiscard), so anything that must happen after it (thenEffects, run as
+    // the discarding player) is carried on the pending state itself and fired by resolveDiscard.
+    lobby.turn.pendingDiscard = { playerId, count, thenEffects: params.thenEffects || null };
     broadcastTurn(lobby);
     pushLog(lobby, `${p.name} must discard ${count} card${count === 1 ? "" : "s"}`);
   },
@@ -5684,6 +5707,15 @@ const EFFECTS = {
   // Mana Crypt -- "flip a coin. If you lose the flip, this artifact deals 3 damage to you." Modeled as
   // applyLifeLoss with the source attributed (so Deflecting Palm-style redirects and Bloodletter-style
   // replacements see it as damage from a real source, unlike a plain loseLife cost payment).
+  // Arena of Glory / Hall of the Bandit Lord -- queues one "gains haste if spent on a creature spell"
+  // charge onto the player (consumed in attemptPlay, cleared every phase alongside the mana pool).
+  // permanent:true (Hall, "it gains haste") vs the default until-end-of-turn (Arena's own wording).
+  queueHasteMana(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    if (!p._pendingHasteMana) p._pendingHasteMana = [];
+    p._pendingHasteMana.push(params.permanent ? "permanent" : "temporary");
+  },
   flipCoinLoseLifeOnLoss(lobby, ctx, params) {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
@@ -8185,6 +8217,20 @@ function drawN(lobby, ownerId, n) {
     spawnBattlefieldCard(lobby, { ...entry, owner: ownerId, faceDown: true, zoneType: "hand" });
     drawn++;
   }
+  // Faerie Mastermind -- "Whenever an opponent draws their SECOND card each turn." Per-player running
+  // count (reset every Untap); the trigger fires once, on the draw that carries the total from below 2
+  // to 2-or-more (a single multi-card draw that jumps past 2 still counts as drawing the second card).
+  // Opening-hand/mulligan draws (before the player has kept) are not "cards drawn this turn" and must
+  // not count -- turn 1's own Untap reset never runs after them, so they'd otherwise pre-load turn 1.
+  const drawnBefore = p.cardsDrawnThisTurn || 0;
+  if (p.handKept) p.cardsDrawnThisTurn = drawnBefore + drawn;
+  if (p.handKept && drawn > 0 && drawnBefore < 2 && p.cardsDrawnThisTurn >= 2 && lobby.turn.started) {
+    for (const id in lobby.cards) {
+      const c = lobby.cards[id];
+      if (c.owner === ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+      getAutomatedAbilities(c.name, "opponentDrawsSecondCard").forEach((ability) => fireTrigger(lobby, c, ability));
+    }
+  }
   fireGlobalOpponentDrawTriggers(lobby, ownerId, drawn);
   fireGlobalTriggerForOpponentDraw(lobby, ownerId, drawn);
   return drawn;
@@ -8331,6 +8377,13 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   if ((p._pendingTribalScryMana || []).length && classifyType(card.type) === "creature" && sharesCreatureTypeWithCommander(lobby, card.owner, card)) {
     const scryAmount = p._pendingTribalScryMana.shift();
     EFFECTS.scryN(lobby, { controllerId: card.owner, sourceCard: { id: card.id } }, { amount: scryAmount });
+  }
+  // Arena of Glory / Hall of the Bandit Lord -- "If that mana is spent on a creature spell, it gains
+  // haste." Same disclosed charge-consumed-by-the-next-qualifying-cast approximation as Path of
+  // Ancestry just above (see EFFECTS.queueHasteMana); the haste itself is applied when the creature
+  // actually resolves onto the battlefield (resolveStackTop), stamped here as a marker on the card.
+  if ((p._pendingHasteMana || []).length && classifyType(card.type) === "creature") {
+    card._hasteOnResolve = p._pendingHasteMana.shift();
   }
   // Delighted Halfling -- "...and that spell can't be countered." Only true when mana carrying
   // this specific bonus was ACTUALLY spent on this cast (not just present in the pool), checked via
@@ -8492,6 +8545,11 @@ function broadcastStack(lobby) { io.to(lobby.id).emit("stackState", { stack: lob
 // adding anything new, closes the round and resolves it. Lands never call this; they're not
 // spells and resolve immediately in the caller, same as today.
 function pushToStack(lobby, card, casterId) {
+  // Vega, the Watcher / Memory Worm -- "cast a spell from anywhere other than your hand." A card cast
+  // out of hand still carries zoneType "hand" right up to this point; the command zone (castCommander
+  // spawns it on a battlefield-type zone first) and cascade's free cast (spawned straight onto
+  // "stack") do not -- so anything else is, by elimination, a cast from somewhere other than hand.
+  const castFromHand = card.zoneType === "hand";
   card.zoneType = "stack";
   card.faceDown = false; // casting is public information
   lobby.stack.push(card);
@@ -8504,6 +8562,7 @@ function pushToStack(lobby, card, casterId) {
   // spell it triggered off of" ordering. Lands never reach this function (see the doc comment
   // above), so this can't misfire for a land drop.
   fireGlobalTrigger(lobby, "youCastSpell", casterId, card);
+  if (!castFromHand) fireGlobalTrigger(lobby, "youCastSpellNotFromHand", casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
   fireGlobalOpponentNoncreatureSpellTriggers(lobby, casterId, card);
   fireGlobalOpponentCastsSpellTriggers(lobby, casterId);
@@ -10242,6 +10301,12 @@ function resolveStackTop(lobby) {
       card.zoneType = classifyType(card.type);
       card.controllerSince = lobby.turn.started ? lobby.turn.turnNumber : 0;
       if (entersTapped(card, lobby)) card.tapped = true;
+      // Arena of Glory / Hall of the Bandit Lord -- see attemptPlay's own comment on _hasteOnResolve.
+      if (card._hasteOnResolve) {
+        if (card._hasteOnResolve === "permanent") card.keywords = [...(card.keywords || []), "Haste"];
+        else grantTemporaryKeyword(lobby, card, "Haste");
+        delete card._hasteOnResolve;
+      }
       broadcastCard(lobby, card);
       if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved onto the battlefield`);
       fireEtbTriggers(lobby, card);
@@ -10615,7 +10680,7 @@ function advanceOnePhase(lobby) {
     }
   }
 
-  for (const pid in lobby.players) { lobby.players[pid].mana = EMPTY_MANA(); lobby.players[pid].restrictedMana = []; } // mana empties every step/phase
+  for (const pid in lobby.players) { lobby.players[pid].mana = EMPTY_MANA(); lobby.players[pid].restrictedMana = []; lobby.players[pid]._pendingTribalScryMana = []; lobby.players[pid]._pendingHasteMana = []; } // mana empties every step/phase (and so do the "if that mana is spent" bonus charges tied to it)
 
   if (oldPhase === "Combat" && turn.phase !== "Combat") {
     lobby.combat = { step: "none", attackers: {}, blocks: {}, defendersPending: [] };
@@ -10635,7 +10700,7 @@ function advanceOnePhase(lobby) {
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
-    for (const pid in lobby.players) lobby.players[pid].lifeLostThisTurn = 0; // Archfiend of Despair
+    for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind
     activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
     // Real pre-existing bug found while building Rites of Flourishing: landDropBonus (Explore's own
     // "you may play an additional land THIS TURN") was never reset anywhere per turn in this file --
@@ -10668,6 +10733,9 @@ function advanceOnePhase(lobby) {
         // step" -- a pure text-scan, no table entry needed (same precedent as every other
         // name-independent mechanism in this file). Its own separate "{N}: Untap this artifact"
         // paid ability is the only way it comes back untapped.
+        // Arena of Glory -- an EXERTED permanent skips exactly one untap step (its own controller's next
+        // one), then the flag clears. Checked here, on the real active player's own untap only.
+        if (lobby.cards[id].owner === activeId && lobby.cards[id].exerted) { lobby.cards[id].exerted = false; broadcastCard(lobby, lobby.cards[id]); continue; }
         if (lobby.cards[id].owner === activeId && lobby.cards[id].tapped && !/this (?:artifact|permanent) doesn'?t untap during your untap step/i.test(lobby.cards[id].text || "")) {
           lobby.cards[id].tapped = false;
           broadcastCard(lobby, lobby.cards[id]);
@@ -12242,6 +12310,7 @@ io.on("connection", (socket) => {
     // Auto-picks the first qualifying creature OTHER than the activating card itself, falling back to
     // the card itself only when it's the sole match -- a disclosed simplification (real Magic lets
     // you choose), chosen to avoid destroying the activating permanent whenever a better option exists.
+    const bracersAtActivation = ability.manaAbility ? null : Object.values(lobby.cards).find((c) => c.attachedTo === card.id && c.zoneType !== "hand" && /whenever an ability of equipped creature is activated, if it isn'?t a mana ability, copy that ability/i.test(c.text || ""));
     let autoSacrificeCard = null;
     if (cost.autoSacrificeFilter) {
       const filter = cost.autoSacrificeFilter;
@@ -12371,6 +12440,8 @@ io.on("connection", (socket) => {
     // stays valid" reasoning as cost.sacrifice, just a different destination (no death triggers,
     // exiling isn't dying).
     if (cost.exile) { exileCardInternal(lobby, card); }
+    // Arena of Glory's "Exert this land" -- won't untap during its controller's next untap step.
+    if (cost.exert) { card.exerted = true; broadcastCard(lobby, card); }
     if (autoSacrificeCard) {
       pushLog(lobby, `${p.name} sacrifices ${autoSacrificeCard.name || "a creature"} to pay the cost`);
       fireDeathTriggers(lobby, autoSacrificeCard);
@@ -12404,6 +12475,14 @@ io.on("connection", (socket) => {
       (effects || []).forEach((params) => { const fn = EFFECTS[params.type]; if (fn) fn(lobby, ctx, params); });
     } else {
       fireTrigger(lobby, card, ability, xVal);
+      // Illusionist's Bracers -- "Whenever an ability of equipped creature is activated, if it isn't a
+      // mana ability, copy that ability. You may choose new targets for the copy." The copy re-runs the
+      // same fireTrigger path (a targeted ability re-prompts for its own target, i.e. genuinely new
+      // targets; a non-targeted one just lands a second identical stack item). Disclosed narrowing:
+      // the copy is controlled by the ACTIVATING player (real Magic: the Bracers' controller), which
+      // is the same person whenever the equipment sits on its own controller's creature.
+      // (Looked up BEFORE costs were paid -- a sacrificed source detaches its equipment.)
+      if (bracersAtActivation) { pushLog(lobby, `${bracersAtActivation.name} copies ${ability.label}`); fireTrigger(lobby, card, ability, xVal); }
     }
   });
 
@@ -13673,6 +13752,8 @@ io.on("connection", (socket) => {
     // this hand-size/pendingDiscard path and any spell/ability-driven discard (they all route
     // through the same targetPlayerDiscards -> pendingDiscard -> resolveDiscard pipeline).
     discardedCards.forEach((card) => fireGlobalTrigger(lobby, "youDiscard", socket.id, card));
+    // Memory Worm's "then draws a card" -- see targetPlayerDiscards' own comment. Run as the discarder.
+    if (pd.thenEffects) pd.thenEffects.forEach((e) => { const fn = EFFECTS[e.type]; if (fn) fn(lobby, { controllerId: pd.playerId, sourceCard: null }, e); });
     // Connive's own "if you discarded a NONLAND card this way, put a +1/+1 counter on this
     // creature" -- the one piece EFFECTS.connive itself couldn't resolve (it returns long before
     // the player has actually picked a card), so it's tagged onto pendingDiscard and checked here,
