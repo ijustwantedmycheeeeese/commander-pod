@@ -476,6 +476,16 @@ const CARD_ABILITIES = {
     { trigger: "deathAnyCreature", opponentOnly: true, eventCardTypeFilter: ["zombie"], requiresTarget: false, label: "Hansk, Slayer Zealot — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }
   ],
   "watchful radstag": [{ trigger: "evolves", requiresTarget: false, label: "Watchful Radstag — create a token that's a copy of it", effects: [{ type: "createTokenCopyOfTargetCreature" }] }],
+  // ---- Wave 49 triggers (Sliver clusters use the sliver* / ownSliver* events, see fireGlobalCombatDamageToPlayerTrigger etc.) ----
+  "brood sliver": [{ trigger: "sliverCombatDamageToPlayer", bakeDealerOwner: true, requiresTarget: false, label: "Brood Sliver — its controller creates a 1/1 colorless Sliver creature token", effects: [{ type: "createTokenForTargetPlayer", name: "Sliver", tokenType: "Token Creature — Sliver", power: "1", toughness: "1", colors: [] }] }],
+  "virulent sliver": [{ trigger: "sliverCombatDamageToPlayer", bakeDefender: true, requiresTarget: false, label: "Virulent Sliver — poisonous 1: that player gets a poison counter", effects: [{ type: "poisonPlayer", amount: 1 }] }],
+  "capricious sliver": [{ trigger: "sliverCombatDamageToPlayer", scope: "own", requiresTarget: false, label: "Capricious Sliver — exile the top card of your library, you may play it this turn", effects: [{ type: "impulseExileTopToHand", amount: 1 }] }],
+  "toxin sliver": [{ trigger: "sliverCombatDamageToCreature", requiresTarget: false, label: "Toxin Sliver — destroy that creature, it can't be regenerated", effects: [{ type: "destroyTarget", noRegen: true }] }],
+  "spiteful sliver": [{ trigger: "ownSliverDamaged", requiresTarget: true, targetKind: "playerOrPlaneswalker", label: "Spiteful Sliver — this Sliver deals that much damage to target player or planeswalker", effects: [{ type: "damageTarget" }] }],
+  "diffusion sliver": [{ trigger: "ownSliverTargetedByOpponentSpell", requiresTarget: false, label: "Diffusion Sliver — counter that spell unless its controller pays {2}", effects: [{ type: "counterTargetSpellUnlessPay", payAmount: 2 }] }],
+  "constricting sliver": [{ trigger: "otherCreatureEtb", selfInclusive: true, typeFilter: ["sliver"], requiresTarget: true, targetKind: "opponentCreature", label: "Constricting Sliver — exile target creature an opponent controls until this Sliver leaves the battlefield", effects: [{ type: "exileUntilSourceLeaves" }] }],
+  "taunting sliver": [{ trigger: "otherCreatureEtb", selfInclusive: true, typeFilter: ["sliver"], requiresTarget: true, targetKind: "opponentCreature", label: "Taunting Sliver — goad target creature an opponent controls", effects: [{ type: "goadTarget" }] }],
+  "grasp of fate": [{ trigger: "etb", requiresTarget: true, targetKind: "opponentNonlandPermanent", label: "Grasp of Fate — exile up to one target nonland permanent an opponent controls until this enchantment leaves the battlefield", effects: [{ type: "exileUntilSourceLeaves" }] }],
   // ---- Wave 45 triggers ----
   "drop of honey": [{ trigger: "upkeep", requiresTarget: false, label: "Drop of Honey — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
   "porphyry nodes": [{ trigger: "upkeep", requiresTarget: false, label: "Porphyry Nodes — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
@@ -6362,6 +6372,39 @@ const EFFECTS = {
     p.hasFlashUntilEndOfTurn = true; p._flashUntilNextTurn = true;
     broadcastPlayers(lobby);
   },
+  // ---- Wave 49 effects ----
+  // Virulent Sliver -- poisonous 1: "that player gets a poison counter" (chosenTargetId = the damaged player, baked by the
+  // Sliver combat-damage dispatcher).
+  poisonPlayer(lobby, ctx, params) {
+    const p = lobby.players[params.chosenTargetId];
+    if (p) { p.poison = (p.poison || 0) + (params.amount || 1); broadcastPlayers(lobby); }
+  },
+  // Constricting Sliver / Grasp of Fate -- "exile target [permanent] until [this] leaves the battlefield." The link source is the
+  // entering Sliver when the dispatcher baked one (enteringCardId), else the ability's own source; checkControlDurations returns the
+  // permanent when the source is gone.
+  exileUntilSourceLeaves(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    const srcId = params.enteringCardId || (ctx.sourceCard && ctx.sourceCard.id);
+    if (!c || !srcId || !lobby.cards[srcId] || c.id === srcId) return;
+    const entry = toEntry(c);
+    const ownerId = c.originalOwner || c.owner;
+    const owner = lobby.players[ownerId];
+    exileCardInternal(lobby, c);
+    // The card only passes THROUGH the exile zone here (it's tracked in lobby.linkedExiles), so drop the ghost exile-pile entry.
+    if (owner) { const idx = owner.exile.findIndex((e) => e.id === entry.id); if (idx !== -1) owner.exile.splice(idx, 1); }
+    if (!lobby.linkedExiles) lobby.linkedExiles = [];
+    lobby.linkedExiles.push({ entry, ownerId, sourceId: srcId });
+    broadcastPlayers(lobby);
+  },
+  // Taunting Sliver -- "goad target creature an opponent controls." (Until the goader's next turn the creature attacks each combat
+  // if able; the "attacks a player other than you if able" half isn't enforced.)
+  goadTarget(lobby, ctx, params) {
+    const c = lobby.cards[params.chosenTargetId];
+    if (!c || c.zoneType !== "creature") return;
+    c._goadedBy = ctx.controllerId;
+    broadcastCard(lobby, c);
+    pushLog(lobby, `${c.name || "A creature"} is goaded`);
+  },
   // ---- Wave 48 effects ----
   // "Take an extra turn after this one." (see the next-turn advance in advanceOnePhase)
   takeExtraTurn(lobby, ctx) {
@@ -9509,6 +9552,20 @@ function checkControlDurations(lobby) {
     const linked = src && src.zoneType !== "hand" && (isAura ? src.attachedTo === c.id : src.owner === c.owner);
     if (!linked) revertControl(lobby, c);
   }
+  // "Exile target permanent until [source] leaves the battlefield" (Constricting Sliver, Grasp of Fate) -- hand each one back once its
+  // source is gone.
+  if (lobby.linkedExiles && lobby.linkedExiles.length) {
+    const keep = [];
+    lobby.linkedExiles.forEach((le) => {
+      const src = lobby.cards[le.sourceId];
+      if (src && src.zoneType !== "hand" && src.zoneType !== "stack") { keep.push(le); return; }
+      if (!lobby.players[le.ownerId] || /token/i.test(le.entry.type || "")) return; // a token that was exiled ceases to exist
+      const back = spawnBattlefieldCard(lobby, { ...le.entry, owner: le.ownerId, zoneType: classifyType(le.entry.type), faceDown: false });
+      pushLog(lobby, `${back.name || "A permanent"} returns to the battlefield`);
+      fireEtbTriggers(lobby, back);
+    });
+    lobby.linkedExiles = keep;
+  }
 }
 // Devotion to a color (CR 700.5): the number of mana symbols of that color in the mana costs of permanents you control
 // (hybrid and Phyrexian symbols containing the color count).
@@ -11330,6 +11387,16 @@ function fireOpponentSearchTrigger(lobby, searchingPlayerId) {
 // one would silently under-trigger for half of what "dealt damage" really covers.
 function fireCreatureDamagedTrigger(lobby, card, amount) {
   if (!lobby.turn.started || amount <= 0) return;
+  // Spiteful Sliver -- "Sliver creatures you control have 'Whenever this creature is dealt damage, it deals that much damage to
+  // target player or planeswalker.'" The trigger belongs to each of the controller's Slivers, so it's queued for the damaged one.
+  if (/sliver/i.test(card.type || "")) {
+    Object.values(lobby.cards).forEach((w) => {
+      if (w.owner !== card.owner || w.zoneType === "hand" || w.zoneType === "stack") return;
+      getAutomatedAbilities(w.name, "ownSliverDamaged").forEach((ab) => {
+        queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ab.label, effects: (ab.effects || []).map((e) => ({ ...e, amount, damageDealtAmount: amount })), targetKind: ab.targetKind });
+      });
+    });
+  }
   getAutomatedAbilities(card.name, "damagedSelf").forEach((ability) => {
     // amountFromDamage (Brash Taunter -- "it deals THAT MUCH damage to target opponent"): the effect's own
     // amount is the damage just taken. requiresTarget abilities queue a real target choice instead of
@@ -11892,6 +11959,30 @@ function fireGlobalCombatDamageToPlayerTrigger(lobby, dealingCard, defenderId, a
       pushAbilityToStack(lobby, { sourceCard: source, controllerId: source.owner, label: ability.label, effects });
     });
   });
+  // Sliver watchers (Brood Sliver, Virulent Sliver: ANY controller's Slivers; Capricious Sliver: own Slivers) -- "Whenever a Sliver
+  // deals combat damage to a player". bakeDealerOwner puts the dealing Sliver's controller in chosenTargetId ("its controller"),
+  // bakeDefender the damaged player.
+  if (dealingType.includes("sliver")) {
+    Object.values(lobby.cards).forEach((source) => {
+      if (source.zoneType === "hand" || source.zoneType === "stack") return;
+      getAutomatedAbilities(source.name, "sliverCombatDamageToPlayer").forEach((ability) => {
+        if (ability.scope === "own" && source.owner !== dealingCard.owner) return;
+        const baked = ability.bakeDealerOwner ? dealingCard.owner : (ability.bakeDefender ? defenderId : dealingCard.id);
+        const effects = (ability.effects || []).map((e) => ({ ...e, dealtToPlayerId: defenderId, dealtToPlayerAmount: amount, chosenTargetId: baked }));
+        pushAbilityToStack(lobby, { sourceCard: source, controllerId: source.owner, label: ability.label, effects });
+      });
+    });
+  }
+}
+// Toxin Sliver -- "Whenever a Sliver deals combat damage to a creature, destroy that creature." (any controller's Slivers)
+function fireSliverCombatDamageToCreatureTrigger(lobby, sourceCard, damagedCard) {
+  if (!lobby.turn.started || !/sliver/i.test(sourceCard.type || "")) return;
+  Object.values(lobby.cards).forEach((watcher) => {
+    if (watcher.zoneType === "hand" || watcher.zoneType === "stack") return;
+    getAutomatedAbilities(watcher.name, "sliverCombatDamageToCreature").forEach((ability) => {
+      pushAbilityToStack(lobby, { sourceCard: watcher, controllerId: watcher.owner, label: ability.label, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: damagedCard.id })) });
+    });
+  });
 }
 // Breath of Fury -- "When enchanted creature deals combat damage to a player, sacrifice it and
 // attach this Aura to a creature you control. If you do, untap all creatures you control and
@@ -12366,6 +12457,7 @@ function advanceOnePhase(lobby) {
 
   if (activePlayer && turn.phase === "Untap") {
     activePlayer.landsPlayedThisTurn = 0;
+    Object.values(lobby.cards).forEach((gc) => { if (gc._goadedBy === activeId) gc._goadedBy = null; }); // goad lasts until the goader's next turn
     if (activePlayer._flashUntilNextTurn) { activePlayer._flashUntilNextTurn = false; activePlayer.hasFlashUntilEndOfTurn = false; } // Teferi, Time Raveler +1 expires
     for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; lobby.players[pid].spellsCastThisTurn = 0; lobby.players[pid].noncreatureSpellsCastThisTurn = 0; lobby.players[pid].lifeGainedThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind
     activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
@@ -12571,12 +12663,13 @@ function resolveCombatDamage(lobby) {
     if (dealingDeathtouch || deathtouchHit.has(card.id)) return already > 0 ? 0 : 1;
     return Math.max(0, effPT(card).toughness - already);
   }
-  function markDamage(card, amount, isDeathtouch) {
+  function markDamage(card, amount, isDeathtouch, source) {
     if (amount <= 0) return;
     marked[card.id] = (marked[card.id] || 0) + amount;
     if (isDeathtouch) deathtouchHit.add(card.id);
     dmgEvents.push({ targetId: card.id, amount });
     fireCreatureDamagedTrigger(lobby, card, amount);
+    if (source) fireSliverCombatDamageToCreatureTrigger(lobby, source, card);
   }
   function dealtLethal(card, dealtByDeathtouch) {
     // CR 702.12b: lethal damage doesn't destroy an indestructible permanent. This keyword was
@@ -12634,7 +12727,7 @@ function resolveCombatDamage(lobby) {
               if (remaining <= 0) return;
               const isLast = i === blockers.length - 1;
               const toThis = (isLast && !atkTrample) ? remaining : Math.min(remaining, remainingToKill(blocker, atkDeathtouch));
-              markDamage(blocker, toThis, atkDeathtouch);
+              markDamage(blocker, toThis, atkDeathtouch, attacker);
               remaining -= toThis;
             });
             const toPlayerBase = atkTrample ? remaining : 0;
@@ -12676,7 +12769,7 @@ function resolveCombatDamage(lobby) {
           if (blockerActs && lobby.cards[blocker.id]) {
             anyBlockerActed = true;
             const defPower = dealingPower(blocker);
-            markDamage(attacker, defPower, hasKw(blocker, "deathtouch"));
+            markDamage(attacker, defPower, hasKw(blocker, "deathtouch"), blocker);
             if (defPower > 0 && hasKw(blocker, "lifelink")) applyLifeGain(lobby, blocker.owner, defPower);
           }
         });
@@ -14491,6 +14584,15 @@ io.on("connection", (socket) => {
       pushToStack(lobby, entry.spellCard, entry.controllerId);
       const owner = lobby.players[entry.controllerId];
       if (owner) pushLog(lobby, `${owner.name} cast ${entry.spellCard.name || "a spell"}${entry.logSuffix || ""}`);
+      // Diffusion Sliver -- "Whenever a Sliver creature you control becomes the target of a spell or ability an opponent controls,
+      // counter that spell or ability unless its controller pays {2}." (spells only; the trigger lands above the spell on the stack)
+      const slivered = lobby.cards[targetId];
+      if (slivered && slivered.zoneType === "creature" && /sliver/i.test(slivered.type || "") && slivered.owner !== entry.controllerId) {
+        Object.values(lobby.cards).forEach((w) => {
+          if (w.owner !== slivered.owner || w.zoneType === "hand" || w.zoneType === "stack") return;
+          getAutomatedAbilities(w.name, "ownSliverTargetedByOpponentSpell").forEach((ab) => pushAbilityToStack(lobby, { sourceCard: w, controllerId: w.owner, label: ab.label, effects: (ab.effects || []).map((e) => ({ ...e, chosenTargetId: entry.spellCard.id })) }));
+        });
+      }
     } else {
       pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: entry.label, effects });
     }
@@ -15693,7 +15795,7 @@ io.on("connection", (socket) => {
     // text-scan, freshly re-checked on every declareAttackers call.
     const selfMustAttack = Object.values(lobby.cards).filter((c) => {
       if (c.owner !== socket.id || c.zoneType !== "creature" || c.tapped) return false;
-      if (!/attacks each combat if able/i.test(c.text || "")) return false;
+      if (!/attacks each combat if able/i.test(c.text || "") && !c._goadedBy) return false; // goaded creatures (Taunting Sliver) must attack too
       const hasHaste = effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "haste");
       return !(c.controllerSince === lobby.turn.turnNumber && !hasHaste);
     });
