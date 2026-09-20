@@ -55,6 +55,12 @@ If you're self-hosting your own ntfy server instead of using the public `ntfy.sh
 
 The Main Menu plays a looping background track (`audio/lobby-music.mp3`), with its own volume slider on the Main Menu and mirrored in the in-game Settings modal. It's royalty-free — swap `audio/lobby-music.mp3` for a different file (same filename) if you'd rather use something else; nothing else needs to change.
 
+## Default decks
+
+The Main Menu's Decks section has a **Default Decks** tab (it only appears when at least one is installed) listing built-in, read-only decks that are shared by every account and kept separate from each player's saved decks. **Open** puts a deck into the Deck Editor as the player's own copy, and the in-game "Load a deck" dropdown lists them under a "Default decks" group.
+
+The deck files are deliberately not part of this repository. Each one is a plain paste-import `.txt` file (`N Card Name` per line, `#` comment lines, the commander as the first card line) placed in `default_decks/` inside the data directory (`/app/data/default_decks`, so on Docker that means inside the data volume). An optional first comment line of the form `# Deck Name — WUBRG — notes` sets the display name and color letters; otherwise the commander's name is used. The folder is re-read on every request, so adding or removing a file needs no restart.
+
 ## Local development
 
 ```

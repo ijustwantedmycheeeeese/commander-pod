@@ -13004,6 +13004,48 @@ async function resolveAndSetLibrary(lobby, socket, p, text) {
   }
 }
 
+// ---------------- Default decks ----------------
+// Built-in, read-only decks shared by every account, shown in their own "Default Decks" tab (separate from saved decks). They are
+// plain paste-import .txt files (`N Card Name`, `#` comment lines, the commander as the FIRST card line) kept OUTSIDE the repo in
+// DATA_DIR/default_decks -- drop a file in, restart nothing (the folder is re-read on every request). The first "# ..." comment line
+// may be `# Deck Name — WUBRG — anything`; without it the commander's name is used and no colors are shown.
+const DEFAULT_DECKS_DIR = path.join(DATA_DIR, "default_decks");
+function listDefaultDecks() {
+  let files;
+  try { files = fs.readdirSync(DEFAULT_DECKS_DIR); } catch (e) { return []; }
+  return files.filter((f) => /^[A-Za-z0-9_-]+\.txt$/.test(f)).sort().map((f) => {
+    try {
+      const text = fs.readFileSync(path.join(DEFAULT_DECKS_DIR, f), "utf8");
+      const header = (text.split(/\r?\n/).find((l) => /^\s*#/.test(l)) || "").replace(/^\s*#\s*/, "");
+      const parts = header.split(/\s+[—–-]\s+/);
+      const firstCard = parseDecklistNames(text, 1)[0] || "";
+      const colors = /^[WUBRG]{1,5}$/.test((parts[1] || "").trim()) ? parts[1].trim() : "";
+      return { id: f.replace(/\.txt$/, ""), name: (parts[0] || "").trim() || firstCard || f, colors, text };
+    } catch (e) { return null; }
+  }).filter(Boolean);
+}
+// The list sent to clients (no card text).
+function defaultDeckSummaries() { return listDefaultDecks().map((d) => ({ id: d.id, name: d.name, colors: d.colors })); }
+// Resolves a default deck to full card data: the first card line is the commander, the rest is the library (max 99).
+async function resolveDefaultDeck(id) {
+  const deck = listDefaultDecks().find((d) => d.id === id);
+  if (!deck) return null;
+  const names = parseDecklistNames(deck.text, 9999);
+  if (names.length < 2) return null;
+  const found = await resolveCardNames([...new Set(names)]);
+  const byKey = {};
+  found.forEach((c) => {
+    byKey[archiveKey(c.name)] = c;
+    const front = archiveKey((c.name || "").split(" // ")[0]);
+    if (!byKey[front]) byKey[front] = c; // double-faced cards are listed under their front-face name
+  });
+  const pick = (n) => (byKey[archiveKey(n)] ? { ...byKey[archiveKey(n)] } : null);
+  const libNames = names.slice(1, 100);
+  const library = libNames.map(pick).filter(Boolean);
+  const commander = pick(names[0]);
+  return { name: deck.name, commander, library, missing: libNames.length - library.length + (commander ? 0 : 1) };
+}
+
 // ---------------- HTTP API ----------------
 
 app.post("/api/register", (req, res) => {
@@ -13240,6 +13282,7 @@ io.on("connection", (socket) => {
     defaultCursorIcon: (users[username] && users[username].defaultCursorIcon) || null,
     defaultCursorIconFit: (users[username] && users[username].defaultCursorIconFit) || null,
     automatedCardNames: getAllAutomatedCardNames(),
+    defaultDecks: defaultDeckSummaries(),
     collection: collection[username] || {}
   });
 
@@ -15416,6 +15459,37 @@ io.on("connection", (socket) => {
   });
 
   // Loads a deck's raw saved data into the editor (for the "Edit" button on a saved deck).
+  // ---- default decks (see listDefaultDecks) ----
+  // "Open" from the Default Decks tab: resolve the deck and hand it to the Deck Editor as an unsaved COPY (saving it makes an
+  // ordinary saved deck under the player's own account; the default deck itself is never modified).
+  socket.on("openDefaultDeck", async (id) => {
+    try {
+      const d = await resolveDefaultDeck(String(id || ""));
+      if (!d) { socket.emit("actionError", "That default deck isn't available."); return; }
+      socket.emit("deckData", { name: d.name, data: { commanders: [d.commander, null], library: d.library } });
+      if (d.missing) socket.emit("actionError", `${d.missing} card${d.missing === 1 ? "" : "s"} in "${d.name}" couldn't be found and were left out.`);
+    } catch (e) {
+      socket.emit("actionError", "Couldn't open that default deck -- check your connection and try again.");
+    }
+  });
+  // Load a default deck straight into the current game, exactly like loading a saved deck.
+  socket.on("loadDefaultDeck", async (id) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p) return;
+    try {
+      const d = await resolveDefaultDeck(String(id || ""));
+      if (!d) { socket.emit("importResult", { success: false, error: "That default deck isn't available." }); return; }
+      p.library = d.library.map((c) => ({ ...c }));
+      shuffle(p.library);
+      applyCommandersToPlayer(p, [d.commander, null]);
+      broadcastPlayers(lobby);
+      socket.emit("importResult", { success: true, requested: p.library.length, found: p.library.length });
+      pushLog(lobby, `${p.name} loaded the default deck "${d.name}" (${p.library.length} cards + commander)`);
+    } catch (e) {
+      socket.emit("importResult", { success: false, error: "Couldn't load that default deck -- check your connection and try again." });
+    }
+  });
+
   socket.on("getDeckData", (name) => {
     const deck = decks[username] && decks[username][name];
     socket.emit("deckData", { name, data: deck || null });
