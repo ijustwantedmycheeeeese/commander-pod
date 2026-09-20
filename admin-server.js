@@ -19,13 +19,18 @@ app.use(express.json({ limit: "1mb" }));
 process.on("uncaughtException", (err) => console.error("Uncaught exception:", err));
 process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", err));
 
-const DATA_DIR = "/app/data";
+const DATA_DIR = process.env.ARCHON_DATA_DIR || "/app/data"; // env override is for the test lab (many test servers, each with its own data dir)
 const USERS_FILE = DATA_DIR + "/users.json";
 function loadUsers() {
-  try { return JSON.parse(fs.readFileSync(USERS_FILE, "utf8")); } catch (e) { return {}; }
+  let raw;
+  try { raw = fs.readFileSync(USERS_FILE, "utf8"); } catch (e) { if (e.code === "ENOENT") return {}; throw e; }
+  // A corrupt/unreadable users.json must NOT be treated as "no users": the caller saves the result back, which would wipe every account.
+  return JSON.parse(raw);
 }
 function saveUsers(users) {
-  try { fs.writeFileSync(USERS_FILE, JSON.stringify(users)); } catch (e) { console.error("Failed to save " + USERS_FILE, e); }
+  // Atomic (temp file + rename), same reason as saveJSON in server.js: never let the main server read a half-written users.json.
+  const tmp = USERS_FILE + "." + process.pid + ".tmp";
+  try { fs.writeFileSync(tmp, JSON.stringify(users)); fs.renameSync(tmp, USERS_FILE); } catch (e) { console.error("Failed to save " + USERS_FILE, e); try { fs.unlinkSync(tmp); } catch (e2) {} }
 }
 
 // Same shared-file, always-read-fresh pattern as users.json above -- server.js writes a new ticket

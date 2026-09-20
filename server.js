@@ -20,7 +20,7 @@ process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", 
 
 // ---------------- persistent storage (users + decks) ----------------
 
-const DATA_DIR = "/app/data";
+const DATA_DIR = process.env.ARCHON_DATA_DIR || "/app/data"; // env override is for the test lab (many test servers, each with its own data dir)
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
 
 // User-uploaded board mat/avatar images. Falls inside the same DATA_DIR the Docker volume
@@ -63,7 +63,10 @@ function loadJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return fallback; }
 }
 function saveJSON(file, data) {
-  try { fs.writeFileSync(file, JSON.stringify(data)); } catch (e) { console.error("Failed to save " + file, e); }
+  // Atomic: write a temp file in the same directory, then rename it over the target. The admin panel (a separate process) reads and rewrites
+  // users.json too; with a plain writeFileSync it could read a half-written file, treat it as empty, and save that back over every account.
+  const tmp = file + "." + process.pid + ".tmp";
+  try { fs.writeFileSync(tmp, JSON.stringify(data)); fs.renameSync(tmp, file); } catch (e) { console.error("Failed to save " + file, e); try { fs.unlinkSync(tmp); } catch (e2) {} }
 }
 const USERS_FILE = DATA_DIR + "/users.json";
 const DECKS_FILE = DATA_DIR + "/decks.json";
@@ -202,6 +205,15 @@ function nextColor() { return COLORS[colorIndex++ % COLORS.length]; }
 // share a cursor color," which setCursorColor below actually enforces per lobby).
 const CURSOR_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#6366f1", "#a855f7", "#ec4899", "#78716c"];
 function randInt(n) { return Math.floor(Math.random() * n); }
+// Game randomness (shuffles, coin flips, dice, turn-order rolls, random discards). With ARCHON_SEED set (test servers only) it is a deterministic
+// stream, so a game found buggy by a bot can be replayed exactly from its seed; without it this is plain Math.random and the live game is unchanged.
+// Ids (newId/newAbilityId/ticket ids) deliberately keep using Math.random through randInt so they can never collide or depend on the seed.
+const gameRand = (() => {
+  if (!process.env.ARCHON_SEED) return Math.random;
+  let a = (parseInt(process.env.ARCHON_SEED, 10) >>> 0) || 1; // mulberry32
+  return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+})();
+function gameRandInt(n) { return Math.floor(gameRand() * n); }
 function newId() { return "c_" + Date.now() + "_" + randInt(100000); }
 // "ab_" prefix keeps a triggered-ability stack instance's id visually distinct from a real card id
 // and guarantees it can never collide with one.
@@ -5848,7 +5860,7 @@ const EFFECTS = {
     if (!p) return;
     const handCards = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && c.zoneType === "hand");
     if (!handCards.length) return;
-    const chosen = handCards[randInt(handCards.length)];
+    const chosen = handCards[gameRandInt(handCards.length)];
     const wasArtifact = (chosen.type || "").toLowerCase().includes("artifact");
     delete lobby.cards[chosen.id];
     if (lobby.targets[chosen.id]) { delete lobby.targets[chosen.id]; broadcastTargets(lobby); }
@@ -7050,7 +7062,7 @@ const EFFECTS = {
   // flying equal to the result." rollD20CreateTreasures' sibling for any token shape (params carry the
   // token); goes through createToken so doublers/Manufactor-style replacements still apply.
   rollD20CreateTokens(lobby, ctx, params) {
-    const roll = 1 + Math.floor(Math.random() * 20);
+    const roll = 1 + Math.floor(gameRand() * 20);
     const p = lobby.players[ctx.controllerId];
     pushLog(lobby, `${p ? p.name : "?"} rolls a d20: ${roll}`);
     EFFECTS.createToken(lobby, ctx, { ...params, amount: roll });
@@ -7207,7 +7219,7 @@ const EFFECTS = {
   flipCoinLoseLifeOnLoss(lobby, ctx, params) {
     const p = lobby.players[ctx.controllerId];
     if (!p) return;
-    const won = Math.random() < 0.5;
+    const won = gameRand() < 0.5;
     pushLog(lobby, `${p.name} flips a coin for ${(ctx.sourceCard && lobby.cards[ctx.sourceCard.id] && lobby.cards[ctx.sourceCard.id].name) || "a coin flip"}: ${won ? "wins" : "loses"}`);
     if (won) return;
     applyLifeLoss(lobby, ctx.controllerId, params.amount || 0, ctx.sourceCard && ctx.sourceCard.id);
@@ -7216,7 +7228,7 @@ const EFFECTS = {
   },
   flipCoinDestroyAllNonland(lobby, ctx) {
     const p = lobby.players[ctx.controllerId];
-    const won = Math.random() < 0.5;
+    const won = gameRand() < 0.5;
     pushLog(lobby, `${p ? p.name : "?"} flips a coin for Boompile: ${won ? "wins" : "loses"}`);
     if (!won) return;
     Object.values(lobby.cards).filter((c) => c.zoneType === "creature" || c.zoneType === "artifact").forEach((c) => {
@@ -7430,7 +7442,7 @@ const EFFECTS = {
     EFFECTS.createToken(lobby, ctx, { name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg" });
   },
   rollD20CreateTreasures(lobby, ctx, params) {
-    const roll = 1 + Math.floor(Math.random() * 20);
+    const roll = 1 + Math.floor(gameRand() * 20);
     const p = lobby.players[ctx.controllerId];
     pushLog(lobby, `${p ? p.name : "?"} rolls a d20 for ${(ctx.sourceCard && lobby.cards[ctx.sourceCard.id] && lobby.cards[ctx.sourceCard.id].name) || "Ancient Copper Dragon"}: ${roll} -- creating ${roll} Treasure token${roll === 1 ? "" : "s"}`);
     EFFECTS.createToken(lobby, ctx, { name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg", amount: roll });
@@ -7957,7 +7969,7 @@ for (const lobbyId in lobbies) {
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = randInt(i + 1);
+    const j = gameRandInt(i + 1);
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
 }
@@ -9480,7 +9492,7 @@ const DEFAULT_TOKEN_ART = {
 };
 function pickDefaultTokenArt(name) {
   const options = DEFAULT_TOKEN_ART[(name || "").trim().toLowerCase()];
-  return options ? options[Math.floor(Math.random() * options.length)] : "";
+  return options ? options[Math.floor(gameRand() * options.length)] : "";
 }
 
 // A crop/zoom transform for a custom image (pile art, board mat) -- scale is a zoom multiplier on
@@ -15987,7 +15999,7 @@ io.on("connection", (socket) => {
     }
     // Pregame dice roll decides turn order — everyone rolls a d20, highest goes first, ties
     // broken randomly, and the log shows every roll so it's not just a silent shuffle.
-    const rolls = Object.keys(lobby.players).map((sid) => ({ sid, roll: randInt(20) + 1, tiebreak: Math.random() }));
+    const rolls = Object.keys(lobby.players).map((sid) => ({ sid, roll: gameRandInt(20) + 1, tiebreak: gameRand() }));
     rolls.sort((a, b) => b.roll - a.roll || b.tiebreak - a.tiebreak);
     rolls.forEach((r) => pushLog(lobby, `${lobby.players[r.sid].name} rolled a ${r.roll} for turn order`));
     lobby.turn.order = rolls.map((r) => r.sid);
@@ -16714,4 +16726,5 @@ io.on("connection", (socket) => {
   });
 });
 
-http.listen(8087, () => { console.log("Commander Engine Listening on 8087"); });
+const LISTEN_PORT = parseInt(process.env.ARCHON_PORT || "8087", 10);
+http.listen(LISTEN_PORT, () => { console.log("Commander Engine Listening on " + LISTEN_PORT); });
