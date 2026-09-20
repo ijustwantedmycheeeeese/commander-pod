@@ -4378,6 +4378,7 @@
     function drawSpecific(idx) { socket.emit("drawSpecific", idx); closeZoneModal(); }
     function zoneToBattlefield(zone, idx) { socket.emit("zoneToBattlefield", { zone, index: idx }); closeZoneModal(); }
     function zoneToHand(zone, idx) { socket.emit("zoneToHand", { zone, index: idx }); closeZoneModal(); }
+    function castFlashback(idx) { socket.emit("castFlashback", { index: idx }); closeZoneModal(); }
     function commanderToCommandZone(zone, idx) { socket.emit("commanderToCommandZone", { zone, index: idx }); closeZoneModal(); }
     // Backing array for the currently-open zone modal's rows, so per-row action buttons that need
     // the full entry (not just a server-side index like zoneToBattlefield/zoneToHand) can look it up.
@@ -4454,6 +4455,7 @@
             actions = `
               <button class="mini-btn" onclick="zoneToBattlefield('${zoneName}',${idx})">To Battlefield</button>
               <button class="mini-btn" onclick="zoneToHand('${zoneName}',${idx})">To Hand</button>
+              ${zoneName === "graveyard" && /flashback|\bretrace\b/i.test(entry.text || "") ? `<button class="mini-btn" onclick="castFlashback(${idx})" title="Ready this card for Flashback/Retrace: it moves to your hand for this turn, cast it from there">Flashback / Retrace</button>` : ""}
               ${entry.isCommander ? `<button class="mini-btn" onclick="commanderToCommandZone('${zoneName}',${idx})" title="Real Commander rule: you can move your commander to the Command Zone instead of here">To Command Zone</button>` : ""}`;
           }
           // Reanimation targeting (Reya Dawnbringer, Necromancy, Whip of Erebos) -- a pending
