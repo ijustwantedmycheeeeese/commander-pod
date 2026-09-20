@@ -9850,6 +9850,10 @@ function checkDarkDepthsIceCounters(lobby) {
     if (!/when .+ has no ice counters on it, sacrifice it\. if you do, create marit lage/i.test(c.text || "")) return;
     if ((c.counters || 0) > 0) return;
     if (!lobby.cards[c.id]) return;
+    // Its "enters with ten ice counters" is applied in fireEtbTriggers; until that has run the 0 counters just mean "not set up yet", not "melted".
+    // (Playing it from hand broadcasts BEFORE the ETB code runs -- without this it was sacrificed on the spot, Marit Lage appeared, and the ETB then
+    // re-created a ghost Dark Depths on the client that could never be activated.)
+    if (!c._iceCountersSet) return;
     pushLog(lobby, `${c.name || "Dark Depths"} has no ice counters left -- sacrificed, creating Marit Lage`);
     fireDeathTriggers(lobby, c);
     sendToGraveyardInternal(lobby, c);
@@ -11303,7 +11307,7 @@ function fireEtbTriggers(lobby, card) {
   // which fires on every action including the one right after spawning) saw the card still at its
   // default 0 counters and sacrificed it immediately, before its own ETB ever got a chance to
   // resolve. Applying the counters synchronously at spawn time closes that window entirely.
-  if (/enters with ten ice counters on it/i.test(card.text || "")) { card.counters = (card.counters || 0) + 10; broadcastCard(lobby, card); }
+  if (/enters with ten ice counters on it/i.test(card.text || "")) { card.counters = (card.counters || 0) + 10; card._iceCountersSet = true; broadcastCard(lobby, card); }
   // "This creature enters with [N|X] +1/+1 counters on it" (Pentavus, Walking Ballista...) -- inline for the
   // same reason as Dark Depths above (a 0/0 body would die to state-based checks before a stacked ETB
   // trigger resolved). X reads the cast-time X value.
@@ -15746,13 +15750,36 @@ io.on("connection", (socket) => {
       tapped: !!c.tapped, faceDown: !!c.faceDown, counters: typeof c.counters === "number" ? c.counters : 0
     };
   }
+  // A compact, server-built picture of the table at the moment a ticket is filed, so the bug can be replayed instead of guessed at: turn/phase,
+  // each player's life and battlefield (names, counters, tapped), the stack, any pending prompt and the last log lines. Built from the real lobby
+  // (never client-supplied) and capped; hidden zones (hands, libraries) are counts only.
+  function snapshotForTicket(lobby) {
+    if (!lobby) return null;
+    const cap = (v, n) => sanitizeCardStr(String(v == null ? "" : v), n);
+    const turn = lobby.turn || {};
+    const players = Object.keys(lobby.players).map((pid) => {
+      const p = lobby.players[pid];
+      const perm = Object.values(lobby.cards).filter((c) => c.owner === pid && c.zoneType !== "hand" && c.zoneType !== "stack").slice(0, 80)
+        .map((c) => ({ name: cap(c.name, 80), zone: c.zoneType, counters: c.counters || 0, tapped: !!c.tapped, type: cap(c.type, 60) }));
+      return { name: cap(p.name, 40), life: p.life, poison: p.poison || 0, handCount: Object.values(lobby.cards).filter((c) => c.owner === pid && c.zoneType === "hand").length,
+        libraryCount: (p.library || []).length, graveyard: (p.graveyard || []).slice(-15).map((e) => cap(e.name, 80)), exile: (p.exile || []).slice(-15).map((e) => cap(e.name, 80)), permanents: perm };
+    });
+    return {
+      turnNumber: turn.turnNumber || 0, phase: cap(turn.phase, 20), activePlayer: turn.order && lobby.players[turn.order[turn.activeIndex]] ? cap(lobby.players[turn.order[turn.activeIndex]].name, 40) : null,
+      players, stack: (lobby.stack || []).slice(0, 20).map((s) => cap(s.name, 120)),
+      pendingChoices: (lobby.pendingTargetChoices || []).slice(0, 5).map((c) => ({ label: cap(c.label, 160), kind: cap(c.targetKind || c.kind, 40), step: (c.chosenTargetIds || []).length })),
+      log: (lobby.gameState && lobby.gameState.log ? lobby.gameState.log : []).slice(-30).map((l) => cap(l, 200))
+    };
+  }
   socket.on("submitTicket", ({ cardSnapshot, description } = {}) => {
     const desc = sanitizeCardStr(description, 2000).trim();
     if (!desc) { socket.emit("actionError", "Describe the bug before submitting."); return; }
     const tickets = loadJSON(TICKETS_FILE, []);
+    let gameSnapshot = null;
+    try { gameSnapshot = snapshotForTicket(currentLobby()); } catch (e) { gameSnapshot = null; }
     tickets.unshift({
       id: "t_" + Date.now() + "_" + randInt(100000), username, card: sanitizeTicketCardSnapshot(cardSnapshot),
-      description: desc, status: "open", createdAt: Date.now(), closedAt: null
+      description: desc, status: "open", createdAt: Date.now(), closedAt: null, gameSnapshot
     });
     saveJSON(TICKETS_FILE, tickets);
     socket.emit("ticketSubmitted");
