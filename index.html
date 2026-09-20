@@ -1887,6 +1887,9 @@
       if (/^when this (?:artifact|creature|permanent) enters,\s*draw (a|\d+) cards?\.?$/.test(low)) return true;
       if (/^whenever you tap this land for mana, target opponent creates an? \d+\/\d+ \w+ \w+ creature tokens?\.?$/.test(low)) return true;
       if (/^whenever you tap a land for mana, add one mana of any type that land produced\.?$/.test(low)) return true;
+      if (/^your opponents play with their hands revealed\.?$/.test(low)) return true;
+      if (/^if you tap a permanent for mana, it produces (?:twice|three times) as much of that mana instead\.?$/.test(low)) return true;
+      if (/^cards in graveyards can'?t be the targets of spells or abilities\.?$/.test(low)) return true;
       if (/^whenever another artifact or creature is put into a graveyard from the battlefield, put a \+1\/\+1 counter on equipped creature\.?$/.test(low)) return true;
       if (/^(equipped|enchanted) creature can'?t be blocked( and has [a-z, ]+)?\.?$/.test(low)) return true;
       if (/^channel\s*—\s*\{[^}]+\}(?:\{[^}]+\})*,\s*discard this card:/.test(low)) return true;

@@ -438,6 +438,12 @@ const CARD_ABILITIES = {
   "murmuring mystic": [{ trigger: "youCastSpell", spellTypeFilter: ["instant", "sorcery"], requiresTarget: false, label: "Murmuring Mystic — create a 1/1 blue Bird Illusion token with flying", effects: [{ type: "createToken", name: "Bird Illusion", tokenType: "Token Creature — Bird Illusion", power: "1", toughness: "1", colors: ["U"], keywords: ["Flying"] }] }],
   "fearless fledgling": [{ trigger: "landfall", requiresTarget: false, label: "Fearless Fledgling — +1/+1 counter, gains flying until end of turn", effects: [{ type: "addCountersToSelf", amount: 1 }, { type: "grantKeywordToSelf", keyword: "Flying" }] }],
   "redcap thief": [{ trigger: "etb", requiresTarget: false, label: "Redcap Thief — create a Treasure token", effects: [{ type: "createTreasureToken" }] }],
+  "coveted jewel": [{ trigger: "etb", requiresTarget: false, label: "Coveted Jewel — draw three cards", effects: [{ type: "drawCards", amount: 3 }] }],
+  // Zur the Enchanter -- "Whenever Zur attacks, you may search your library for an enchantment card with mana value 3 or less, put it onto the
+  // battlefield, then shuffle." (the search prompt has a Cancel, which is the "may")
+  "zur the enchanter": [{ trigger: "attack", requiresTarget: false, label: "Zur the Enchanter — search for an enchantment with mana value 3 or less, put it onto the battlefield", effects: [{ type: "tutorToHand", typeFilter: ["enchantment"], toBattlefield: true, maxCmc: 3 }] }],
+  // Tiamat -- five chained Dragon searches (each can be cancelled, which stops the chain). Not enforced: "if you cast it", "each have different names".
+  "tiamat": [{ trigger: "etb", requiresTarget: false, label: "Tiamat — search for up to five Dragon cards, put them into your hand", effects: [{ type: "tutorToHand", typeFilter: ["dragon"], thenEffects: [{ type: "tutorToHand", typeFilter: ["dragon"], thenEffects: [{ type: "tutorToHand", typeFilter: ["dragon"], thenEffects: [{ type: "tutorToHand", typeFilter: ["dragon"], thenEffects: [{ type: "tutorToHand", typeFilter: ["dragon"] }] }] }] }] }] }],
   "thickest in the thicket": [
     { trigger: "etb", requiresTarget: true, targetKind: "creature", label: "Thickest in the Thicket — put X +1/+1 counters on target creature, X = its power", effects: [{ type: "addCountersEqualToTargetPower" }] },
     { trigger: "endStep", requiresTarget: false, label: "Thickest in the Thicket — draw two cards if you control the creature with the greatest power", effects: [{ type: "drawTwoIfGreatestPower" }] }
@@ -1334,6 +1340,13 @@ const ACTIVATED_ABILITIES = {
   // dual land's "T: add X or Y" is -- manaAbility:true is what makes that distinction real (see
   // activateAbility and the tap handler's own comments for why this can't just be the same
   // tap-for-free-mana shortcut every land/dork already uses).
+  // Coveted Jewel -- "{T}: Add three mana of any one color." (its enter-draw is in CARD_ABILITIES, the steal in fireUnblockedAttackTriggers)
+  "coveted jewel": [{ cost: { tap: true }, manaAbility: true, label: "Coveted Jewel — Add three mana of any one color", effects: [{ type: "chooseManaAnyColor", amount: 3, sourceName: "Coveted Jewel" }] }],
+  // Command Beacon -- "{T}, Sacrifice this land: Put your commander into your hand from the command zone." (its {T}: Add {C} is the plain land tap)
+  "command beacon": [{ cost: { tap: true, sacrifice: true }, requiresTarget: true, targetKind: "ownCommanderInZone", label: "Command Beacon — put your commander into your hand from the command zone", effects: [{ type: "putCommanderFromZoneToHand" }] }],
+  // Silent Gravestone -- "{4}, {T}: Exile this artifact and all cards from all graveyards. Draw a card." (the "graveyard cards can't be targeted"
+  // half is graveyardTargetsBlocked, checked in resolveChosenTarget)
+  "silent gravestone": [{ cost: { mana: "{4}", tap: true }, requiresTarget: false, label: "Silent Gravestone — exile this artifact and all graveyards, draw a card", effects: [{ type: "exileSelfAndAllGraveyardsThenDraw" }] }],
   "azorius signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Azorius Signet — Add {W}{U}", effects: [{ type: "addFixedMana", colors: ["W", "U"] }] }],
   "dimir signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Dimir Signet — Add {U}{B}", effects: [{ type: "addFixedMana", colors: ["U", "B"] }] }],
   "rakdos signet": [{ cost: { mana: "{1}", tap: true }, manaAbility: true, label: "Rakdos Signet — Add {B}{R}", effects: [{ type: "addFixedMana", colors: ["B", "R"] }] }],
@@ -3351,6 +3364,9 @@ function isSentenceGenericallyAutomated(sentence) {
   if (/^when this (?:artifact|creature|permanent) enters,\s*draw (a|\d+) cards?\.?$/.test(low)) return true;
   if (/^whenever you tap this land for mana, target opponent creates an? \d+\/\d+ \w+ \w+ creature tokens?\.?$/.test(low)) return true;
   if (/^whenever you tap a land for mana, add one mana of any type that land produced\.?$/.test(low)) return true;
+  if (/^your opponents play with their hands revealed\.?$/.test(low)) return true;
+  if (/^if you tap a permanent for mana, it produces (?:twice|three times) as much of that mana instead\.?$/.test(low)) return true;
+  if (/^cards in graveyards can'?t be the targets of spells or abilities\.?$/.test(low)) return true;
   if (/^whenever another artifact or creature is put into a graveyard from the battlefield, put a \+1\/\+1 counter on equipped creature\.?$/.test(low)) return true;
   if (/^(equipped|enchanted) creature can'?t be blocked( and has [a-z, ]+)?\.?$/.test(low)) return true;
   if (/^channel\s*—\s*\{[^}]+\}(?:\{[^}]+\})*,\s*discard this card:/.test(low)) return true;
@@ -4977,7 +4993,8 @@ const EFFECTS = {
     if (!p) return;
     // Goldspan Dragon's upgrade is Treasure-specific -- Phyrexian Altar's own mana must not get it.
     const upgraded = params.sourceName !== "Phyrexian Altar" && Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /treasures you control have .*add two mana of any one color/i.test(c.text || ""));
-    p.pendingFreeManaChoice = { amount: upgraded ? 2 : 1 };
+    // Coveted Jewel -- "Add THREE mana of any one color" (params.amount): one color pick, that many of it.
+    p.pendingFreeManaChoice = { amount: params.amount || (upgraded ? 2 : 1) };
     const sock = io.sockets.sockets.get(ctx.controllerId);
     if (sock) sock.emit("chooseMana", { cardId: "__free__", cardName: params.sourceName || "Mana source", options: ["W", "U", "B", "R", "G"] });
   },
@@ -5563,6 +5580,31 @@ const EFFECTS = {
       firesAtPhase: "End Step", controllerId: ctx.controllerId, sourceCard: card,
       label: `${card.name || "A commander"} — return to the Command Zone (Hellkite Courser)`, effects: [{ type: "returnCommanderToZoneById", targetCardId: card.id }]
     });
+  },
+  // Command Beacon -- the hand-bound sibling of putCommanderFromZoneWithHaste (chosenTargetId is the commander's slot). battlefieldId marks it as
+  // out of the command zone, exactly like a commander on the battlefield, so it can't be fetched twice; casting it from hand works like any card.
+  putCommanderFromZoneToHand(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    const slot = parseInt(params.chosenTargetId, 10);
+    const cmd = p && p.commanders[slot];
+    if (!cmd || cmd.battlefieldId) return;
+    const card = spawnBattlefieldCard(lobby, { ...cmd, owner: ctx.controllerId, zoneType: "hand", faceDown: true, isCommander: true });
+    cmd.battlefieldId = card.id;
+    pushLog(lobby, `${p.name} puts ${cmd.name || "their commander"} into their hand from the command zone`);
+    broadcastPlayers(lobby);
+  },
+  // Silent Gravestone -- "Exile this artifact and all cards from all graveyards. Draw a card."
+  exileSelfAndAllGraveyardsThenDraw(lobby, ctx) {
+    const self = ctx.sourceCard && lobby.cards[ctx.sourceCard.id];
+    if (self) exileCardInternal(lobby, self);
+    Object.values(lobby.players).forEach((pl) => {
+      if (!pl.exile) pl.exile = [];
+      const gy = (pl.graveyard || []).splice(0);
+      gy.forEach((e) => pl.exile.push(e));
+    });
+    pushLog(lobby, "All cards in all graveyards were exiled");
+    broadcastPlayers(lobby);
+    drawN(lobby, ctx.controllerId, 1);
   },
   // A specific, pre-chosen commander (by its CURRENT battlefield id, baked in at queue time)
   // returning directly to the Command Zone -- not dying, so this bypasses
@@ -9499,7 +9541,19 @@ function applyCommandersToPlayer(p, commanders) {
   }
 }
 
+// Telepathy -- "Your opponents play with their hands revealed." A hand is revealed to everyone while a permanent controlled by ANOTHER player has that
+// text. refreshRevealedHands (in broadcastPlayers) re-sends the hand cards whenever this changes.
+function handIsRevealed(lobby, ownerId) {
+  return Object.values(lobby.cards).some((c) => c.owner !== ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /your opponents play with their hands revealed/i.test(c.text || ""));
+}
+function refreshRevealedHands(lobby) {
+  const sig = Object.keys(lobby.players).filter((pid) => handIsRevealed(lobby, pid)).sort().join(",");
+  if (sig === (lobby._handRevealSig || "")) return;
+  lobby._handRevealSig = sig;
+  Object.values(lobby.cards).filter((c) => c.zoneType === "hand").forEach((c) => broadcastCard(lobby, c));
+}
 function maskCard(card, viewerId, lobby) {
+  if (card.faceDown && card.owner !== viewerId && card.zoneType === "hand" && lobby && handIsRevealed(lobby, card.owner)) return { ...card, faceDown: false };
   if (card.faceDown && card.owner !== viewerId) {
     return {
       id: card.id, tapped: card.tapped, faceDown: true, zoneType: card.zoneType, owner: card.owner, ownerColor: card.ownerColor,
@@ -9623,6 +9677,7 @@ function broadcastPlayers(lobby) {
   checkStateBasedSacrificeConditions(lobby); // Tethered Griffin -- see its own comment for why this is the right choke point
   checkLethalToughness(lobby); // Toxic Deluge and any future non-combat toughness reducer -- see its own comment
   checkDarkDepthsIceCounters(lobby); // Dark Depths -- see its own comment
+  refreshRevealedHands(lobby); // Telepathy -- see handIsRevealed
   for (const sid of lobbySocketIds(lobby)) {
     const sock = io.sockets.sockets.get(sid);
     if (sock) sock.emit("players", playersView(lobby, sid));
@@ -9835,6 +9890,30 @@ function checkStateBasedSacrificeConditions(lobby) {
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
   });
+}
+// Coveted Jewel -- "Whenever one or more creatures an opponent controls attack you and aren't blocked, that player draws three cards and gains control of
+// this artifact. Untap it." Once per attacking opponent that has at least one unblocked attacker aimed at `defenderId`, after that defender declared
+// blocks. Generic text-scan on the defender's permanents (no name table). Resolved inline rather than through the stack -- a disclosed simplification:
+// it cannot be responded to, but it does happen before combat damage like the real trigger.
+function fireUnblockedAttackTriggers(lobby, defenderId) {
+  const attackerOwners = new Set();
+  Object.keys(lobby.combat.attackers || {}).forEach((aid) => {
+    if (lobby.combat.attackers[aid] !== defenderId) return;
+    const a = lobby.cards[aid];
+    if (!a || a.owner === defenderId || (lobby.combat.blocks[aid] || []).length > 0) return;
+    attackerOwners.add(a.owner);
+  });
+  if (!attackerOwners.size) return;
+  Object.values(lobby.cards).filter((c) => c.owner === defenderId && c.zoneType !== "hand" && c.zoneType !== "stack"
+    && /whenever one or more creatures an opponent controls attack you and aren'?t blocked, that player draws three cards and gains control of this artifact/i.test(c.text || ""))
+    .forEach((jewel) => {
+      const thief = [...attackerOwners][0];
+      if (!lobby.players[thief]) return;
+      pushLog(lobby, `${jewel.name || "A permanent"} triggers: ${lobby.players[thief].name} had unblocked attackers`);
+      drawN(lobby, thief, 3);
+      if (changeControl(lobby, jewel, thief, {})) { jewel.tapped = false; broadcastCard(lobby, jewel); }
+      broadcastPlayers(lobby);
+    });
 }
 // Dark Depths -- "When Dark Depths has no ice counters on it, sacrifice it. If you do, create Marit
 // Lage, a legendary 20/20 black Avatar creature token with flying and indestructible." Same
@@ -10769,8 +10848,14 @@ function finalizeTargetChoice(lobby, entry, chosenIds) {
 // compatibility with every CARD_ABILITIES entry authored before spell targeting existed -- only
 // SPELL_ABILITIES entries ever set targetKind to "player"/"any"/"spell". Returns { ok, error } or
 // { ok: true }; doesn't mutate anything, just answers "is this a legal choice."
+// Silent Gravestone -- "Cards in graveyards can't be the targets of spells or abilities."
+const GRAVEYARD_TARGET_KINDS = new Set(["ownGraveyardCreature", "ownGraveyard", "ownGraveyardMvFilter", "ownGraveyardTypeList", "anyGraveyardCreature"]);
+function graveyardTargetsBlocked(lobby) {
+  return Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /cards in graveyards can'?t be the targets of spells or abilities/i.test(c.text || ""));
+}
 function resolveChosenTarget(lobby, entry, targetId) {
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
+  if (GRAVEYARD_TARGET_KINDS.has(targetKind) && graveyardTargetsBlocked(lobby)) return { ok: false, error: "Cards in graveyards can't be targeted (Silent Gravestone)." };
   if (targetKind === "player") {
     if (!lobby.players[targetId]) return { ok: false, error: "Choose a player." };
     if (cardTypeProtectionBlocks(lobby, targetId, entry.spellCard || entry.sourceCard)) return { ok: false, error: "That player has protection from this." };
@@ -14175,11 +14260,20 @@ io.on("connection", (socket) => {
   }
   // Mirari's Wake -- "Whenever you tap a land for mana, add one mana of any type that land produced." One extra mana of the color just produced for
   // each such permanent the tapper controls. Returns how many extra mana were added (so an undo can take them back too).
+  // Also Nyxbloom Ancient / Mana Reflection -- "If you tap a permanent for mana, it produces three times / twice as much of that mana instead": +2 / +1
+  // extra per such permanent, for ANY permanent tapped (not just lands). A mana ability that goes through activateAbility (signets, Sol Ring) isn't covered.
   function applyLandManaDoublers(lobby, card, playerId, color) {
-    if (classifyType(card.type) !== "mana") return 0;
     const p = lobby.players[playerId];
     if (!p) return 0;
-    const n = Object.values(lobby.cards).filter((c) => c.owner === playerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /whenever you tap a land for mana, add one mana of any type that land produced/i.test(c.text || "")).length;
+    const isLand = classifyType(card.type) === "mana";
+    let n = 0;
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner !== playerId || c.zoneType === "hand" || c.zoneType === "stack") return;
+      const txt = c.text || "";
+      if (isLand && /whenever you tap a land for mana, add one mana of any type that land produced/i.test(txt)) n += 1;
+      if (/if you tap a permanent for mana, it produces three times as much of that mana instead/i.test(txt)) n += 2;
+      if (/if you tap a permanent for mana, it produces twice as much of that mana instead/i.test(txt)) n += 1;
+    });
     if (!n) return 0;
     p.mana[color] = (p.mana[color] || 0) + n;
     broadcastPlayers(lobby);
@@ -16338,6 +16432,8 @@ io.on("connection", (socket) => {
     );
     lobby.combat.defendersPending = pendingWithBlockers;
     lobby.combat.step = pendingWithBlockers.length > 0 ? "declareBlockers" : "damage";
+    // A defender with nothing to block with never declares blockers, so every attacker aimed at them is unblocked right now (Coveted Jewel).
+    Array.from(defendersSet).filter((defId) => !pendingWithBlockers.includes(defId)).forEach((defId) => fireUnblockedAttackTriggers(lobby, defId));
     broadcastCombat(lobby);
     const activeName = lobby.players[socket.id] ? lobby.players[socket.id].name : "?";
     pushLog(lobby, `${activeName} declared ${Object.keys(validAttackers).length} attacker(s)`);
@@ -16412,6 +16508,7 @@ io.on("connection", (socket) => {
       lobby.combat.blocks[attackerId] = finalBlockers;
     }
     lobby.combat.defendersPending = lobby.combat.defendersPending.filter((id) => id !== socket.id);
+    fireUnblockedAttackTriggers(lobby, socket.id);
     broadcastCombat(lobby);
     const p = lobby.players[socket.id];
     pushLog(lobby, `${p ? p.name : "?"} declared blockers`);
