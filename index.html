@@ -324,9 +324,9 @@
     #main-menu-box > button, #main-menu-box .mm-section > button { width: 100%; margin-top: 10px; padding: 12px; font-size: 14px; }
     .mm-hint { font-size: 11px; color: #8a7a55; margin-top: 4px; margin-bottom: 4px; }
     /* Compact underlined tab strip for the Decks section (My Decks / Default Decks) -- deliberately small so the menu stays quiet. */
-    #main-menu-box .mm-tabs { display: flex; gap: 16px; margin-top: 10px; border-bottom: 1px solid #2e2618; }
-    #main-menu-box .mm-tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; box-shadow: none; padding: 3px 0; margin: 0 0 -1px; width: auto; min-width: 0; font-size: 12px; color: #8a7a55; cursor: pointer; }
-    #main-menu-box .mm-tab.active { color: #e8d9a8; border-bottom-color: #c9a94e; }
+    #main-menu-box .mm-tabs, #load-deck-modal .mm-tabs { display: flex; gap: 16px; margin-top: 10px; border-bottom: 1px solid #2e2618; }
+    #main-menu-box .mm-tab, #load-deck-modal .mm-tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; box-shadow: none; padding: 3px 0; margin: 0 0 -1px; width: auto; min-width: 0; font-size: 12px; color: #8a7a55; cursor: pointer; }
+    #main-menu-box .mm-tab.active, #load-deck-modal .mm-tab.active { color: #e8d9a8; border-bottom-color: #c9a94e; }
     /* Each block of related controls reads as its own bordered card instead of blending into one
        continuous stack -- shared by the Main Menu and the in-table ⚙ Menu, both of which used to
        be one flat column with no visual break between unrelated groups of controls. */
@@ -633,7 +633,7 @@
           <span id="turn-info">No game in progress</span>
           <span id="turn-timer" style="display:none;font-size:11px;margin-left:6px;"></span>
           <select id="load-deck-select" style="display:none;"><option value="">Load a deck...</option></select>
-          <button id="load-deck-btn" class="mini-btn secondary" onclick="loadSelectedDeck()" style="display:none;">Load Deck</button>
+          <button id="load-deck-btn" class="mini-btn secondary" onclick="openLoadDeckModal()" style="display:none;">Load Deck</button>
           <button id="start-game-btn" class="mini-btn" onclick="startGame()">Start Game</button>
           <button id="next-phase-btn" class="mini-btn" onclick="nextPhaseFn()" style="display:none;">Next Phase →</button>
           <button id="combat-action-btn" class="mini-btn" style="display:none;"></button>
@@ -774,6 +774,13 @@
       </div>
     </div>
 
+    <div class="modal-overlay" id="load-deck-modal">
+      <div class="modal-box" style="max-width:420px;">
+        <button class="modal-close-x" onclick="closeLoadDeckModal()" title="Close">✕</button>
+        <h2>Load a Deck</h2>
+        <div id="load-deck-modal-body"></div>
+      </div>
+    </div>
     <div class="modal-overlay" id="help-modal">
       <div class="modal-box">
         <button class="modal-close-x" onclick="closeHelpModal()" title="Close">✕</button>
@@ -2787,7 +2794,7 @@
         info.innerText = "No game in progress";
         const canLoad = !!(players[myId] && !amSpectator);
         startBtn.style.display = canLoad ? "inline-block" : "none";
-        loadSelect.style.display = canLoad ? "inline-block" : "none";
+        loadSelect.style.display = "none"; // replaced by the Load Deck popup (My Decks / Default Decks tabs)
         loadBtn.style.display = canLoad ? "inline-block" : "none";
         nextBtn.style.display = "none";
         document.getElementById("turn-timer").style.display = "none";
@@ -2888,6 +2895,61 @@
       if (e.key === "Enter") document.getElementById("confirm-modal-ok-btn").click();
     });
 
+    // Table-side deck loading: a small popup with the same My Decks / Default Decks tabs as the Main Menu. The Default Decks tab only
+    // exists when the server has default decks installed.
+    let loadDeckModalTab = "mine";
+    function openLoadDeckModal() {
+      loadDeckModalTab = "mine";
+      renderLoadDeckModal();
+      document.getElementById("load-deck-modal").style.display = "flex";
+    }
+    function closeLoadDeckModal() { document.getElementById("load-deck-modal").style.display = "none"; }
+    function renderLoadDeckModal() {
+      const body = document.getElementById("load-deck-modal-body");
+      const hasDefaults = myDefaultDecks.length > 0;
+      const tab = hasDefaults ? loadDeckModalTab : "mine";
+      body.innerHTML = "";
+      if (hasDefaults) {
+        const tabs = document.createElement("div");
+        tabs.className = "mm-tabs";
+        [["mine", "My Decks"], ["default", "Default Decks"]].forEach(([key, label]) => {
+          const b = document.createElement("button");
+          b.className = "mm-tab" + (tab === key ? " active" : "");
+          b.innerText = label;
+          b.onclick = () => { loadDeckModalTab = key; renderLoadDeckModal(); };
+          tabs.appendChild(b);
+        });
+        body.appendChild(tabs);
+      }
+      const list = document.createElement("div");
+      list.style.cssText = "margin-top:10px;max-height:55vh;overflow-y:auto;";
+      const rows = tab === "default"
+        ? myDefaultDecks.map((d) => ({ label: d.name, note: d.colors, onLoad: () => showConfirmModal(`Load the default deck "${d.name}"? This replaces your current library and commander slots.`, () => socket.emit("loadDefaultDeck", d.id)) }))
+        : myDeckNames.map((n) => ({ label: n, note: "", onLoad: () => showConfirmModal(`Load "${n}"? This replaces your current library (and commander slots, if the deck has any).`, () => socket.emit("loadDeck", n)) }));
+      if (!rows.length) {
+        list.innerHTML = "<div style='color:#8a7a55;font-size:12px;'>" + (tab === "default" ? "No default decks installed." : "No saved decks yet -- build one in the Deck Editor.") + "</div>";
+      }
+      rows.forEach((r) => {
+        const row = document.createElement("div");
+        row.className = "player-row";
+        const label = document.createElement("div");
+        label.style.cssText = "flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        label.innerText = r.label; label.title = r.label;
+        row.appendChild(label);
+        if (r.note) {
+          const note = document.createElement("div");
+          note.style.cssText = "font-size:11px;color:#8a7a55;letter-spacing:0.05em;";
+          note.innerText = r.note;
+          row.appendChild(note);
+        }
+        const btn = document.createElement("button");
+        btn.className = "mini-btn"; btn.innerText = "Load";
+        btn.onclick = () => { closeLoadDeckModal(); r.onLoad(); };
+        row.appendChild(btn);
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+    }
     function loadSelectedDeck() {
       const name = document.getElementById("load-deck-select").value;
       if (!name) return;
