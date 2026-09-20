@@ -2255,10 +2255,36 @@
       if (kind === "ownCreature") return "Click a creature you control to target it.";
       if (kind === "otherOwnCreature") return "Click ANOTHER creature you control to target it.";
       if (kind === "typeList") return `Click a ${(pendingTargetChoiceTypeFilter || []).join("/") || "matching"} permanent to target it.`;
+      const KIND_LABELS = {
+        anyPermanent: "Click any permanent (yours or an opponent's) to target it.",
+        land: "Click a land to target it.", ownLand: "Click a land you control.",
+        noncreaturePermanent: "Click a noncreature permanent to target it.",
+        ownNontokenArtifact: "Click a nontoken artifact you control.",
+        commander: "Click a commander on the battlefield to target it.",
+        attackingCreature: "Click an attacking creature to target it.",
+        attackingOrBlockingCreature: "Click an attacking or blocking creature to target it.",
+        opponentPermanent: "Click a permanent an opponent controls.",
+        opponentNonlandPermanent: "Click a nonland permanent an opponent controls.",
+        opponentCreature: "Click a creature an opponent controls.",
+        opponentNonbasicLand: "Click a nonbasic land an opponent controls.",
+        opponentArtifactEnchantmentNonbasicLand: "Click an artifact, enchantment, or nonbasic land an opponent controls.",
+        otherCreature: "Click ANOTHER creature to target it.",
+        creaturePowerAtMost: "Click a creature with low enough power to target it.",
+        creatureWithFlying: "Click a creature with flying to target it.",
+        legendaryPermanent: "Click a legendary permanent to target it.",
+        monocoloredCreature: "Click a monocolored creature to target it.",
+        colorlessNonlandPermanent: "Click a colorless nonland permanent to target it.",
+        nonlandPermanentNotControlledBy: "Vote: click a nonland permanent the caster doesn't control.",
+        opponent: "Click an opponent to target them.",
+        nonCreatureSpell: "Click a noncreature spell on the Stack to target it.",
+        instantOrSorcerySpell: "Click an instant or sorcery spell on the Stack to target it.",
+        spellMvFilter: "Click a spell on the Stack to target it."
+      };
+      if (KIND_LABELS[kind]) return KIND_LABELS[kind];
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
+      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone" || kind === "opponent" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "ownGraveyard" || kind === "ownGraveyardMvFilter") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
@@ -2297,10 +2323,43 @@
         const filter = pendingTargetChoiceTypeFilter || [];
         return filter.some((t) => (card.type || "").toLowerCase().includes(t));
       }
+      // Every other battlefield-card kind the server understands (see resolveChosenTarget). These used to fall through to the
+      // `card.zoneType === kind` line below, which can only ever be true for "creature" and "artifact" -- so e.g. Impossible Man's
+      // "anyPermanent", Kor Haven's "attackingCreature", "land", "opponentCreature" ... never lit up anything and were unclickable.
+      {
+        const z = card.zoneType, t = (card.type || "").toLowerCase();
+        const onBattlefield = z === "creature" || z === "artifact" || z === "mana";
+        const nonland = z === "creature" || z === "artifact";
+        const isAttacking = !!(currentCombat && currentCombat.attackers && currentCombat.attackers[card.id]);
+        const isBlocking = !!(currentCombat && currentCombat.blocks && Object.values(currentCombat.blocks).some((ids) => (ids || []).includes(card.id)));
+        switch (kind) {
+          case "anyPermanent": return onBattlefield;
+          case "land": return z === "mana";
+          case "ownLand": return z === "mana" && card.owner === myId;
+          case "noncreaturePermanent": return z === "artifact" || z === "mana";
+          case "ownNontokenArtifact": return z === "artifact" && card.owner === myId && !t.includes("token");
+          case "commander": return z === "creature" && !!card.isCommander;
+          case "attackingCreature": return z === "creature" && isAttacking;
+          case "attackingOrBlockingCreature": return z === "creature" && (isAttacking || isBlocking);
+          case "opponentPermanent": return onBattlefield && card.owner !== myId;
+          case "opponentNonlandPermanent": return nonland && card.owner !== myId;
+          case "opponentCreature": return z === "creature" && card.owner !== myId;
+          case "opponentNonbasicLand": return z === "mana" && card.owner !== myId && !t.includes("basic");
+          case "opponentArtifactEnchantmentNonbasicLand": return card.owner !== myId && (z === "artifact" || (z === "mana" && !t.includes("basic")));
+          case "otherCreature": return z === "creature" && card.id !== pendingTargetChoiceSourceId;
+          case "creaturePowerAtMost": return z === "creature";
+          case "creatureWithFlying": return z === "creature" && (card.keywords || []).some((k) => (k || "").toLowerCase() === "flying");
+          case "legendaryPermanent": return onBattlefield && t.includes("legendary");
+          case "monocoloredCreature": return z === "creature" && (card.colors || []).length === 1;
+          case "colorlessNonlandPermanent": return nonland && (card.colors || []).length === 0;
+          case "nonlandPermanentNotControlledBy": return nonland; // a vote (Council's Judgment): the server rejects the caster's own permanents
+        }
+      }
       return card.zoneType === kind;
     }
-    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any"; }
-    function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any" || kind === "playerOrPlaneswalker"; }
+    // Stack-targeting kinds (spells/abilities on the Stack panel) and player-targeting kinds.
+    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter"; }
+    function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any" || kind === "playerOrPlaneswalker" || kind === "opponent"; }
     // Serra's Emissary's ETB choice -- same fixed list as the server's own CARD_TYPE_CHOICES.
     const CARD_TYPE_CHOICES = ["Creature", "Instant", "Sorcery", "Artifact", "Enchantment", "Planeswalker", "Land"];
     function renderTargetChoiceModeButtons() {
