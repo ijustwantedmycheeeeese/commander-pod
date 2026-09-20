@@ -657,6 +657,7 @@
       <div id="target-choice-banner-text"></div>
       <div id="target-choice-banner-hint" style="font-size:11px;color:#a89a70;margin-top:2px;"></div>
       <div id="target-choice-mode-buttons" style="display:none;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
+      <button id="target-choice-skip-btn" class="mini-btn" style="margin-top:6px;display:none;" onclick="skipTargetChoice()" title="This step is optional -- skip it (or finish, for an any-number choice)">Skip / Done</button>
       <button class="mini-btn secondary" style="margin-top:6px;" onclick="cancelTargetChoice()" title="No legal target, or you just want out -- this makes it not happen">Cancel</button>
     </div>
 
@@ -1137,7 +1138,7 @@
         <p id="confirm-modal-text" style="font-size:13px;color:#ddd;white-space:pre-wrap;"></p>
         <input type="text" id="confirm-modal-input" style="width:100%;margin-top:2px;display:none;">
         <div class="modal-close-row">
-          <button class="mini-btn secondary" id="confirm-modal-cancel-btn" onclick="closeConfirmModal()">Cancel</button>
+          <button class="mini-btn secondary" id="confirm-modal-cancel-btn" onclick="cancelConfirmModal()">Cancel</button>
           <button class="mini-btn" id="confirm-modal-ok-btn">OK</button>
         </div>
       </div>
@@ -1725,6 +1726,7 @@
     let pendingTargetChoiceMinCmc = null; // minimum mana value required (Despark-style) when kind is "permanent"
     let pendingCommanderChoices = null; // [{slot,name}, ...] when kind is "ownCommanderInZone" (Hellkite Courser)
     let pendingTargetChoiceSourceId = null; // the ability/spell's own source card id -- needed to exclude it for "otherOwnCreature" (Giver of Runes/Kiki-Jiki's "ANOTHER creature you control")
+    let pendingTargetChoiceOptional = false; // a multi-target step the player may skip (Casualties of War) or finish (Eerie Interlude's "any number")
     let pendingTargetChoiceTypeFilter = null; // [type, type, ...] when kind is "typeList" (Acidic Slime's "artifact, enchantment, or land")
 
     // Non-null while an OPPONENT'S ability is offering ME an optional payment (Smothering Tithe,
@@ -1884,6 +1886,7 @@
       if (grantedAbilityLooksAutomated(sentence)) return true;
       if (/^when this (?:artifact|creature|permanent) enters,\s*draw (a|\d+) cards?\.?$/.test(low)) return true;
       if (/^whenever you tap this land for mana, target opponent creates an? \d+\/\d+ \w+ \w+ creature tokens?\.?$/.test(low)) return true;
+      if (/^whenever you tap a land for mana, add one mana of any type that land produced\.?$/.test(low)) return true;
       if (/^whenever another artifact or creature is put into a graveyard from the battlefield, put a \+1\/\+1 counter on equipped creature\.?$/.test(low)) return true;
       if (/^(equipped|enchanted) creature can'?t be blocked( and has [a-z, ]+)?\.?$/.test(low)) return true;
       if (/^channel\s*—\s*\{[^}]+\}(?:\{[^}]+\})*,\s*discard this card:/.test(low)) return true;
@@ -2036,6 +2039,7 @@
         pendingTargetChoiceSourceId = data.pendingTargetChoice.sourceCardId || null;
         pendingTargetChoiceTypeFilter = data.pendingTargetChoice.typeFilter || null;
         pendingTargetChoiceMinCmc = data.pendingTargetChoice.minCmc || null;
+        pendingTargetChoiceOptional = !!data.pendingTargetChoice.optional;
         pendingCommanderChoices = data.pendingTargetChoice.commanderChoices || null;
         showTargetChoiceBanner();
       } else {
@@ -2193,6 +2197,7 @@
       pendingTargetChoiceSourceId = data.sourceCardId || null;
       pendingTargetChoiceTypeFilter = data.typeFilter || null;
       pendingTargetChoiceMinCmc = data.minCmc || null;
+      pendingTargetChoiceOptional = !!data.optional;
       pendingCommanderChoices = data.commanderChoices || null;
       showTargetChoiceBanner();
       playTargetNeededCue();
@@ -2396,6 +2401,7 @@
       document.getElementById("target-choice-banner-text").innerText = `Choose a target for: ${pendingTargetChoiceLabel}`;
       document.getElementById("target-choice-banner-hint").innerText = targetKindLabel(pendingTargetChoiceKind);
       renderTargetChoiceModeButtons();
+      document.getElementById("target-choice-skip-btn").style.display = pendingTargetChoiceOptional ? "" : "none";
       document.getElementById("target-choice-banner").style.display = "flex";
     }
     // Called from renderCard's onclick -- any card, regardless of owner, same "anyone can Target
@@ -2416,6 +2422,10 @@
     // The escape hatch: real Magic auto-fizzles a triggered ability with zero legal targets, which
     // this app doesn't check for when queuing one, so this is the manual way out of a choice that
     // can't actually be satisfied (or one you just don't want to deal with right now).
+    function skipTargetChoice() {
+      if (!pendingTargetChoiceId) return;
+      socket.emit("skipTargetChoice", pendingTargetChoiceId);
+    }
     function cancelTargetChoice() {
       if (!pendingTargetChoiceId) return;
       const id = pendingTargetChoiceId;
@@ -2877,9 +2887,25 @@
       document.getElementById("confirm-modal").style.display = "flex";
       setTimeout(() => input.focus(), 0);
     }
+    // A two-way choice (Play as a land / Cast the spell) built on the same modal: both buttons DO something, unlike a plain confirm's Cancel.
+    let confirmModalOnCancel = null;
+    function showChoiceModal(message, okLabel, cancelLabel, onOk, onCancel) {
+      showConfirmModal(message, onOk);
+      document.getElementById("confirm-modal-ok-btn").innerText = okLabel;
+      document.getElementById("confirm-modal-cancel-btn").innerText = cancelLabel;
+      confirmModalOnCancel = onCancel;
+    }
+    function cancelConfirmModal() {
+      const fn = confirmModalOnCancel;
+      closeConfirmModal();
+      if (fn) fn();
+    }
     function closeConfirmModal() {
       document.getElementById("confirm-modal").style.display = "none";
       confirmModalOnConfirm = null;
+      confirmModalOnCancel = null;
+      document.getElementById("confirm-modal-ok-btn").innerText = "OK";
+      document.getElementById("confirm-modal-cancel-btn").innerText = "Cancel";
     }
     document.getElementById("confirm-modal-ok-btn").onclick = () => {
       const fn = confirmModalOnConfirm;
@@ -4047,6 +4073,12 @@
       while ((m = re.exec(t))) {
         const colorFilter = m[1] ? PROTECTION_COLOR_WORDS[m[1].toLowerCase()] : null;
         clauses.push({ powerBonus: parseInt(m[2], 10) || 0, toughnessBonus: parseInt(m[3], 10) || 0, colorFilter });
+      }
+      // Mirari's Wake -- plain self-inclusive untyped anthem, mirrors server.js's plainRe clause.
+      const plainRe = /(?:^|\n|\. )creatures you control get ([+-]\d+)\/([+-]\d+)(?![^.\n]*(?:until end of turn|for each|as long as))/gi;
+      let pm;
+      while ((pm = plainRe.exec(t))) {
+        clauses.push({ powerBonus: parseInt(pm[1], 10) || 0, toughnessBonus: parseInt(pm[2], 10) || 0, colorFilter: null, includesSelf: true });
       }
       return clauses;
     }
@@ -5610,7 +5642,24 @@
       applyAllTargetRings();
     }
 
+    // Modal double-faced "Spell // Land" cards (Khalni Ambush // Khalni Territory ...): ask which face to play.
+    function mdfcFaces(card) {
+      const faces = ((card && card.type) || "").split(" // ");
+      if (faces.length !== 2 || /land/i.test(faces[0]) || !/land/i.test(faces[1])) return null;
+      const names = ((card && card.name) || "").split(" // ");
+      return { spell: names[0] || card.name, land: names[1] || "the land face" };
+    }
     function requestPlayCard(id) {
+      const card = allCards[id];
+      const mdfc = card && card.zoneType === "hand" && mdfcFaces(card);
+      if (mdfc) {
+        showChoiceModal(`${card.name}: play ${mdfc.land} as a land, or cast ${mdfc.spell}?`, `Play ${mdfc.land} (land)`, `Cast ${mdfc.spell}`,
+          () => socket.emit("playCard", { id, x: 0, face: "land" }), () => requestPlayCardFace(id));
+        return;
+      }
+      requestPlayCardFace(id);
+    }
+    function requestPlayCardFace(id) {
       const card = allCards[id];
       if (card && needsXPrompt(card)) {
         showPromptModal("Choose a value for X:", "0", (val) => socket.emit("playCard", { id, x: parseInt(val) || 0 }));

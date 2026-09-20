@@ -3041,6 +3041,39 @@ const SPELL_ABILITIES = {
   "chemister's insight": { label: "Chemister's Insight — draw two cards", effects: [{ type: "drawCards", amount: 2, target: "controller" }] },
   "council's judgment": { label: "Council's Judgment — each player votes for a nonland permanent the caster doesn't control, exile each with the most votes or tied", effects: [{ type: "startVote", mode: "exileMost", targetKind: "nonlandPermanentNotControlledBy", label: "Council's Judgment — vote for a nonland permanent the caster doesn't control" }] },
   "plea for power": { label: "Plea for Power — each player votes time or knowledge (time: extra turn; knowledge or tie: draw three)", effects: [{ type: "startVote", mode: "timeKnowledge", targetKind: "creatureType", label: "Plea for Power — type \"time\" or \"knowledge\" to vote" }] },
+  // ---- Wave 51 spells: multi-target chains (`extraTargets`, see checkChainTargetRules) ----
+  "khalni ambush": { label: "Khalni Ambush — target creature you control fights target creature you don't control", effects: [{ type: "fightTargets" }], requiresTarget: true, targetKind: "ownCreature",
+    extraTargets: [{ targetKind: "opponentCreature", label: "Khalni Ambush — now choose the creature you don't control" }] },
+  "decimate": { label: "Decimate — destroy target artifact, target creature, target enchantment, and target land (start with the artifact)", effects: [{ type: "destroyTargets" }], requiresTarget: true, targetKind: "typeList", typeFilter: ["artifact"],
+    extraTargets: [
+      { targetKind: "typeList", typeFilter: ["creature"], label: "Decimate — now choose the target creature" },
+      { targetKind: "typeList", typeFilter: ["enchantment"], label: "Decimate — now choose the target enchantment" },
+      { targetKind: "land", label: "Decimate — now choose the target land" }
+    ] },
+  // "Choose one or more" as five optional target steps: skipping a step = not choosing that mode (at least one real target is required).
+  "casualties of war": { label: "Casualties of War — destroy target artifact (skip any mode you don't want)", effects: [{ type: "destroyTargets" }], requiresTarget: true, optional: true, targetKind: "typeList", typeFilter: ["artifact"],
+    extraTargets: [
+      { targetKind: "typeList", typeFilter: ["creature"], optional: true, label: "Casualties of War — destroy target creature (or Skip)" },
+      { targetKind: "typeList", typeFilter: ["enchantment"], optional: true, label: "Casualties of War — destroy target enchantment (or Skip)" },
+      { targetKind: "land", optional: true, label: "Casualties of War — destroy target land (or Skip)" },
+      { targetKind: "typeList", typeFilter: ["planeswalker"], optional: true, label: "Casualties of War — destroy target planeswalker (or Skip)" }
+    ] },
+  "raise the draugr": { label: "Raise the Draugr — choose one", modes: [
+    { label: "Raise the Draugr — return target creature card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["creature"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] },
+    { label: "Raise the Draugr — return two target creature cards that share a creature type from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["creature"],
+      extraTargets: [{ targetKind: "ownGraveyardTypeList", typeFilter: ["creature"], sharesCreatureType: true, label: "Raise the Draugr — now the second creature card, sharing a creature type with the first" }],
+      effects: [{ type: "returnOwnGraveyardEntriesToHand" }] }
+  ] },
+  "eerie interlude": { label: "Eerie Interlude — exile any number of target creatures you control, return them at the next end step", effects: [{ type: "exileTargetsReturnAtEndStep" }], requiresTarget: true, targetKind: "ownCreature",
+    extraTargets: [{ targetKind: "ownCreature", optional: true, repeat: true, label: "Eerie Interlude — another creature you control, or press Done" }] },
+  "you happen on a glade": { label: "You Happen On a Glade — choose one", modes: [
+    { label: "Journey On — search for up to two basic lands, put them into your hand", requiresTarget: false, effects: [{ type: "tutorToHand", typeFilter: ["basic"], thenEffects: [{ type: "tutorToHand", typeFilter: ["basic"] }] }] },
+    { label: "Make Camp — return target permanent card from your graveyard to your hand", requiresTarget: true, targetKind: "ownGraveyardTypeList", typeFilter: ["artifact", "creature", "enchantment", "land", "planeswalker", "battle"], effects: [{ type: "returnOwnGraveyardEntryToHand" }] }
+  ] },
+  "saheeli's artistry": { label: "Saheeli's Artistry — create a token that's a copy of target artifact (Skip for the creature mode only)", effects: [{ type: "saheelisArtistry" }], requiresTarget: true, optional: true, targetKind: "typeList", typeFilter: ["artifact"],
+    extraTargets: [{ targetKind: "typeList", typeFilter: ["creature"], optional: true, label: "Saheeli's Artistry — create a token copy of target creature that's also an artifact (or Skip)" }] },
+  // "Any number" of hand cards: a repeating optional handCard step (allowEmpty -- zero cards is legal).
+  "valakut awakening": { label: "Valakut Awakening — put any number of cards from your hand on the bottom of your library, then draw that many plus one", effects: [{ type: "bottomHandCardsDrawThatManyPlusOne" }], requiresTarget: true, targetKind: "handCard", repeat: true, allowEmpty: true, repeatLabel: "Valakut Awakening — another card from your hand to put on the bottom, or press Done" },
   // ---- Wave 50 spells ----
   "klauth's will": { label: "Klauth's Will — choose one (both if you control a commander)", bothIfCommander: true, modes: [
     { label: "Klauth's Will — Breathe Flame: X damage to each creature without flying", requiresTarget: false, effects: [{ type: "damageEachCreatureWithoutFlying" }] },
@@ -3317,6 +3350,7 @@ function isSentenceGenericallyAutomated(sentence) {
   if (grantMatches.some((g) => grantedAbilityFromText(g.abilityText) || grantedTriggeredAbilityFromText(g.abilityText))) return true;
   if (/^when this (?:artifact|creature|permanent) enters,\s*draw (a|\d+) cards?\.?$/.test(low)) return true;
   if (/^whenever you tap this land for mana, target opponent creates an? \d+\/\d+ \w+ \w+ creature tokens?\.?$/.test(low)) return true;
+  if (/^whenever you tap a land for mana, add one mana of any type that land produced\.?$/.test(low)) return true;
   if (/^whenever another artifact or creature is put into a graveyard from the battlefield, put a \+1\/\+1 counter on equipped creature\.?$/.test(low)) return true;
   if (/^(equipped|enchanted) creature can'?t be blocked( and has [a-z, ]+)?\.?$/.test(low)) return true;
   if (/^channel\s*—\s*\{[^}]+\}(?:\{[^}]+\})*,\s*discard this card:/.test(low)) return true;
@@ -4896,6 +4930,8 @@ const EFFECTS = {
     const data = {};
     COPY_FIELDS.forEach((f) => { data[f] = source[f]; });
     if (params.stripLegendary) data.type = (data.type || "").replace(/\blegendary\s+/i, "");
+    // Saheeli's Artistry -- "except it's an artifact in addition to its other types."
+    if (params.addTypeWord && !new RegExp(params.addTypeWord, "i").test(data.type || "")) data.type = `${params.addTypeWord} ${data.type || ""}`.trim();
     if (params.addKeywords) data.keywords = [...new Set([...(data.keywords || []), ...params.addKeywords])];
     data.owner = ctx.controllerId;
     data.zoneType = classifyType(data.type);
@@ -7009,6 +7045,86 @@ const EFFECTS = {
     EFFECTS.damageTarget(lobby, { controllerId: me.owner, sourceCard: { id: me.id } }, { amount: myPower, chosenTargetId: foe.id });
     EFFECTS.damageTarget(lobby, { controllerId: foe.owner, sourceCard: { id: foe.id } }, { amount: foePower, chosenTargetId: me.id });
   },
+  // ---- Multi-target spell effects (see the "Multi-target spells" block above chooseTargetFor's helpers): each reads
+  // params.chosenTargetIds, which finalizeTargetChoice fills in step order (null where an optional step was skipped). ----
+  // Khalni Ambush -- "Target creature you control fights target creature you don't control." Reuses fightTarget with the first
+  // target as the fighting creature.
+  fightTargets(lobby, ctx, params) {
+    const [aId, bId] = params.chosenTargetIds || [];
+    const a = lobby.cards[aId], b = lobby.cards[bId];
+    if (!a || !b || a.zoneType !== "creature" || b.zoneType !== "creature") return;
+    EFFECTS.fightTarget(lobby, { controllerId: ctx.controllerId, sourceCard: { id: a.id } }, { chosenTargetId: b.id });
+  },
+  // Decimate / Casualties of War -- "Destroy target artifact, target creature, ..." One destroyTarget per chosen (non-null) target.
+  destroyTargets(lobby, ctx, params) {
+    (params.chosenTargetIds || [params.chosenTargetId]).filter((t) => t != null).forEach((id) => EFFECTS.destroyTarget(lobby, ctx, { ...params, chosenTargetId: id }));
+  },
+  // Raise the Draugr mode 2 -- both graveyard cards go to hand.
+  returnOwnGraveyardEntriesToHand(lobby, ctx, params) {
+    (params.chosenTargetIds || [params.chosenTargetId]).filter((t) => t != null).forEach((id) => EFFECTS.returnOwnGraveyardEntryToHand(lobby, ctx, { ...params, chosenTargetId: id }));
+  },
+  // Eerie Interlude -- "Exile any number of target creatures you control. Return those cards to the battlefield under their owner's
+  // control at the beginning of the next end step." All the exiled cards come back together in one delayed trigger (tokens are simply gone).
+  exileTargetsReturnAtEndStep(lobby, ctx, params) {
+    const returning = [];
+    (params.chosenTargetIds || [params.chosenTargetId]).filter((t) => t != null).forEach((id) => {
+      const card = lobby.cards[id];
+      if (!card || card.zoneType !== "creature") return;
+      const ownerId = card.originalOwner || card.owner;
+      const owner = lobby.players[ownerId];
+      if (!owner) return;
+      const entry = toEntry(card);
+      const isTokenCard = (card.type || "").toLowerCase().includes("token");
+      exileCardInternal(lobby, card);
+      const at = owner.exile.findIndex((e) => e.id === entry.id);
+      if (at === -1) return; // a commander went back to the command zone instead of exile
+      if (isTokenCard) { owner.exile.splice(at, 1); return; }
+      returning.push({ entryId: entry.id, ownerId });
+    });
+    broadcastPlayers(lobby);
+    if (returning.length) queueDelayedTrigger(lobby, {
+      firesAtPhase: "End Step", controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
+      label: `${(ctx.sourceCard && ctx.sourceCard.name) || "Exiled creatures"} — return the exiled creatures to the battlefield`,
+      effects: [{ type: "returnExiledEntriesToBattlefield", returning }]
+    });
+  },
+  returnExiledEntriesToBattlefield(lobby, ctx, params) {
+    (params.returning || []).forEach(({ entryId, ownerId }) => {
+      const owner = lobby.players[ownerId];
+      if (!owner) return;
+      const idx = owner.exile.findIndex((e) => e.id === entryId);
+      if (idx === -1) return;
+      const [entry] = owner.exile.splice(idx, 1);
+      const newCard = spawnBattlefieldCard(lobby, { ...entry, owner: ownerId, zoneType: classifyType(entry.type), faceDown: false });
+      fireEtbTriggers(lobby, newCard);
+    });
+    broadcastPlayers(lobby);
+  },
+  // Saheeli's Artistry -- "Choose one or both -- create a token that's a copy of target artifact; create a token that's a copy of target creature,
+  // except it's an artifact in addition to its other types." Two optional target steps (positional: [artifact, creature]).
+  saheelisArtistry(lobby, ctx, params) {
+    const [artifactId, creatureId] = params.chosenTargetIds || [params.chosenTargetId];
+    if (artifactId) EFFECTS.createTokenCopyOfTargetCreature(lobby, ctx, { chosenTargetId: artifactId });
+    if (creatureId) EFFECTS.createTokenCopyOfTargetCreature(lobby, ctx, { chosenTargetId: creatureId, addTypeWord: "Artifact" });
+  },
+  // Valakut Awakening -- "Put any number of cards from your hand on the bottom of your library, then draw that many cards plus one." The chosen
+  // hand cards arrive as chosenTargetIds (zero is legal: just draw one).
+  bottomHandCardsDrawThatManyPlusOne(lobby, ctx, params) {
+    const p = lobby.players[ctx.controllerId];
+    if (!p) return;
+    let n = 0;
+    (params.chosenTargetIds || [params.chosenTargetId]).filter((t) => t != null).forEach((id) => {
+      const c = lobby.cards[id];
+      if (!c || c.owner !== ctx.controllerId || c.zoneType !== "hand") return;
+      delete lobby.cards[id];
+      if (lobby.targets[id]) delete lobby.targets[id];
+      io.to(lobby.id).emit("cardRemove", id);
+      p.library.push(toEntry(c));
+      n++;
+    });
+    pushLog(lobby, `${p.name} puts ${n} card(s) from their hand on the bottom of their library`);
+    EFFECTS.drawCards(lobby, { controllerId: ctx.controllerId, sourceCard: ctx.sourceCard }, { amount: n + 1, target: "controller" });
+  },
   // Strength Bobblehead -- "Put X +1/+1 counters on target creature, where X is the number of
   // Bobbleheads you control."
   addCountersEqualToTypeCountControlled(lobby, ctx, params) {
@@ -7777,7 +7893,7 @@ function buildLobbyJoinedPayload(lobby, socketId) {
     combat: lobby.combat,
     stack: lobby.stack.map((c) => maskCard(c, socketId, lobby)),
     priority: lobby.priority,
-    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", sourceCardId: myPendingChoice.sourceCard && myPendingChoice.sourceCard.id, targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null, commanderChoices: myPendingChoice.commanderChoices || null }; })() : null,
+    pendingTargetChoice: myPendingChoice ? (() => { const src = myPendingChoice.spellCard || myPendingChoice.sourceCard; return { id: myPendingChoice.id, label: myPendingChoice.label, sourceImg: myPendingChoice.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", sourceCardId: myPendingChoice.sourceCard && myPendingChoice.sourceCard.id, targetKind: myPendingChoice.targetKind || myPendingChoice.targetZoneType || "creature", minCmc: myPendingChoice.minCmc || null, typeFilter: myPendingChoice.typeFilter || null, optional: !!myPendingChoice.optional, repeat: !!myPendingChoice.repeat, handTypeFilter: myPendingChoice.handTypeFilter || null, modes: myPendingChoice.modes ? myPendingChoice.modes.map((m) => m.label) : null, commanderChoices: myPendingChoice.commanderChoices || null }; })() : null,
     pendingOptionalPayment: myPendingPayment ? { id: myPendingPayment.id, label: myPendingPayment.label, costLabel: myPendingPayment.costLabel } : null,
     chat: lobby.chatLog,
     voiceRoster: Array.from(lobby.voiceParticipants),
@@ -7806,7 +7922,10 @@ function shuffle(arr) {
 
 function classifyType(type) {
   if (!type) return "artifact";
-  const t = type.toLowerCase();
+  // A "Spell // Land" modal double-faced card that still carries both faces (any path that doesn't go through playCard's face choice) is
+  // classified by its FRONT face; the land face is only ever chosen explicitly, see the playCard handler.
+  const faces = mdfcFaces(type);
+  const t = (faces ? faces[0] : type).toLowerCase();
   if (t.includes("land")) return "mana";
   if (t.includes("creature")) return "creature";
   return "artifact"; // artifacts, enchantments, planeswalkers, instants/sorceries, etc.
@@ -8661,6 +8780,13 @@ function anthemEffectsFromText(text) {
   while ((em = eachSingularRe.exec(t))) {
     clauses.push({ powerBonus: parseInt(em[2], 10) || 0, toughnessBonus: parseInt(em[3], 10) || 0, colorFilter: null, typeFilter: em[1].toLowerCase(), includesSelf: true });
   }
+  // Mirari's Wake / Glorious Anthem -- the plain self-inclusive UNTYPED anthem "Creatures you control get +1/+1" (no "other", no color/type word). Only
+  // an unconditional fixed bonus: "until end of turn", "for each" and "as long as" wordings are different mechanisms.
+  const plainRe = /(?:^|\n|\. )creatures you control get ([+-]\d+)\/([+-]\d+)(?![^.\n]*(?:until end of turn|for each|as long as))/gi;
+  let pm;
+  while ((pm = plainRe.exec(t))) {
+    clauses.push({ powerBonus: parseInt(pm[1], 10) || 0, toughnessBonus: parseInt(pm[2], 10) || 0, colorFilter: null, includesSelf: true });
+  }
   return clauses;
 }
 // Sedge Sliver -- "All Sliver creatures have 'This creature gets +1/+1 as long as you control a
@@ -9335,6 +9461,11 @@ const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 // Shape used for cards resting in library/graveyard/exile/commander-zone —
 // same attribute set as the archive, minus battlefield-only state (tapped, counters, etc).
+// A modal double-faced card whose front face is a spell/creature and whose back face is a land ("Instant // Land"): returns [front, back] or null.
+function mdfcFaces(type) {
+  const faces = (type || "").split(" // ");
+  return faces.length === 2 && !/land/i.test(faces[0]) && /land/i.test(faces[1]) ? faces : null;
+}
 function toEntry(c) {
   return {
     // Preserved so a graveyard/exile/library entry can be addressed as a real target (Reya
@@ -9343,7 +9474,7 @@ function toEntry(c) {
     // touches a zone list now relies on this being stable and unique (it's the same id the card
     // had while on the battlefield, never reused).
     id: c.id,
-    name: sanitizeCardStr(c.name, 200), img: sanitizeImgUrl(c.img), type: sanitizeCardStr(c.type || "", 100), manaCost: sanitizeCardStr(c.manaCost || "", 50),
+    name: sanitizeCardStr(c.name, 200), img: sanitizeImgUrl(c.img), type: sanitizeCardStr(c.mdfcType || c.type || "", 100), manaCost: sanitizeCardStr(c.manaCost || "", 50),
     cmc: c.cmc || 0, colors: c.colors || [], colorIdentity: c.colorIdentity || [],
     power: c.power, toughness: c.toughness, loyalty: c.loyalty,
     text: sanitizeCardStr(c.text || "", 3000), keywords: c.keywords || [], producedMana: c.producedMana || null,
@@ -10461,7 +10592,11 @@ function castSpell(lobby, card, casterId, logSuffix) {
         // Mental Misstep -- maxCmc (targetKind:"spellMvFilter") forwarded the same way minCmc/
         // typeFilter already are, a real gap found while building it (this field never had a caller
         // before, so its absence here was never noticed).
-        minCmc: spellAbility.minCmc || null, maxCmc: spellAbility.maxCmc != null ? spellAbility.maxCmc : null, typeFilter: spellAbility.typeFilter || null, logSuffix: logSuffix || ""
+        minCmc: spellAbility.minCmc || null, maxCmc: spellAbility.maxCmc != null ? spellAbility.maxCmc : null, typeFilter: spellAbility.typeFilter || null, logSuffix: logSuffix || "",
+        extraTargets: spellAbility.extraTargets || null, optional: !!spellAbility.optional || !!spellAbility.repeat, allowEmpty: !!spellAbility.allowEmpty,
+        // A spell whose own (first) step repeats ("any number of ...") re-asks that same step until Done, like extraTargets' repeat steps.
+        repeat: !!spellAbility.repeat, repeatSpec: spellAbility.repeat ? { targetKind: spellAbility.targetKind, typeFilter: spellAbility.typeFilter || null, handTypeFilter: spellAbility.handTypeFilter || null, optional: true, repeat: true, label: spellAbility.repeatLabel || spellAbility.label } : null,
+        handTypeFilter: spellAbility.handTypeFilter || null
       });
       return;
     }
@@ -10543,7 +10678,7 @@ function promptTargetChoice(lobby, entry) {
   // what they were told to click got a confusing rejection with no way to tell what went wrong.
   const targetKind = entry.targetKind || entry.targetZoneType || "creature";
   const src = entry.spellCard || entry.sourceCard;
-  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", sourceCardId: entry.sourceCard && entry.sourceCard.id, targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, typeFilter: entry.typeFilter || null, modes: entry.modes ? entry.modes.map((m) => m.label) : null, commanderChoices: entry.commanderChoices || null });
+  if (sock) sock.emit("chooseTarget", { id: entry.id, label: entry.label, sourceImg: entry.sourceCard.img, sourceColors: (src && src.colors) || [], sourceType: (src && src.type) || "", sourceCardId: entry.sourceCard && entry.sourceCard.id, targetKind, minCmc: entry.minCmc || null, handTypeFilter: entry.handTypeFilter || null, typeFilter: entry.typeFilter || null, optional: !!entry.optional, repeat: !!entry.repeat, modes: entry.modes ? entry.modes.map((m) => m.label) : null, commanderChoices: entry.commanderChoices || null });
 }
 // Discards any pending target choices belonging to a departing controller (a real disconnect/leave
 // or an elimination) -- otherwise the table would be stuck forever waiting on a target that will
@@ -10560,6 +10695,70 @@ function discardPendingTargetChoices(lobby, socketId) {
   // controlled by the departing one are left alone (the "if not" default still makes sense even if
   // the ability's controller has left).
   lobby.pendingOptionalPayments = lobby.pendingOptionalPayments.filter((e) => e.playerId !== socketId);
+}
+// ---- Multi-target spells ("extraTargets") ----
+// A spell/mode table entry may carry `extraTargets: [{ targetKind, typeFilter, label, optional, repeat, sharesCreatureType }, ...]` next to its own
+// first target. Each step is asked in turn through the ordinary pendingTargetChoices queue (the next step goes to the FRONT so it's the one
+// prompted); nothing reaches the stack until the chain is complete. The effects then receive `chosenTargetId` (the first real target) and
+// `chosenTargetIds` (every step's answer in order, null where an optional step was skipped). A `repeat` step keeps re-asking itself until the
+// player picks "Done" ("any number of target ..."). Reuses every existing targetKind/typeFilter validator per step.
+function checkChainTargetRules(lobby, entry, targetId) {
+  const prior = (entry.chosenTargetIds || []).filter((t) => t != null);
+  if (prior.includes(targetId)) return "That was already chosen as another target.";
+  if (entry.sharesCreatureType && prior.length) {
+    const p = lobby.players[entry.controllerId];
+    const subtypes = (type) => (((type || "").split(/—|-/)[1]) || "").toLowerCase().split(/\s+/).filter(Boolean);
+    const find = (id) => (p && (p.graveyard || []).find((e) => e.id === id)) || lobby.cards[id];
+    const mine = find(targetId);
+    const theirs = find(prior[0]);
+    if (mine && theirs) {
+      const a = subtypes(mine.type), b = subtypes(theirs.type);
+      const changeling = /changeling/i.test(`${mine.text || ""} ${theirs.text || ""}`);
+      if (!changeling && !a.some((t) => b.includes(t))) return "The two targets must share a creature type.";
+    }
+  }
+  return null;
+}
+function advanceTargetChain(lobby, entry, chosenIds) {
+  const spec = entry.repeat ? entry.repeatSpec : entry.extraTargets[0];
+  const rest = entry.repeat ? entry.extraTargets : entry.extraTargets.slice(1);
+  const { id: _oldId, ...base } = entry;
+  const next = {
+    ...base, id: newAbilityId(), chosenTargetIds: chosenIds, extraTargets: rest,
+    targetKind: spec.targetKind, typeFilter: spec.typeFilter || null, handTypeFilter: spec.handTypeFilter || null, minCmc: spec.minCmc || null,
+    label: spec.label || entry.label, optional: !!spec.optional, repeat: !!spec.repeat, repeatSpec: spec.repeat ? spec : null,
+    sharesCreatureType: !!spec.sharesCreatureType
+  };
+  lobby.pendingTargetChoices.unshift(next);
+}
+// The tail of a completed target choice: bake the answer(s) into the effects and put the spell/ability on the stack.
+function finalizeTargetChoice(lobby, entry, chosenIds) {
+  const primary = chosenIds.find((t) => t != null);
+  const multi = chosenIds.length > 1;
+  const effects = entry.effects.map((e) => (multi ? { ...e, chosenTargetId: primary, chosenTargetIds: chosenIds } : { ...e, chosenTargetId: primary }));
+  if (entry.kind === "castSpell") {
+    // Target chosen as part of casting, matching real Magic -- the prompt fires immediately when
+    // the spell is cast, not whenever it happens to resolve. The spell goes on the stack with its
+    // chosen target baked into _resolvedSpellEffects so resolveStackTop just runs it directly
+    // later, no second prompt.
+    entry.spellCard._resolvedSpellEffects = effects;
+    pushToStack(lobby, entry.spellCard, entry.controllerId);
+    const owner = lobby.players[entry.controllerId];
+    if (owner) pushLog(lobby, `${owner.name} cast ${entry.spellCard.name || "a spell"}${entry.logSuffix || ""}`);
+    // Diffusion Sliver -- "Whenever a Sliver creature you control becomes the target of a spell or ability an opponent controls,
+    // counter that spell or ability unless its controller pays {2}." (spells only; the trigger lands above the spell on the stack)
+    chosenIds.filter((t) => t != null).forEach((tid) => {
+      const slivered = lobby.cards[tid];
+      if (slivered && slivered.zoneType === "creature" && /sliver/i.test(slivered.type || "") && slivered.owner !== entry.controllerId) {
+        Object.values(lobby.cards).forEach((w) => {
+          if (w.owner !== slivered.owner || w.zoneType === "hand" || w.zoneType === "stack") return;
+          getAutomatedAbilities(w.name, "ownSliverTargetedByOpponentSpell").forEach((ab) => pushAbilityToStack(lobby, { sourceCard: w, controllerId: w.owner, label: ab.label, effects: (ab.effects || []).map((e) => ({ ...e, chosenTargetId: entry.spellCard.id })) }));
+        });
+      }
+    });
+  } else {
+    pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: entry.label, effects });
+  }
 }
 // Validates + resolves whatever the player clicked against what a pending choice actually wants.
 // targetKind defaults to the pre-existing "creature" (zoneType-matching) behavior for full backward
@@ -13783,13 +13982,21 @@ io.on("connection", (socket) => {
     const card = lobby.cards[id];
     const p = lobby.players[socket.id];
     if (!card || !p || card.owner !== socket.id) return;
+    // Modal double-faced "Spell // Land" cards (Khalni Ambush // Khalni Territory, Bala Ged Recovery // Bala Ged Sanctuary ...): the card is played
+    // as ONE face. The land face is asked for explicitly (data.face === "land"); anything else casts the front face. The played face's type line
+    // replaces the combined one for the rest of the play (so it is classified/timed as that face), and the full line is remembered in mdfcType
+    // so toEntry can put it back whenever the card returns to hand/graveyard/exile.
+    const mdfc = card.zoneType === "hand" ? mdfcFaces(card.type) : null;
+    const fullType = card.type;
+    if (mdfc) { card.mdfcType = fullType; card.type = (typeof data === "object" && data.face === "land") ? mdfc[1] : mdfc[0]; }
+    const revertFace = () => { if (mdfc) card.type = fullType; };
     const targetZoneType = classifyType(card.type);
     const timing = checkTiming(lobby, socket.id, card);
-    if (!timing.ok) { socket.emit("actionError", timing.error); return; }
+    if (!timing.ok) { revertFace(); socket.emit("actionError", timing.error); return; }
     const castCheck = canCastSpells(lobby, socket.id, card);
-    if (!castCheck.ok) { socket.emit("actionError", castCheck.error); return; }
+    if (!castCheck.ok) { revertFace(); socket.emit("actionError", castCheck.error); return; }
     const result = attemptPlay(lobby, p, card, targetZoneType, xValue);
-    if (!result.ok) { socket.emit("actionError", result.error); return; }
+    if (!result.ok) { revertFace(); socket.emit("actionError", result.error); return; }
     if (targetZoneType === "mana" || !lobby.turn.started) {
       card.zoneType = targetZoneType;
       card.faceDown = false;
@@ -13962,6 +14169,19 @@ io.on("connection", (socket) => {
     if (!p._pendingTribalScryMana) p._pendingTribalScryMana = [];
     p._pendingTribalScryMana.push(parseInt(m[1], 10) || 1);
   }
+  // Mirari's Wake -- "Whenever you tap a land for mana, add one mana of any type that land produced." One extra mana of the color just produced for
+  // each such permanent the tapper controls. Returns how many extra mana were added (so an undo can take them back too).
+  function applyLandManaDoublers(lobby, card, playerId, color) {
+    if (classifyType(card.type) !== "mana") return 0;
+    const p = lobby.players[playerId];
+    if (!p) return 0;
+    const n = Object.values(lobby.cards).filter((c) => c.owner === playerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /whenever you tap a land for mana, add one mana of any type that land produced/i.test(c.text || "")).length;
+    if (!n) return 0;
+    p.mana[color] = (p.mana[color] || 0) + n;
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} adds ${n} extra {${color}} (a land was tapped for mana)`);
+    return n;
+  }
   // Forbidden Orchard -- "Whenever you tap this land for mana, target opponent creates a 1/1
   // colorless Spirit creature token." Same text-scan/two-choke-point shape as the painland check
   // just above, but this one needs a REAL target choice (the new "opponent" targetKind), not an
@@ -13991,13 +14211,13 @@ io.on("connection", (socket) => {
     // mana to revert) for a plain tap-only source, or for one that only ever emits a chooseMana
     // prompt (untapping here already invalidates that prompt, since resolveManaChoice itself checks
     // card.tapped before adding anything).
-    const manaAdded = { color: null };
+    const manaAdded = { color: null, extra: 0 };
     setUndo(lobby, socket.id, `Tap ${card.name || "a card"}`, () => {
       const c = lobby.cards[id];
       if (c && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
       if (manaAdded.color) {
         const pp = lobby.players[socket.id];
-        if (pp) { pp.mana[manaAdded.color] = Math.max(0, (pp.mana[manaAdded.color] || 0) - 1); broadcastPlayers(lobby); }
+        if (pp) { pp.mana[manaAdded.color] = Math.max(0, (pp.mana[manaAdded.color] || 0) - 1 - manaAdded.extra); broadcastPlayers(lobby); }
       }
     });
     // A card with its own real ACTIVATED_ABILITIES manaAbility entry (a signet: "{1}, T: Add {W}
@@ -14040,6 +14260,7 @@ io.on("connection", (socket) => {
       applyPainlandDamageIfNeeded(lobby, card, socket.id);
       checkLandTapOpponentTokenTrigger(lobby, card, socket.id);
       checkTribalScryManaTrigger(lobby, card, socket.id);
+      manaAdded.extra = applyLandManaDoublers(lobby, card, socket.id, color);
     } else if (options ? options.length > 1 : (Array.isArray(card.producedMana) && card.producedMana.length > 1)) {
       const finalOptions = (options || card.producedMana).filter((c) => ["W", "U", "B", "R", "G", "C"].includes(c));
       if (finalOptions.length) socket.emit("chooseMana", { cardId: card.id, cardName: card.name, options: finalOptions });
@@ -14109,11 +14330,12 @@ io.on("connection", (socket) => {
     applyPainlandDamageIfNeeded(lobby, card, socket.id);
     checkLandTapOpponentTokenTrigger(lobby, card, socket.id);
     checkTribalScryManaTrigger(lobby, card, socket.id);
+    const extraMana = applyLandManaDoublers(lobby, card, socket.id, color);
     setUndo(lobby, socket.id, `Tap ${card.name || "a card"} for {${color}}`, () => {
       const c = lobby.cards[cardId];
       if (c && c.tapped) { c.tapped = false; broadcastCard(lobby, c); }
       const pp = lobby.players[socket.id];
-      if (pp) { pp.mana[color] = Math.max(0, (pp.mana[color] || 0) - 1); broadcastPlayers(lobby); }
+      if (pp) { pp.mana[color] = Math.max(0, (pp.mana[color] || 0) - 1 - extraMana); broadcastPlayers(lobby); }
     });
   });
 
@@ -14650,6 +14872,8 @@ io.on("connection", (socket) => {
     if (entry.controllerId !== socket.id) return; // only the controller who's actually being prompted may answer
     const resolved = resolveChosenTarget(lobby, entry, targetId);
     if (!resolved.ok) { socket.emit("actionError", resolved.error); return; }
+    const chainError = checkChainTargetRules(lobby, entry, targetId);
+    if (chainError) { socket.emit("actionError", chainError); return; }
     // Entwine / Overload / Kicker modeled as an extra MODE with `extraMana`: the additional cost is charged here, when the mode
     // is picked (the base cost was already paid at cast). Rejecting keeps the choice pending so another mode can be picked.
     if (entry.kind === "chooseMode") {
@@ -14698,7 +14922,8 @@ io.on("connection", (socket) => {
         queueTargetChoice(lobby, {
           kind: "castSpell", controllerId: entry.controllerId, spellCard: entry.spellCard, sourceCard: entry.spellCard,
           label: mode.label, effects: mode.effects, targetKind: mode.targetKind,
-          minCmc: mode.minCmc || null, typeFilter: mode.typeFilter || null, logSuffix: entry.logSuffix || ""
+          minCmc: mode.minCmc || null, typeFilter: mode.typeFilter || null, logSuffix: entry.logSuffix || "",
+          extraTargets: mode.extraTargets || null, optional: !!mode.optional
         });
       } else {
         entry.spellCard._resolvedSpellEffects = mode.effects;
@@ -14709,28 +14934,30 @@ io.on("connection", (socket) => {
       if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
       return;
     }
-    const effects = entry.effects.map((e) => ({ ...e, chosenTargetId: targetId }));
-    if (entry.kind === "castSpell") {
-      // Target chosen as part of casting, matching real Magic -- the prompt fires immediately when
-      // the spell is cast, not whenever it happens to resolve. The spell goes on the stack with its
-      // chosen target baked into _resolvedSpellEffects so resolveStackTop just runs it directly
-      // later, no second prompt.
-      entry.spellCard._resolvedSpellEffects = effects;
-      pushToStack(lobby, entry.spellCard, entry.controllerId);
-      const owner = lobby.players[entry.controllerId];
-      if (owner) pushLog(lobby, `${owner.name} cast ${entry.spellCard.name || "a spell"}${entry.logSuffix || ""}`);
-      // Diffusion Sliver -- "Whenever a Sliver creature you control becomes the target of a spell or ability an opponent controls,
-      // counter that spell or ability unless its controller pays {2}." (spells only; the trigger lands above the spell on the stack)
-      const slivered = lobby.cards[targetId];
-      if (slivered && slivered.zoneType === "creature" && /sliver/i.test(slivered.type || "") && slivered.owner !== entry.controllerId) {
-        Object.values(lobby.cards).forEach((w) => {
-          if (w.owner !== slivered.owner || w.zoneType === "hand" || w.zoneType === "stack") return;
-          getAutomatedAbilities(w.name, "ownSliverTargetedByOpponentSpell").forEach((ab) => pushAbilityToStack(lobby, { sourceCard: w, controllerId: w.owner, label: ab.label, effects: (ab.effects || []).map((e) => ({ ...e, chosenTargetId: entry.spellCard.id })) }));
-        });
-      }
-    } else {
-      pushAbilityToStack(lobby, { sourceCard: entry.sourceCard, controllerId: entry.controllerId, label: entry.label, effects });
-    }
+    // Multi-target spells (extraTargets): every choice but the last just queues the next step; the spell only goes on the stack once
+    // the whole chain is answered, with chosenTargetIds baked into its effects.
+    const chosenIds = (entry.chosenTargetIds || []).concat(targetId);
+    if (entry.repeat || (entry.extraTargets && entry.extraTargets.length)) advanceTargetChain(lobby, entry, chosenIds);
+    else finalizeTargetChoice(lobby, entry, chosenIds);
+    socket.emit("targetChoiceResolved", id);
+    if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
+  });
+
+  // "Done"/"skip" on an optional step of a multi-target chain (Casualties of War's modes, Eerie Interlude's "any number"). Skipping a
+  // repeating step ends the chain; skipping any other optional step leaves that slot null and moves on. At least one real target is required.
+  socket.on("skipTargetChoice", (id) => {
+    const lobby = currentLobby(); if (!lobby) return;
+    const idx = lobby.pendingTargetChoices.findIndex((c) => c.id === id);
+    if (idx === -1) return;
+    const entry = lobby.pendingTargetChoices[idx];
+    if (entry.controllerId !== socket.id || !entry.optional) return;
+    const prior = entry.chosenTargetIds || [];
+    const hasNext = !entry.repeat && entry.extraTargets && entry.extraTargets.length > 0;
+    const chosenIds = entry.repeat ? prior : prior.concat(null);
+    if (!hasNext && !entry.allowEmpty && !chosenIds.some((t) => t != null)) { socket.emit("actionError", "Choose at least one target."); return; }
+    lobby.pendingTargetChoices.splice(idx, 1);
+    if (hasNext) advanceTargetChain(lobby, entry, chosenIds);
+    else finalizeTargetChoice(lobby, entry, chosenIds);
     socket.emit("targetChoiceResolved", id);
     if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
   });
