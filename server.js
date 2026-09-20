@@ -486,6 +486,7 @@ const CARD_ABILITIES = {
   "constricting sliver": [{ trigger: "otherCreatureEtb", selfInclusive: true, typeFilter: ["sliver"], requiresTarget: true, targetKind: "opponentCreature", label: "Constricting Sliver — exile target creature an opponent controls until this Sliver leaves the battlefield", effects: [{ type: "exileUntilSourceLeaves" }] }],
   "taunting sliver": [{ trigger: "otherCreatureEtb", selfInclusive: true, typeFilter: ["sliver"], requiresTarget: true, targetKind: "opponentCreature", label: "Taunting Sliver — goad target creature an opponent controls", effects: [{ type: "goadTarget" }] }],
   "grasp of fate": [{ trigger: "etb", requiresTarget: true, targetKind: "opponentNonlandPermanent", label: "Grasp of Fate — exile up to one target nonland permanent an opponent controls until this enchantment leaves the battlefield", effects: [{ type: "exileUntilSourceLeaves" }] }],
+  "terastodon": [{ trigger: "etb", requiresTarget: false, label: "Terastodon — destroy up to three of the opponents' noncreature permanents, each controller gets a 3/3 Elephant", effects: [{ type: "terastodonDestroy" }] }],
   // ---- Wave 45 triggers ----
   "drop of honey": [{ trigger: "upkeep", requiresTarget: false, label: "Drop of Honey — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
   "porphyry nodes": [{ trigger: "upkeep", requiresTarget: false, label: "Porphyry Nodes — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
@@ -3038,6 +3039,15 @@ const SPELL_ABILITIES = {
   "treasure cruise": { label: "Treasure Cruise — draw three cards (Delve)", effects: [{ type: "drawCards", amount: 3, target: "controller" }] },
   // Chemister's Insight -- the front half only; Jump-start (cast from graveyard) isn't modeled anywhere.
   "chemister's insight": { label: "Chemister's Insight — draw two cards", effects: [{ type: "drawCards", amount: 2, target: "controller" }] },
+  "council's judgment": { label: "Council's Judgment — each player votes for a nonland permanent the caster doesn't control, exile each with the most votes or tied", effects: [{ type: "startVote", mode: "exileMost", targetKind: "nonlandPermanentNotControlledBy", label: "Council's Judgment — vote for a nonland permanent the caster doesn't control" }] },
+  "plea for power": { label: "Plea for Power — each player votes time or knowledge (time: extra turn; knowledge or tie: draw three)", effects: [{ type: "startVote", mode: "timeKnowledge", targetKind: "creatureType", label: "Plea for Power — type \"time\" or \"knowledge\" to vote" }] },
+  // ---- Wave 50 spells ----
+  "klauth's will": { label: "Klauth's Will — choose one (both if you control a commander)", bothIfCommander: true, modes: [
+    { label: "Klauth's Will — Breathe Flame: X damage to each creature without flying", requiresTarget: false, effects: [{ type: "damageEachCreatureWithoutFlying" }] },
+    { label: "Klauth's Will — Smash Relics: destroy up to X artifacts and/or enchantments (the opponents' best)", requiresTarget: false, effects: [{ type: "destroyUpToXOpponentArtifactsEnchantments" }] }
+  ] },
+  "everybody lives!": { label: "Everybody Lives! — creatures gain hexproof and indestructible, players gain hexproof and can't lose life this turn", effects: [{ type: "everybodyLives" }] },
+  "search for glory": { label: "Search for Glory — search for a snow permanent, legendary, or Saga card (life gain from {S} is not modeled)", effects: [{ type: "tutorToHand", typeFilter: ["snow", "legendary", "saga"] }] },
   // ---- Wave 48 spells ----
   "spitting image": { label: "Spitting Image — create a token that's a copy of target creature (Retrace via the graveyard button)", effects: [{ type: "createTokenCopyOfTargetCreature" }], requiresTarget: true, targetKind: "creature" },
   "cataclysm": { label: "Cataclysm — each player keeps one artifact, creature, enchantment and land (the highest mana value of each) and sacrifices the rest", effects: [{ type: "cataclysm" }] },
@@ -3348,6 +3358,7 @@ function isSentenceGenericallyAutomated(sentence) {
   if (/^you have hexproof\.?( \(.*\))?$/.test(low)) return true;
   if (/^flashback\s*(?:—|-)?\s*(\{[^}]+\})+( \(.*\))?$/.test(low)) return true; // castFlashback (graveyard button) readies it in hand
   if (/^retrace( \(.*\))?$/.test(low)) return true;
+  if (/^jump-start( \(.*\))?$/.test(low)) return true;
   if (/^evolve( \(.*\))?$/.test(low)) return true; // fireGlobalOtherCreatureEtbTriggers' generic Evolve scan
   if (/^each opponent can cast spells only any time they could cast a sorcery\.?$/.test(low)) return true; // Teferi, Time Raveler (checkTiming)
   if (/^compleated \(.*\)$/.test(low)) return true; // Vraska, Betrayal's Sting: paying life for {B/P} isn't modeled (mana only)
@@ -6372,6 +6383,77 @@ const EFFECTS = {
     p.hasFlashUntilEndOfTurn = true; p._flashUntilNextTurn = true;
     broadcastPlayers(lobby);
   },
+  // ---- Voting (Will of the council) ----
+  // "Starting with you, each player votes..." -- every player (caster first, then seat order) gets a vote prompt through the normal
+  // sequential target-choice queue; castVote records each vote and resolves the outcome once everyone has voted.
+  startVote(lobby, ctx, params) {
+    const order = lobby.turn.order.filter((id) => lobby.players[id] && !lobby.players[id].eliminated);
+    const start = Math.max(0, order.indexOf(ctx.controllerId));
+    const voters = order.slice(start).concat(order.slice(0, start));
+    if (!lobby._votes) lobby._votes = {};
+    const voteId = "vote_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+    lobby._votes[voteId] = { mode: params.mode, controllerId: ctx.controllerId, sourceCard: ctx.sourceCard, expected: voters.length, votes: [] };
+    voters.forEach((vid) => queueTargetChoice(lobby, { controllerId: vid, sourceCard: ctx.sourceCard, label: params.label, effects: [{ type: "castVote", voteId }], targetKind: params.targetKind, notControlledBy: ctx.controllerId }));
+  },
+  castVote(lobby, ctx, params) {
+    const v = lobby._votes && lobby._votes[params.voteId];
+    if (!v) return;
+    v.votes.push(v.mode === "timeKnowledge" ? String(params.chosenTargetId || "").trim().toLowerCase() : params.chosenTargetId);
+    if (v.votes.length < v.expected) return;
+    delete lobby._votes[params.voteId];
+    const tally = {};
+    v.votes.forEach((x) => { tally[x] = (tally[x] || 0) + 1; });
+    const vctx = { controllerId: v.controllerId, sourceCard: v.sourceCard };
+    if (v.mode === "exileMost") {
+      const max = Math.max(...Object.values(tally));
+      Object.keys(tally).filter((id) => tally[id] === max).forEach((id) => { if (lobby.cards[id]) EFFECTS.exileTarget(lobby, vctx, { chosenTargetId: id }); });
+    } else if (v.mode === "timeKnowledge") {
+      if ((tally.time || 0) > (tally.knowledge || 0)) EFFECTS.takeExtraTurn(lobby, vctx);
+      else drawN(lobby, v.controllerId, 3);
+    }
+    broadcastPlayers(lobby);
+  },
+  // ---- Wave 50 effects ----
+  // Klauth's Will, Breathe Flame -- "deals X damage to each creature without flying."
+  damageEachCreatureWithoutFlying(lobby, ctx, params) {
+    const x = params.xAmount || 0;
+    if (x <= 0) return;
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature" && !effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying"))
+      .forEach((c) => EFFECTS.damageTarget(lobby, ctx, { amount: x, chosenTargetId: c.id }));
+  },
+  // Klauth's Will, Smash Relics -- "Destroy up to X target artifacts and/or enchantments." (targets are automated: the X most
+  // valuable artifacts/enchantments among the opponents' permanents, never the caster's own)
+  destroyUpToXOpponentArtifactsEnchantments(lobby, ctx, params) {
+    const x = params.xAmount || 0;
+    Object.values(lobby.cards)
+      .filter((c) => c.owner !== ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /artifact|enchantment/i.test(c.type || ""))
+      .sort((a, b) => (b.cmc || 0) - (a.cmc || 0)).slice(0, x)
+      .forEach((c) => EFFECTS.destroyTarget(lobby, ctx, { chosenTargetId: c.id }));
+  },
+  // Everybody Lives! -- "All creatures gain hexproof and indestructible until end of turn. Players gain hexproof until end of turn.
+  // Players can't lose life this turn and players can't lose the game this turn." (life lock covers the life half; poison/decking
+  // losses aren't blocked)
+  everybodyLives(lobby, ctx) {
+    Object.values(lobby.cards).filter((c) => c.zoneType === "creature").forEach((c) => { grantTemporaryKeyword(lobby, c, "Hexproof"); grantTemporaryKeyword(lobby, c, "Indestructible"); });
+    Object.values(lobby.players).forEach((pl) => {
+      pl._hexproofEOT = true;
+      if (!pl.lifeLocked) { pl.lifeLocked = true; pl._lifeLockEOT = true; }
+    });
+    broadcastPlayers(lobby);
+  },
+  // Terastodon -- "you may destroy up to three target noncreature permanents. For each permanent put into a graveyard this way, its
+  // controller creates a 3/3 green Elephant creature token." Targets are automated: the three most valuable noncreature permanents
+  // among the OPPONENTS' (never your own).
+  terastodonDestroy(lobby, ctx) {
+    const targets = Object.values(lobby.cards)
+      .filter((c) => c.owner !== ctx.controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && !/creature/i.test(c.type || ""))
+      .sort((a, b) => (b.cmc || 0) - (a.cmc || 0)).slice(0, 3);
+    targets.forEach((t) => {
+      const ownerId = t.owner;
+      EFFECTS.destroyTarget(lobby, ctx, { chosenTargetId: t.id });
+      if (!lobby.cards[t.id]) EFFECTS.createToken(lobby, { ...ctx, controllerId: ownerId }, { name: "Elephant", tokenType: "Token Creature — Elephant", power: "3", toughness: "3", colors: ["G"] });
+    });
+  },
   // ---- Wave 49 effects ----
   // Virulent Sliver -- poisonous 1: "that player gets a poison counter" (chosenTargetId = the damaged player, baked by the
   // Sliver combat-damage dispatcher).
@@ -8281,6 +8363,8 @@ function cleanupTemporaryKeywords(lobby) {
   // "Gain control of target permanent until end of turn" (Zealous Conscripts) -- hand it back.
   Object.values(lobby.cards).filter((c) => c._controlRevertTurn).forEach((c) => revertControl(lobby, c));
   Object.values(lobby.cards).filter((c) => c._entersAsCopy).forEach((c) => { c._entersAsCopy = false; }); // never chose: it stays a (dying) 0/0
+  // Everybody Lives! -- "this turn" player hexproof and life lock end here.
+  Object.values(lobby.players).forEach((pl) => { if (pl._lifeLockEOT) { pl.lifeLocked = false; pl._lifeLockEOT = false; } pl._hexproofEOT = false; });
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     // Giver of Runes/Mother of Runes' granted protection is "until end of turn" too -- swept
@@ -8502,7 +8586,7 @@ function cardTypeProtectionBlocks(lobby, protectedPlayerId, sourceCard) {
   // OPPONENTS' spells and abilities (the source's own controller is looked up off the card, since a
   // triggered ability's sourceCard is only {id}).
   const srcOwner = sourceCard.owner || (lobby.cards[sourceCard.id] && lobby.cards[sourceCard.id].owner);
-  if (srcOwner && srcOwner !== protectedPlayerId && Object.values(lobby.cards).some((c) => c.owner === protectedPlayerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /(^|\n)you have hexproof/i.test(c.text || ""))) return true;
+  if (srcOwner && srcOwner !== protectedPlayerId && (p._hexproofEOT || Object.values(lobby.cards).some((c) => c.owner === protectedPlayerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /(^|\n)you have hexproof/i.test(c.text || "")))) return true;
   if (!p.protectionFromCardType) return false;
   return (sourceCard.type || "").toLowerCase().includes(p.protectionFromCardType.toLowerCase());
 }
@@ -9865,6 +9949,7 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   let addlCost = spellAbility && spellAbility.additionalCost;
   // Retrace (cast from the graveyard) -- "in addition to its other costs, discard a land card" (auto-picks the first land in hand).
   if (card._retrace) addlCost = { ...(addlCost || {}), discardCard: true, discardTypeFilter: "land" };
+  else if (card._jumpStart) addlCost = { ...(addlCost || {}), discardCard: true }; // Jump-start: discard a card (auto-picked) in addition to the mana cost
   let sacrificeForCost = null;
   if (addlCost && addlCost.sacrificeType) {
     // Deadly Dispute -- "sacrifice an artifact OR creature" -- a real union, not just one fixed
@@ -10616,6 +10701,13 @@ function resolveChosenTarget(lobby, entry, targetId) {
     const filter = entry.typeFilter || [];
     if (!filter.some((t) => (c.type || "").toLowerCase().includes(t))) return { ok: false, error: `Choose a ${filter.join("/")} permanent.` };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Council's Judgment -- a VOTE for "a nonland permanent you don't control" (entry.notControlledBy = the caster). A vote isn't
+  // targeting, so hexproof/protection don't apply.
+  if (targetKind === "nonlandPermanentNotControlledBy") {
+    const c = lobby.cards[targetId];
+    if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact") || c.owner === entry.notControlledBy) return { ok: false, error: "Vote for a nonland permanent the caster doesn't control." };
     return { ok: true };
   }
   // Sultai Charm ("target monocolored creature") / Goblin Cratermaker ("target colorless nonland
@@ -14795,11 +14887,12 @@ io.on("connection", (socket) => {
     const text = entry.text || "";
     const fb = text.match(/flashback\s*(?:—|-)?\s*((?:\{[^}]+\})+)/i);
     const retrace = /\bretrace\b/i.test(text);
-    if (!fb && !retrace) { socket.emit("actionError", `${entry.name || "That card"} has no Flashback or Retrace.`); return; }
+    const jumpStart = /jump-start/i.test(text);
+    if (!fb && !retrace && !jumpStart) { socket.emit("actionError", `${entry.name || "That card"} has no Flashback or Retrace.`); return; }
     p.graveyard.splice(index, 1);
     const card = spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: "hand", ...(fb ? { manaCost: fb[1] } : {}) });
     card._impulseTurn = lobby.turn.turnNumber;
-    if (fb) card._flashback = true; else card._retrace = true;
+    if (fb) card._flashback = true; else if (jumpStart) { card._flashback = true; card._jumpStart = true; } else card._retrace = true;
     broadcastCard(lobby, card);
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} readied ${entry.name} from the graveyard (${fb ? "Flashback " + fb[1] : "Retrace"}) -- cast it this turn`);
