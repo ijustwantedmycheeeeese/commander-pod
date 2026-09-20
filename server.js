@@ -475,6 +475,7 @@ const CARD_ABILITIES = {
     { trigger: "upkeep", requiresTarget: true, targetKind: "opponent", label: "Hansk, Slayer Zealot — target opponent creates three Walker tokens", effects: [{ type: "createTokenForTargetPlayer", name: "Walker", tokenType: "Token Creature — Zombie", power: "2", toughness: "2", colors: ["B"], amount: 3 }] },
     { trigger: "deathAnyCreature", opponentOnly: true, eventCardTypeFilter: ["zombie"], requiresTarget: false, label: "Hansk, Slayer Zealot — draw a card", effects: [{ type: "drawCards", amount: 1, target: "controller" }] }
   ],
+  "watchful radstag": [{ trigger: "evolves", requiresTarget: false, label: "Watchful Radstag — create a token that's a copy of it", effects: [{ type: "createTokenCopyOfTargetCreature" }] }],
   // ---- Wave 45 triggers ----
   "drop of honey": [{ trigger: "upkeep", requiresTarget: false, label: "Drop of Honey — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
   "porphyry nodes": [{ trigger: "upkeep", requiresTarget: false, label: "Porphyry Nodes — destroy the creature with the least power", effects: [{ type: "destroyLeastPowerCreature" }] }],
@@ -1481,6 +1482,11 @@ const ACTIVATED_ABILITIES = {
     { cost: { loyalty: 0 }, requiresTarget: false, label: "Vraska, Betrayal's Sting — 0: draw a card, lose 1 life, proliferate", effects: [{ type: "drawCards", amount: 1, target: "controller" }, { type: "loseLife", target: "controller", amount: 1 }, { type: "proliferateAll" }] },
     { cost: { loyalty: -2 }, requiresTarget: true, targetKind: "creature", label: "Vraska, Betrayal's Sting — −2: target creature becomes a Treasure artifact", effects: [{ type: "becomeTreasureArtifact" }] },
     { cost: { loyalty: -9 }, requiresTarget: true, targetKind: "player", label: "Vraska, Betrayal's Sting — −9: target player gets poison counters up to nine", effects: [{ type: "poisonUpToNine" }] }
+  ],
+  // ---- Wave 48 activated abilities ----
+  "magistrate's scepter": [
+    { cost: { mana: "{4}", tap: true }, requiresTarget: false, label: "Magistrate's Scepter — {4},{T}: put a charge counter on this artifact", effects: [{ type: "addCountersToSelf", amount: 1 }] },
+    { cost: { tap: true, removeSelfCounter: 3 }, requiresTarget: false, label: "Magistrate's Scepter — {T}, remove three charge counters: take an extra turn after this one", effects: [{ type: "takeExtraTurn" }] }
   ],
   // ---- Wave 47 activated abilities ----
   "nykthos, shrine to nyx": [
@@ -3022,6 +3028,9 @@ const SPELL_ABILITIES = {
   "treasure cruise": { label: "Treasure Cruise — draw three cards (Delve)", effects: [{ type: "drawCards", amount: 3, target: "controller" }] },
   // Chemister's Insight -- the front half only; Jump-start (cast from graveyard) isn't modeled anywhere.
   "chemister's insight": { label: "Chemister's Insight — draw two cards", effects: [{ type: "drawCards", amount: 2, target: "controller" }] },
+  // ---- Wave 48 spells ----
+  "spitting image": { label: "Spitting Image — create a token that's a copy of target creature (Retrace via the graveyard button)", effects: [{ type: "createTokenCopyOfTargetCreature" }], requiresTarget: true, targetKind: "creature" },
+  "cataclysm": { label: "Cataclysm — each player keeps one artifact, creature, enchantment and land (the highest mana value of each) and sacrifices the rest", effects: [{ type: "cataclysm" }] },
   // ---- Wave 47 spells (extraMana on a mode = an additional cost charged when that mode is picked) ----
   "mizzium mortars": { label: "Mizzium Mortars — choose one", modes: [
     { label: "Mizzium Mortars — 4 damage to target creature you don't control", requiresTarget: true, targetKind: "opponentCreature", effects: [{ type: "damageTarget", amount: 4 }] },
@@ -3327,6 +3336,9 @@ function isSentenceGenericallyAutomated(sentence) {
   // (corrupted cost reduction).
   if (/^all creatures have protection from (?:white|blue|black|red|green)\.?$/.test(low)) return true;
   if (/^you have hexproof\.?( \(.*\))?$/.test(low)) return true;
+  if (/^flashback\s*(?:—|-)?\s*(\{[^}]+\})+( \(.*\))?$/.test(low)) return true; // castFlashback (graveyard button) readies it in hand
+  if (/^retrace( \(.*\))?$/.test(low)) return true;
+  if (/^evolve( \(.*\))?$/.test(low)) return true; // fireGlobalOtherCreatureEtbTriggers' generic Evolve scan
   if (/^each opponent can cast spells only any time they could cast a sorcery\.?$/.test(low)) return true; // Teferi, Time Raveler (checkTiming)
   if (/^compleated \(.*\)$/.test(low)) return true; // Vraska, Betrayal's Sting: paying life for {B/P} isn't modeled (mana only)
   // Leylines (opening-hand battlefield start, keepHand), Leyline of the Void (graveyardRedirectFor), Regal
@@ -6350,6 +6362,29 @@ const EFFECTS = {
     p.hasFlashUntilEndOfTurn = true; p._flashUntilNextTurn = true;
     broadcastPlayers(lobby);
   },
+  // ---- Wave 48 effects ----
+  // "Take an extra turn after this one." (see the next-turn advance in advanceOnePhase)
+  takeExtraTurn(lobby, ctx) {
+    if (!lobby.extraTurns) lobby.extraTurns = [];
+    lobby.extraTurns.push(ctx.controllerId);
+    const p = lobby.players[ctx.controllerId];
+    pushLog(lobby, `${p ? p.name : "A player"} will take an extra turn after this one`);
+  },
+  // Cataclysm -- "Each player chooses from among the permanents they control an artifact, a creature, an enchantment, and a land,
+  // then sacrifices the rest." The choice is automated: each player keeps the highest-mana-value permanent of each of those four
+  // types (ties: the oldest), and everything else they control is sacrificed.
+  cataclysm(lobby, ctx) {
+    Object.keys(lobby.players).forEach((pid) => {
+      const mine = Object.values(lobby.cards).filter((c) => c.owner === pid && c.zoneType !== "hand" && c.zoneType !== "stack" && !c.isCommander);
+      const keep = new Set();
+      ["artifact", "creature", "enchantment", "land"].forEach((t) => {
+        const of = mine.filter((c) => (c.type || "").toLowerCase().includes(t));
+        if (!of.length) return;
+        keep.add(of.reduce((best, c) => ((c.cmc || 0) > (best.cmc || 0) ? c : best), of[0]).id);
+      });
+      mine.filter((c) => !keep.has(c.id) && lobby.cards[c.id]).forEach((c) => { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); });
+    });
+  },
   // ---- Wave 47 effects ----
   // Mizzium Mortars (overload) -- "deals 4 damage to each creature you don't control."
   damageEachOpponentCreature(lobby, ctx, params) {
@@ -8196,7 +8231,7 @@ function applyExalted(lobby, attackerIds, controllerId) {
 // "this turn", rather than teaching advanceOnePhase about each one individually.
 // Impulse-draw cards (impulseExileTopToHand) still in hand when their turn ends are exiled instead.
 function expireImpulseCards(lobby, playerId) {
-  Object.values(lobby.cards).filter((c) => c.zoneType === "hand" && c._impulseTurn && c._impulseTurn <= lobby.turn.turnNumber && (!playerId || c.owner === playerId)).forEach((c) => exileCardInternal(lobby, c));
+  Object.values(lobby.cards).filter((c) => c.zoneType === "hand" && c._impulseTurn && c._impulseTurn <= lobby.turn.turnNumber && (!playerId || c.owner === playerId)).forEach((c) => { if (c._flashback || c._retrace) sendToGraveyardInternal(lobby, c); else exileCardInternal(lobby, c); }); // an uncast flashback/retrace card just goes back to the graveyard
 }
 function cleanupTemporaryKeywords(lobby) {
   expireImpulseCards(lobby);
@@ -9770,7 +9805,9 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   // autoSacrificeFilter for activated abilities) and rejects BEFORE paying any mana if nothing
   // qualifies, matching real Magic (an unpayable additional cost means the spell can't be cast).
   const spellAbility = getSpellAbility(card.name);
-  const addlCost = spellAbility && spellAbility.additionalCost;
+  let addlCost = spellAbility && spellAbility.additionalCost;
+  // Retrace (cast from the graveyard) -- "in addition to its other costs, discard a land card" (auto-picks the first land in hand).
+  if (card._retrace) addlCost = { ...(addlCost || {}), discardCard: true, discardTypeFilter: "land" };
   let sacrificeForCost = null;
   if (addlCost && addlCost.sacrificeType) {
     // Deadly Dispute -- "sacrifice an artifact OR creature" -- a real union, not just one fixed
@@ -9796,8 +9833,8 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   // costs above) and rejects BEFORE paying anything when there's nothing to discard.
   let discardForCost = null;
   if (addlCost && addlCost.discardCard) {
-    discardForCost = Object.values(lobby.cards).find((c) => c.owner === card.owner && c.zoneType === "hand" && c.id !== card.id) || null;
-    if (!discardForCost) return { ok: false, error: "You have no other card to discard as an additional cost." };
+    discardForCost = Object.values(lobby.cards).find((c) => c.owner === card.owner && c.zoneType === "hand" && c.id !== card.id && (!addlCost.discardTypeFilter || (c.type || "").toLowerCase().includes(addlCost.discardTypeFilter))) || null;
+    if (!discardForCost) return { ok: false, error: addlCost.discardTypeFilter ? `You have no ${addlCost.discardTypeFilter} card to discard as an additional cost.` : "You have no other card to discard as an additional cost." };
   }
   const payXLife = addlCost && addlCost.payXLife;
   if (payXLife && xValue > 0 && p.life <= xValue) {
@@ -11172,6 +11209,16 @@ function fireGlobalOtherCreatureEtbTriggers(lobby, enteringCard) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner !== enteringCard.owner || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    // Evolve (CR 702.100) -- "Whenever a creature you control enters, if that creature has greater power or toughness than this
+    // creature, put a +1/+1 counter on this creature." Generic text-scan; an "evolves" event then fires (Watchful Radstag).
+    if (c.id !== enteringCard.id && c.zoneType === "creature" && /\bevolve\b/i.test(c.text || "")) {
+      const own = (x) => ({ p: parsePT(x.power) + (x.counters || 0) + attachedBonusFor(lobby, x).powerBonus + staticBonusFor(lobby, x).powerBonus, t: parsePT(x.toughness) + (x.counters || 0) + attachedBonusFor(lobby, x).toughnessBonus + staticBonusFor(lobby, x).toughnessBonus });
+      const mine = own(c), theirs = own(enteringCard);
+      if (theirs.p > mine.p || theirs.t > mine.t) {
+        EFFECTS.addCountersToSelf(lobby, { controllerId: c.owner, sourceCard: { id: c.id } }, { amount: 1 });
+        getAutomatedAbilities(c.name, "evolves").forEach((ab) => fireTrigger(lobby, c, { ...ab, effects: (ab.effects || []).map((e) => ({ ...e, chosenTargetId: c.id })) }));
+      }
+    }
     getAutomatedAbilities(c.name, "otherCreatureEtb").forEach((ability) => {
       if (c.id === enteringCard.id && !ability.selfInclusive) return;
       // Miirym, Sentinel Wyrm -- "another NONTOKEN Dragon" -- without this, a token Dragon entering
@@ -11907,7 +11954,7 @@ function resolveStackTop(lobby) {
       if (effects) executeSpellEffectsNow(lobby, card, effects);
       // A handful of real cards (Teferi's Protection) exile themselves as part of resolving,
       // instead of the normal graveyard destination every other instant/sorcery uses.
-      if ((getSpellAbility(card.name) || {}).exileInsteadOfGraveyard) exileCardInternal(lobby, card);
+      if ((getSpellAbility(card.name) || {}).exileInsteadOfGraveyard || card._flashback) exileCardInternal(lobby, card); // Flashback: exiled after it resolves
       else sendToGraveyardInternal(lobby, card);
       if (owner) pushLog(lobby, `${owner.name}'s ${card.name || "spell"} resolved`);
     } else {
@@ -12254,7 +12301,10 @@ function advanceOnePhase(lobby) {
   }
   if (idx >= PHASES.length) {
     idx = 0;
-    turn.activeIndex = (turn.activeIndex + 1) % turn.order.length;
+    // "Take an extra turn after this one" (Magistrate's Scepter, Time Walk...) -- queued in lobby.extraTurns; the next turn goes to
+    // the queued player instead of the next seat.
+    const queuedExtra = (lobby.extraTurns && lobby.extraTurns.length) ? turn.order.indexOf(lobby.extraTurns.shift()) : -1;
+    turn.activeIndex = queuedExtra >= 0 ? queuedExtra : (turn.activeIndex + 1) % turn.order.length;
     turn.turnNumber++;
     turn.extraCombatsPending = 0;
     // Ledger Shredder -- "whenever a player casts THEIR second spell EACH TURN" counts against one
@@ -14630,6 +14680,27 @@ io.on("connection", (socket) => {
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} returned ${entry.name} to the battlefield`);
     fireEtbTriggers(lobby, card);
+  });
+
+  // Flashback / Retrace -- "cast this card from your graveyard". There is no cast-from-graveyard zone, so the card is moved into
+  // its owner's hand flagged for this turn (like impulse-play): cast it normally (timing, targets and costs all apply; Flashback
+  // swaps in the flashback mana cost and exiles the card afterwards, Retrace adds a land discard and it returns to the graveyard).
+  // If it isn't cast by end of turn it goes back to the graveyard.
+  socket.on("castFlashback", ({ index }) => {
+    const lobby = currentLobby(); const p = lobby && lobby.players[socket.id];
+    if (!p || !p.graveyard || !p.graveyard[index]) return;
+    const entry = p.graveyard[index];
+    const text = entry.text || "";
+    const fb = text.match(/flashback\s*(?:—|-)?\s*((?:\{[^}]+\})+)/i);
+    const retrace = /\bretrace\b/i.test(text);
+    if (!fb && !retrace) { socket.emit("actionError", `${entry.name || "That card"} has no Flashback or Retrace.`); return; }
+    p.graveyard.splice(index, 1);
+    const card = spawnBattlefieldCard(lobby, { ...entry, owner: socket.id, faceDown: false, zoneType: "hand", ...(fb ? { manaCost: fb[1] } : {}) });
+    card._impulseTurn = lobby.turn.turnNumber;
+    if (fb) card._flashback = true; else card._retrace = true;
+    broadcastCard(lobby, card);
+    broadcastPlayers(lobby);
+    pushLog(lobby, `${p.name} readied ${entry.name} from the graveyard (${fb ? "Flashback " + fb[1] : "Retrace"}) -- cast it this turn`);
   });
 
   socket.on("zoneToHand", ({ zone, index }) => {
