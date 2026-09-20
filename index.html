@@ -323,6 +323,10 @@
     #main-menu-box h2 { margin-top: 0; }
     #main-menu-box > button, #main-menu-box .mm-section > button { width: 100%; margin-top: 10px; padding: 12px; font-size: 14px; }
     .mm-hint { font-size: 11px; color: #8a7a55; margin-top: 4px; margin-bottom: 4px; }
+    /* Compact underlined tab strip for the Decks section (My Decks / Default Decks) -- deliberately small so the menu stays quiet. */
+    #main-menu-box .mm-tabs { display: flex; gap: 16px; margin-top: 10px; border-bottom: 1px solid #2e2618; }
+    #main-menu-box .mm-tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; box-shadow: none; padding: 3px 0; margin: 0 0 -1px; width: auto; min-width: 0; font-size: 12px; color: #8a7a55; cursor: pointer; }
+    #main-menu-box .mm-tab.active { color: #e8d9a8; border-bottom-color: #c9a94e; }
     /* Each block of related controls reads as its own bordered card instead of blending into one
        continuous stack -- shared by the Main Menu and the in-table ⚙ Menu, both of which used to
        be one flat column with no visual break between unrelated groups of controls. */
@@ -457,7 +461,12 @@
         <button class="secondary" onclick="openCollectionModal()">My Collection</button>
         <button class="secondary" onclick="openMyTicketsModal()">My Tickets</button>
         <div class="mm-hint">Build or edit a deck — up to 99 cards, up to 2 commanders</div>
+        <div class="mm-tabs" id="deck-tabs" style="display:none;">
+          <button class="mm-tab active" id="deck-tab-mine" onclick="setDeckTab('mine')">My Decks</button>
+          <button class="mm-tab" id="deck-tab-default" onclick="setDeckTab('default')">Default Decks</button>
+        </div>
         <div id="deck-list" style="margin-top:10px;"></div>
+        <div id="default-deck-list" style="margin-top:10px;display:none;"></div>
         <div id="deck-status" style="font-size:11px;color:#a89a70;margin-top:6px;"></div>
       </div>
       <div class="mm-section">
@@ -1608,6 +1617,8 @@
     let targets = {};
     let allCards = {};
     let myDeckNames = [];
+    let myDefaultDecks = []; // built-in decks from the server: [{id, name, colors}] -- read-only, shown in their own tab
+    let deckTab = "mine";
     // ---------------- visual effects state ----------------
     // Card ids we've already rendered at least once -- a truly new id gets the "enter" pop-in
     // animation; anything already seen just re-renders normally, no matter how often that happens.
@@ -1922,6 +1933,7 @@
       document.getElementById("main-menu").style.display = "flex";
       startLobbyMusic();
       renderDeckList(data.decks);
+      renderDefaultDecks(data.defaultDecks);
       myUsername = data.username;
       renderExportDataButton();
       const usernameHidden = document.getElementById("account-username-hidden");
@@ -2615,6 +2627,44 @@
       });
     }
 
+    // Default Decks tab. The tab strip only appears when the server actually has default decks installed.
+    function renderDefaultDecks(list) {
+      myDefaultDecks = Array.isArray(list) ? list : [];
+      document.getElementById("deck-tabs").style.display = myDefaultDecks.length ? "flex" : "none";
+      if (!myDefaultDecks.length && deckTab === "default") setDeckTab("mine");
+      renderLoadDeckSelect();
+      const el = document.getElementById("default-deck-list");
+      el.innerHTML = "";
+      myDefaultDecks.forEach((d) => {
+        const row = document.createElement("div");
+        row.className = "player-row";
+        const label = document.createElement("div");
+        label.style.cssText = "flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        label.innerText = d.name;
+        label.title = d.name;
+        row.appendChild(label);
+        if (d.colors) {
+          const colors = document.createElement("div");
+          colors.style.cssText = "font-size:11px;color:#8a7a55;letter-spacing:0.05em;";
+          colors.innerText = d.colors;
+          row.appendChild(colors);
+        }
+        const openBtn = document.createElement("button");
+        openBtn.className = "mini-btn"; openBtn.innerText = "Open";
+        openBtn.title = "Open in the Deck Editor as your own copy -- the default deck itself is never changed";
+        openBtn.onclick = () => socket.emit("openDefaultDeck", d.id);
+        row.appendChild(openBtn);
+        el.appendChild(row);
+      });
+    }
+    function setDeckTab(tab) {
+      deckTab = tab === "default" && myDefaultDecks.length ? "default" : "mine";
+      document.getElementById("deck-tab-mine").classList.toggle("active", deckTab === "mine");
+      document.getElementById("deck-tab-default").classList.toggle("active", deckTab === "default");
+      document.getElementById("deck-list").style.display = deckTab === "mine" ? "" : "none";
+      document.getElementById("default-deck-list").style.display = deckTab === "default" ? "" : "none";
+    }
+
     function renderCommanderDock() {
       const dock = document.getElementById("commander-dock-body");
       dock.innerHTML = "";
@@ -2717,8 +2767,9 @@
     function renderLoadDeckSelect() {
       const sel = document.getElementById("load-deck-select");
       const current = sel.value;
-      sel.innerHTML = '<option value="">Load a deck...</option>' + myDeckNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
-      if (myDeckNames.includes(current)) sel.value = current;
+      sel.innerHTML = '<option value="">Load a deck...</option>' + myDeckNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("") +
+        (myDefaultDecks.length ? '<optgroup label="Default decks">' + myDefaultDecks.map((d) => `<option value="default:${escapeHtml(d.id)}">${escapeHtml(d.name)}</option>`).join("") + '</optgroup>' : "");
+      if (myDeckNames.includes(current) || myDefaultDecks.some((d) => "default:" + d.id === current)) sel.value = current;
     }
     // Real DOM modal standing in for window.alert()/confirm()/prompt() -- a native dialog forces
     // the browser to drop out of fullscreen the instant it appears (that's the browser's own
@@ -2781,6 +2832,11 @@
     function loadSelectedDeck() {
       const name = document.getElementById("load-deck-select").value;
       if (!name) return;
+      if (name.startsWith("default:")) {
+        const dd = myDefaultDecks.find((d) => "default:" + d.id === name);
+        showConfirmModal(`Load the default deck "${dd ? dd.name : ""}"? This replaces your current library and commander slots.`, () => socket.emit("loadDefaultDeck", name.slice(8)));
+        return;
+      }
       showConfirmModal(`Load "${name}"? This replaces your current library (and commander slots, if the deck has any).`, () => socket.emit("loadDeck", name));
     }
 
