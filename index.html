@@ -1871,6 +1871,8 @@
       if (/^\w+ spells you cast cost \{\d+\} less to cast\.?$/.test(low)) return true;
       if (/^creature spells you control can'?t be countered\.?$/.test(low)) return true;
       if (/^spells you control can'?t be countered\.?$/.test(low)) return true;
+      if (/^the mindskinner can'?t be blocked\.?$/.test(low)) return true;
+      if (/^if a source you control would deal damage to an opponent, prevent that damage and each opponent mills that many cards\.?$/.test(low)) return true;
       if (/^ward\s*[\u2014-]+\s*pay 2 life\.?$/.test(low)) return true;
       if (/^other creatures you control have "ward\s*[\u2014-]+\s*pay 2 life\.?"\.?$/.test(low)) return true;
       if (/^if a creature you control that entered this turn would deal damage, it deals twice that much damage instead\.?$/.test(low)) return true;

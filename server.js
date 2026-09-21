@@ -5670,7 +5670,7 @@ const EFFECTS = {
     const p = lobby.players[params.chosenTargetId];
     if (p) {
       if (params.chosenTargetId !== ctx.controllerId) amount *= damageMultiplierFor(lobby, ctx.controllerId, ctx.sourceCard);
-      amount = reduceDamageForVictim(lobby, params.chosenTargetId, amount);
+      amount = reduceDamageForVictim(lobby, params.chosenTargetId, amount, ctx.controllerId);
       if (applyLifeLoss(lobby, params.chosenTargetId, amount, sourceCardId)) {
         io.to(lobby.id).emit("spellDamage", { targetId: params.chosenTargetId, amount, sourceCardId });
       }
@@ -8603,7 +8603,7 @@ function effectiveKeywords(lobby, card) {
   // array never lists it, unlike Flying/Infect), same "text-scan a self-referential static" precedent
   // as the life-conditional grants just below. Only the exact unconditional sentence -- never
   // "...can't be blocked except by..." or "...as long as...".
-  if (/(^|\n)this creature can'?t be blocked\.?(\n|$)/i.test(card.text || "")) extra.push("Unblockable");
+  if (/(^|\n)(this creature|the mindskinner) can'?t be blocked\.?(\n|$)/i.test(card.text || "")) extra.push("Unblockable"); // The Mindskinner's Oracle text names itself
   // Winged/Two-Headed/Crystalline Sliver -- "All Sliver creatures have [keyword list]." A table-wide
   // grant from ANY controller's permanent to every creature of the named type. Only the plain keyword
   // words survive (KNOWN_KEYWORDS filter), so a quoted-ability grant is never mistaken for one.
@@ -11874,6 +11874,15 @@ function fireOpponentSearchTrigger(lobby, searchingPlayerId) {
 // one would silently under-trigger for half of what "dealt damage" really covers.
 function fireCreatureDamagedTrigger(lobby, card, amount) {
   if (!lobby.turn.started || amount <= 0) return;
+  // Arcbond -- "Whenever that creature is dealt damage this turn, it deals that much damage to each other creature and each player."
+  // The mark (card._arcbondTurn) is set by EFFECTS.arcbondMark; the creature itself is the damage source, so its controller's modifiers apply.
+  if (card._arcbondTurn === lobby.turn.turnNumber) {
+    pushAbilityToStack(lobby, {
+      sourceCard: card, controllerId: card.owner,
+      label: `Arcbond — ${card.name || "the creature"} deals ${amount} damage to each other creature and each player`,
+      effects: [{ type: "arcbondBurst", amount, sourceCardId: card.id }]
+    });
+  }
   // Spiteful Sliver -- "Sliver creatures you control have 'Whenever this creature is dealt damage, it deals that much damage to
   // target player or planeswalker.'" The trigger belongs to each of the controller's Slivers, so it's queued for the damaged one.
   if (/sliver/i.test(card.type || "")) {
@@ -12113,6 +12122,13 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
       if (ability.bakeEventWasAttacking && eventCard) {
         const was = !!(lobby.combat && lobby.combat.attackers && lobby.combat.attackers[eventCard.id]);
         fireAbility = { ...fireAbility, effects: (fireAbility.effects || []).map((e) => ({ ...e, eventWasAttacking: was })) };
+      }
+      // Hashaton, Scarab's Fist -- the discarded/dying card's own data is baked into every effect (a snapshot, since the card object
+      // may already be gone by resolution), so the effect can make a token copy of it.
+      if (ability.bakeEventCard && eventCard) {
+        const snap = {};
+        ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"].forEach((f) => { snap[f] = eventCard[f]; });
+        fireAbility = { ...fireAbility, effects: (fireAbility.effects || []).map((e) => ({ ...e, eventCardSnapshot: snap })) };
       }
       fireTrigger(lobby, c, fireAbility);
     });
@@ -12699,10 +12715,26 @@ function damageMultiplierFor(lobby, controllerId, sourceCard) {
 // Gisela happens to be on both. Same PLAYER-directed-only scope as the doubling half above (not
 // creature-vs-creature combat damage) -- a disclosed narrowing, same precedent as everywhere else.
 const SELF_DAMAGE_HALVING_CARDS = ["gisela, blade of goldnight"];
-function reduceDamageForVictim(lobby, victimId, amount) {
+function reduceDamageForVictim(lobby, victimId, amount, sourceControllerId) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
-    if (c.owner === victimId && c.zoneType !== "hand" && c.zoneType !== "stack" && SELF_DAMAGE_HALVING_CARDS.includes(archiveKey(c.name))) return Math.floor(amount / 2);
+    if (c.owner === victimId && c.zoneType !== "hand" && c.zoneType !== "stack" && SELF_DAMAGE_HALVING_CARDS.includes(archiveKey(c.name))) { amount = Math.floor(amount / 2); break; }
+  }
+  // The Mindskinner -- "If a source you control would deal damage to an opponent, prevent that damage and each opponent mills that
+  // many cards." Player-directed damage only (same scope as the doubling/halving cards above); sourceControllerId is threaded in by
+  // the combat and damageTarget call sites. Returning 0 makes those sites treat the hit as never dealt (no life loss, no triggers).
+  if (sourceControllerId && amount > 0 && victimId !== sourceControllerId && lobby.players[victimId]) {
+    const hasMindskinner = Object.values(lobby.cards).some((c) => c.owner === sourceControllerId && c.zoneType !== "hand" && c.zoneType !== "stack"
+      && /if a source you control would deal damage to an opponent, prevent that damage and each opponent mills that many cards/i.test(c.text || ""));
+    if (hasMindskinner) {
+      Object.keys(lobby.players).forEach((pid) => {
+        const op = lobby.players[pid];
+        if (pid !== sourceControllerId && op && !op.eliminated) millLibraryCards(lobby, pid, amount);
+      });
+      pushLog(lobby, `${amount} damage to ${lobby.players[victimId].name} is prevented; each opponent mills ${amount} (The Mindskinner)`);
+      broadcastPlayers(lobby);
+      return 0;
+    }
   }
   return amount;
 }
@@ -13219,7 +13251,7 @@ function resolveCombatDamage(lobby) {
               remaining -= toThis;
             });
             const toPlayerBase = atkTrample ? remaining : 0;
-            const toPlayer = reduceDamageForVictim(lobby, defenderId, toPlayerBase * damageMultiplierFor(lobby, attacker.owner, attacker));
+            const toPlayer = reduceDamageForVictim(lobby, defenderId, toPlayerBase * damageMultiplierFor(lobby, attacker.owner, attacker), attacker.owner);
             if (toPlayer > 0) {
               const defender = lobby.players[defenderId];
               // Teferi's Protection -- see the non-trample branch below for why the whole event is
@@ -13284,10 +13316,10 @@ function resolveCombatDamage(lobby) {
         // whole damage event (no poison, no commander-damage tracking either) rather than just
         // zeroing the life change.
         if (defender && atkPower > 0 && !defender.protectionFromEverything) {
-          const dealt = reduceDamageForVictim(lobby, defenderId, atkPower * damageMultiplierFor(lobby, attacker.owner, attacker));
+          const dealt = reduceDamageForVictim(lobby, defenderId, atkPower * damageMultiplierFor(lobby, attacker.owner, attacker), attacker.owner);
           // Deflecting Palm only intercepts real life loss -- infect's poison-counter conversion
           // (CR 702.90c) isn't a life change at all, so it's never redirectable and always lands.
-          const tookIt = hasKw(attacker, "infect") ? (defender.poison = (defender.poison || 0) + dealt, true) : applyLifeLoss(lobby, defenderId, dealt, attacker.id);
+          const tookIt = dealt <= 0 ? false : hasKw(attacker, "infect") ? (defender.poison = (defender.poison || 0) + dealt, true) : applyLifeLoss(lobby, defenderId, dealt, attacker.id);
           // A fully-redirected hit (Deflecting Palm) means this attacker never actually dealt ITS
           // defender any damage -- no commander-damage tracking, no lifelink, no
           // combat-damage-to-player trigger for a hit that didn't land.
@@ -14730,6 +14762,13 @@ io.on("connection", (socket) => {
       autoSacrificeArtifact = candidates[0] || null;
       if (!autoSacrificeArtifact) { socket.emit("actionError", `You have no ${filter} to sacrifice.`); return; }
     }
+    // Fountainport-style "Sacrifice a token" -- same auto-pick-first-qualifying shape as the filters above, matching any
+    // battlefield permanent whose type line carries "Token" (there is no isToken flag; see the note near the discard helpers).
+    let autoSacrificeTokenCard = null;
+    if (cost.autoSacrificeToken) {
+      autoSacrificeTokenCard = Object.values(lobby.cards).find((c) => c.owner === socket.id && c.zoneType !== "hand" && c.zoneType !== "stack" && /\btoken\b/i.test(c.type || "")) || null;
+      if (!autoSacrificeTokenCard) { socket.emit("actionError", "You have no token to sacrifice."); return; }
+    }
     // Tortured Existence-style "Discard a creature card" / Hollowhead Sliver-style "Discard a
     // card" -- same auto-pick-the-first-qualifying-card shape as autoSacrificeFilter just above,
     // for hand cards instead of battlefield creatures. "card" (not a real type substring) matches
@@ -14853,6 +14892,11 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} sacrifices ${autoSacrificeLand.name || "a land"} to pay the cost`);
       fireDeathTriggers(lobby, autoSacrificeLand);
       sendToGraveyardInternal(lobby, autoSacrificeLand);
+    }
+    if (autoSacrificeTokenCard) {
+      pushLog(lobby, `${p.name} sacrifices ${autoSacrificeTokenCard.name || "a token"} to pay the cost`);
+      fireDeathTriggers(lobby, autoSacrificeTokenCard);
+      sendToGraveyardInternal(lobby, autoSacrificeTokenCard);
     }
     if (autoSacrificeArtifact) {
       pushLog(lobby, `${p.name} sacrifices ${autoSacrificeArtifact.name || "an artifact"} to pay the cost`);
