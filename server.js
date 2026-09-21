@@ -1526,7 +1526,8 @@ const ACTIVATED_ABILITIES = {
   ],
   // ---- Wave 47 activated abilities ----
   "nykthos, shrine to nyx": [
-    { cost: { mana: "{2}", tap: true }, manaAbility: true, requiresTarget: false, label: "Nykthos — {2},{T}: choose a color, add mana of that color equal to your devotion to it", effects: [{ type: "chooseColorAddDevotion", sourceName: "Nykthos, Shrine to Nyx" }] }
+    { cost: { mana: "{2}", tap: true }, manaAbility: true, requiresTarget: false, label: "Nykthos — {2},{T}: choose a color, add mana of that color equal to your devotion to it", effects: [{ type: "chooseColorAddDevotion", sourceName: "Nykthos, Shrine to Nyx" }] },
+    { cost: { tap: true }, manaAbility: true, label: "Nykthos, Shrine to Nyx — Add {C}", effects: [{ type: "addFixedMana", colors: ["C"] }] }
   ],
   "nyx lotus": [{ cost: { tap: true }, manaAbility: true, requiresTarget: false, label: "Nyx Lotus — {T}: choose a color, add mana of that color equal to your devotion to it", effects: [{ type: "chooseColorAddDevotion", sourceName: "Nyx Lotus" }] }],
   "hansk, slayer zealot": [{ cost: { tap: true }, requiresTarget: true, targetKind: "creature", label: "Hansk, Slayer Zealot — {T}: 2 damage to target creature", effects: [{ type: "damageTarget", amount: 2 }] }],
