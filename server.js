@@ -3673,7 +3673,7 @@ const EFFECTS = {
   putLandFromHandOntoBattlefieldOptional(lobby, ctx, params) {
     const hasLand = Object.values(lobby.cards).some((c) => c.owner === ctx.controllerId && c.zoneType === "hand" && (c.type || "").toLowerCase().includes("land"));
     if (!hasLand) return;
-    lobby.turn.pendingDiscard = { playerId: ctx.controllerId, count: 1, optional: true, destination: "battlefieldLand" };
+    lobby.turn.pendingDiscard = { playerId: ctx.controllerId, count: 1, optional: true, destination: "battlefieldLand", tapped: !!params.tapped };
     broadcastTurn(lobby);
   },
   // Rishkar's Expertise -- "You may cast a spell with mana value [maxCmc] or less from your hand
@@ -8791,6 +8791,8 @@ function cardTypeProtectionBlocks(lobby, protectedPlayerId, sourceCard) {
   // triggered ability's sourceCard is only {id}).
   const srcOwner = sourceCard.owner || (lobby.cards[sourceCard.id] && lobby.cards[sourceCard.id].owner);
   if (srcOwner && srcOwner !== protectedPlayerId && (p._hexproofEOT || Object.values(lobby.cards).some((c) => c.owner === protectedPlayerId && c.zoneType !== "hand" && c.zoneType !== "stack" && /(^|\n)you have hexproof/i.test(c.text || "")))) return true;
+  // Veil of Summer -- "You and permanents you control gain hexproof from blue and from black until end of turn."
+  if (srcOwner && srcOwner !== protectedPlayerId && p._hexproofColors && p._hexproofColors.turn === lobby.turn.turnNumber && (sourceCard.colors || (lobby.cards[sourceCard.id] && lobby.cards[sourceCard.id].colors) || []).some((col) => p._hexproofColors.colors.includes(col))) return true;
   if (!p.protectionFromCardType) return false;
   return (sourceCard.type || "").toLowerCase().includes(p.protectionFromCardType.toLowerCase());
 }
@@ -9047,6 +9049,9 @@ function isProtectedFromCountering(lobby, stackItem) {
   // Delighted Halfling -- "...and that spell can't be countered," set on the cast card itself in
   // attemptPlay only when mana carrying this specific bonus was actually spent on it.
   if (stackItem.castWithUncounterableMana) return true;
+  // Veil of Summer -- "Spells you control can't be countered this turn."
+  const stackOwner = lobby.players[stackItem.owner];
+  if (stackOwner && stackOwner._uncounterableTurn === lobby.turn.turnNumber) return true;
   // Hexing Squelcher -- "Spells you control can't be countered." (line-anchored so it never matches "Creature spells you control ...")
   if (Object.values(lobby.cards).some((c) => c.owner === stackItem.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /(?:^|\n)spells you control can'?t be countered/i.test(c.text || ""))) return true;
   if (!(stackItem.type || "").toLowerCase().includes("creature")) return false;
@@ -10552,6 +10557,9 @@ function pushToStack(lobby, card, casterId) {
   const casterP = lobby.players[casterId];
   if (casterP) {
     casterP.spellsCastThisTurn = (casterP.spellsCastThisTurn || 0) + 1;
+    // Veil of Summer -- "if an opponent has cast a blue or black spell this turn": colours cast, keyed by turn number so it never needs a reset.
+    if (!casterP._castColors || casterP._castColors.turn !== lobby.turn.turnNumber) casterP._castColors = { turn: lobby.turn.turnNumber, colors: [] };
+    (card.colors || []).forEach((col) => { if (!casterP._castColors.colors.includes(col)) casterP._castColors.colors.push(col); });
     if (casterP.spellsCastThisTurn === 2) fireGlobalTriggerAllPlayers(lobby, "secondSpellCastByAPlayer", card);
   }
   // Cascade (CR 702.84) -- a pure text-scan on the cast spell's own printed text, same "no table
@@ -10679,6 +10687,8 @@ function fireCastWatchTriggers(lobby, casterId, spellCard) {
     const abilities = [...getAutomatedAbilities(c.name, "anyPlayerCastsSpell"), ...(c.owner !== casterId ? getAutomatedAbilities(c.name, "opponentCastsSpellTrig") : [])];
     abilities.forEach((ability) => {
       if (ability.spellTypeFilter && !ability.spellTypeFilter.some((t) => type.includes(t))) return;
+      // Nezahal, Primal Tide -- "Whenever an opponent casts a NONcreature spell": the inverse of spellTypeFilter.
+      if (ability.excludeTypeFilter && ability.excludeTypeFilter.some((t) => type.includes(t))) return;
       // Mana Breach -- "that player returns a land they control": the caster baked into chosenTargetId.
       const fireAbility = ability.dynamicTargetCaster ? { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: casterId })) } : ability;
       fireTrigger(lobby, c, fireAbility);
@@ -14796,11 +14806,14 @@ io.on("connection", (socket) => {
     // for hand cards instead of battlefield creatures. "card" (not a real type substring) matches
     // ANYTHING in hand.
     let autoDiscardCard = null;
+    let autoDiscardExtra = []; // Nezahal -- "Discard THREE cards": cost.autoDiscardCount > 1 discards the following candidates too
     if (cost.autoDiscardFilter) {
       const filter = cost.autoDiscardFilter;
       const candidates = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "hand" && (filter === "card" || (c.type || "").toLowerCase().includes(filter)));
+      const discardNeeded = cost.autoDiscardCount || 1;
       autoDiscardCard = candidates[0] || null;
-      if (!autoDiscardCard) { socket.emit("actionError", `You have no ${filter === "card" ? "card" : filter} card to discard.`); return; }
+      if (!autoDiscardCard || candidates.length < discardNeeded) { socket.emit("actionError", `You need ${discardNeeded} ${filter === "card" ? "card" : filter} card${discardNeeded === 1 ? "" : "s"} to discard.`); return; }
+      autoDiscardExtra = candidates.slice(1, discardNeeded);
     }
     // Cryptbreaker-style "Tap three untapped Zombies you control" -- a cost that taps OTHER
     // permanents (not the activating card's own {T} symbol via cost.tap above), so summoning
@@ -14832,6 +14845,9 @@ io.on("connection", (socket) => {
     }
     if (cost.removeSelfMinusCounter && (card.counters || 0) > -cost.removeSelfMinusCounter) { socket.emit("actionError", `${card.name} has no -1/-1 counter to remove.`); return; }
     if (cost.removeSelfCounter && (card.counters || 0) < cost.removeSelfCounter) { socket.emit("actionError", `${card.name} has no +1/+1 counter to remove.`); return; }
+    // Wishclaw Talisman -- "Remove a wish counter" / "Activate only during your turn": named counters live in card.namedCounters (server-only field, shown in the log).
+    if (cost.ownTurnOnly && lobby.turn.order[lobby.turn.activeIndex] !== socket.id) { socket.emit("actionError", `${card.name}'s ability can only be activated during your turn.`); return; }
+    if (cost.removeNamedCounter && ((card.namedCounters && card.namedCounters[cost.removeNamedCounter]) || 0) < 1) { socket.emit("actionError", `${card.name} has no ${cost.removeNamedCounter} counter to remove.`); return; }
     if (cost.tap) {
       if (card.tapped) { socket.emit("actionError", `${card.name} is already tapped.`); return; }
       // Summoning sickness (CR 302.6) only ever restricts CREATURES -- a plain artifact/other
@@ -14903,6 +14919,7 @@ io.on("connection", (socket) => {
     if (loyaltyDelta !== null) { card.counters = (card.counters || 0) + loyaltyDelta; card._loyaltyTurn = lobby.turn.turnNumber; broadcastCard(lobby, card); }
     if (cost.removeSelfMinusCounter) { card.counters = (card.counters || 0) + cost.removeSelfMinusCounter; broadcastCard(lobby, card); }
     if (cost.removeSelfCounter) { card.counters = (card.counters || 0) - cost.removeSelfCounter; broadcastCard(lobby, card); }
+    if (cost.removeNamedCounter) { card.namedCounters[cost.removeNamedCounter] -= 1; broadcastCard(lobby, card); }
     // Arena of Glory's "Exert this land" -- won't untap during its controller's next untap step.
     if (cost.exert) { card.exerted = true; broadcastCard(lobby, card); }
     if (autoSacrificeCard) {
@@ -14929,6 +14946,11 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} discards ${autoDiscardCard.name || "a card"} to pay the cost`);
       sendToGraveyardInternal(lobby, autoDiscardCard);
       fireGlobalTrigger(lobby, "youDiscard", socket.id, autoDiscardCard);
+      autoDiscardExtra.forEach((extra) => {
+        pushLog(lobby, `${p.name} discards ${extra.name || "a card"} to pay the cost`);
+        sendToGraveyardInternal(lobby, extra);
+        fireGlobalTrigger(lobby, "youDiscard", socket.id, extra);
+      });
     }
     if (tapCreaturesToTap.length) {
       tapCreaturesToTap.forEach((c) => { c.tapped = true; broadcastCard(lobby, c); });
@@ -16290,10 +16312,11 @@ io.on("connection", (socket) => {
       delete lobby.cards[chosen.id];
       if (lobby.targets[chosen.id]) delete lobby.targets[chosen.id];
       io.to(lobby.id).emit("cardRemove", chosen.id);
-      spawnBattlefieldCard(lobby, { ...chosen, owner: socket.id, zoneType: "mana" });
+      const landCard = spawnBattlefieldCard(lobby, { ...chosen, owner: socket.id, zoneType: "mana" });
+      if (pd.tapped) { landCard.tapped = true; broadcastCard(lobby, landCard); } // Horizon of Progress -- "onto the battlefield tapped"
       lobby.turn.pendingDiscard = null;
       broadcastTurn(lobby);
-      pushLog(lobby, `${p.name} put ${chosen.name || "a land"} onto the battlefield (Growth Spiral)`);
+      pushLog(lobby, `${p.name} put ${chosen.name || "a land"} onto the battlefield${pd.tapped ? " tapped" : ""}`);
       return;
     }
     // Rishkar's Expertise -- "cast a spell (MV [maxCmc] or less) from your hand without paying
