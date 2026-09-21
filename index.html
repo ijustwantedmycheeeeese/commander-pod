@@ -2355,7 +2355,6 @@
           case "ownNontokenArtifact": return z === "artifact" && card.owner === myId && !t.includes("token");
           case "commander": return z === "creature" && !!card.isCommander;
           case "attackingCreature": return z === "creature" && isAttacking;
-          case "untappedCreature": return z === "creature" && !card.tapped;
           case "attackingOrBlockingCreature": return z === "creature" && (isAttacking || isBlocking);
           case "opponentPermanent": return onBattlefield && card.owner !== myId;
           case "opponentNonlandPermanent": return nonland && card.owner !== myId;
