@@ -11088,6 +11088,13 @@ function resolveChosenTarget(lobby, entry, targetId) {
   }
   // Kor Haven -- "target attacking creature," checked against the real live combat state (any
   // controller's, matching the real card's own unrestricted wording) rather than just "creature".
+  // Backlash -- "target UNTAPPED creature".
+  if (targetKind === "untappedCreature") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "creature" || c.tapped) return { ok: false, error: "Choose an untapped creature." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
   if (targetKind === "attackingCreature") {
     const c = lobby.cards[targetId];
     if (!c || c.zoneType !== "creature" || !lobby.combat.attackers[targetId]) return { ok: false, error: "Choose an attacking creature." };
@@ -16475,6 +16482,14 @@ io.on("connection", (socket) => {
     // attacker known at once (each one's bonus depends on every OTHER attacker), so they're
     // computed once right here rather than as a per-creature trigger like
     // fireAttackTriggers/fireGlobalAttackTypeTriggers just below.
+    // Duelist's Heritage -- "whenever one or more creatures attack" (ANY player's attack), once per declaration.
+    if (Object.keys(validAttackers).length > 0) {
+      for (const cid in lobby.cards) {
+        const wc = lobby.cards[cid];
+        if (wc.zoneType === "hand" || wc.zoneType === "stack") continue;
+        getAutomatedAbilities(wc.name, "anyAttackDeclared").forEach((ability) => fireTrigger(lobby, wc, ability));
+      }
+    }
     applySharedAnimosity(lobby, Object.keys(validAttackers));
     applyBattleCry(lobby, Object.keys(validAttackers));
     applySelfAttackTypeCountPump(lobby, Object.keys(validAttackers));
