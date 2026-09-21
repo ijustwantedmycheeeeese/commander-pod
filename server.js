@@ -4340,6 +4340,7 @@ const EFFECTS = {
       pushLog(lobby, `${card.name || "A creature"} regenerates instead of being destroyed`);
       return;
     }
+    if (tryUmbraArmor(lobby, card)) return;
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
   },
@@ -4540,6 +4541,7 @@ const EFFECTS = {
       pushLog(lobby, `${card.name || "A creature"} regenerates instead of being destroyed`);
       return;
     }
+    if (tryUmbraArmor(lobby, card)) return;
     fireDeathTriggers(lobby, card);
     sendToGraveyardInternal(lobby, card);
     spawnBattlefieldCard(lobby, {
@@ -5693,6 +5695,7 @@ const EFFECTS = {
     const stat = staticBonusFor(lobby, card);
     const effToughness = parsePT(card.toughness) + (card.counters || 0) + bonus.toughnessBonus + stat.toughnessBonus;
     if (amount >= effToughness) {
+      if (tryUmbraArmor(lobby, card)) return;
       fireDeathTriggers(lobby, card);
       sendToGraveyardInternal(lobby, card);
     }
@@ -6233,6 +6236,7 @@ const EFFECTS = {
         pushLog(lobby, `${c.name || "A creature"} regenerates instead of being destroyed`);
         return;
       }
+      if (!params.noRegen && tryUmbraArmor(lobby, c)) return;
       fireDeathTriggers(lobby, c);
       sendToGraveyardInternal(lobby, c);
       destroyed++;
@@ -7340,6 +7344,7 @@ const EFFECTS = {
         pushLog(lobby, `${c.name || "A permanent"} regenerates instead of being destroyed`);
         return;
       }
+      if (tryUmbraArmor(lobby, c)) return;
       fireDeathTriggers(lobby, c);
       sendToGraveyardInternal(lobby, c);
       destroyedCount++;
@@ -10031,6 +10036,17 @@ function spawnBattlefieldCard(lobby, data) {
   return card;
 }
 
+// Umbra armor (Hyena Umbra) -- "If enchanted creature would be destroyed, instead remove all damage from it and destroy this Aura."
+// Damage is never persisted past a resolution pass in this engine, so "remove all damage" is implicit. Returns true when an
+// Aura with umbra armor absorbed the destruction (the caller then skips the death).
+function tryUmbraArmor(lobby, card) {
+  const aura = Object.values(lobby.cards).find((c) => c.attachedTo === card.id && /umbra armor/i.test(c.text || "") && /aura/i.test(c.type || ""));
+  if (!aura) return false;
+  pushLog(lobby, `${aura.name} (umbra armor) is destroyed instead of ${card.name || "the creature"}`);
+  sendToGraveyardInternal(lobby, aura);
+  broadcastCard(lobby, card);
+  return true;
+}
 // Laboratory Maniac / Jace, Wielder of Mysteries -- "If you would draw a card while your library
 // has no cards in it, you win the game instead." No base "lose by decking out" mechanic exists
 // anywhere in this engine at all (a real, separate gap) -- but this replacement effect is fully
@@ -10049,6 +10065,22 @@ function drawN(lobby, ownerId, n) {
         io.to(lobby.id).emit("gameOver", { winnerId: ownerId, winnerName: p.name });
       }
       break;
+    }
+    // Notion Thief -- "If an opponent would draw a card except the first one they draw in each of their draw steps, instead
+    // that player skips that draw and you draw a card." The first draw of the drawer's own draw step is exempt; any other
+    // draw (extra draws, spells, other steps) goes to the Thief's controller. Opening-hand draws (before handKept) are never replaced.
+    if (p.handKept && lobby.turn.started && !lobby._notionThiefBusy) {
+      const isFirstDrawStepDraw = lobby.turn.phase === "Draw" && lobby.turn.order[lobby.turn.activeIndex] === ownerId && p._drawStepDrawTurn !== lobby.turn.turnNumber;
+      if (isFirstDrawStepDraw) p._drawStepDrawTurn = lobby.turn.turnNumber;
+      else {
+        const thief = Object.values(lobby.cards).find((c) => c.owner !== ownerId && c.zoneType === "creature" && lobby.players[c.owner] && /if an opponent would draw a card except the first one they draw in each of their draw steps, instead that player skips that draw and you draw a card/i.test(c.text || ""));
+        if (thief) {
+          pushLog(lobby, `${thief.name} -- ${p.name}'s draw is skipped, ${lobby.players[thief.owner].name} draws a card instead`);
+          lobby._notionThiefBusy = true;
+          try { drawN(lobby, thief.owner, 1); } finally { lobby._notionThiefBusy = false; }
+          continue;
+        }
+      }
     }
     const entry = p.library.shift();
     spawnBattlefieldCard(lobby, { ...entry, owner: ownerId, faceDown: true, zoneType: "hand" });
@@ -13127,6 +13159,7 @@ function resolveCombatDamage(lobby) {
         pushLog(lobby, `${card.name || "A creature"} regenerates instead of dying`);
         continue;
       }
+      if (tryUmbraArmor(lobby, card)) continue;
       fireDeathTriggers(lobby, card); sendToGraveyardInternal(lobby, card);
     }
   }
@@ -16502,6 +16535,19 @@ io.on("connection", (socket) => {
         const wc = lobby.cards[cid];
         if (wc.owner !== defId || wc.zoneType === "hand" || wc.zoneType === "stack") continue;
         getAutomatedAbilities(wc.name, "opponentAttacksYou").forEach((ability) => fireTrigger(lobby, wc, ability));
+      }
+    });
+    // Breena, the Demagogue -- "Whenever a player attacks one of your opponents, if that opponent has more life than another of
+    // your opponents..." once per attacked player per watching permanent; attacker/defender are baked into the effects.
+    new Set(Object.values(validAttackers).filter((defId) => lobby.players[defId])).forEach((defId) => {
+      for (const cid in lobby.cards) {
+        const wc = lobby.cards[cid];
+        if (wc.zoneType === "hand" || wc.zoneType === "stack" || wc.owner === defId) continue;
+        getAutomatedAbilities(wc.name, "playerAttacksOpponent").forEach((ability) => {
+          if (ability.condition && !ability.condition(wc, lobby, { attackerId: socket.id, defenderId: defId })) return;
+          const effects = (ability.effects || []).map((e) => ({ ...e, attackerId: socket.id, defenderId: defId }));
+          pushAbilityToStack(lobby, { sourceCard: wc, controllerId: wc.owner, label: ability.label, effects });
+        });
       }
     });
     // Shared Animosity / Battle Cry / Goblin Piledriver-style pumps -- all three need every

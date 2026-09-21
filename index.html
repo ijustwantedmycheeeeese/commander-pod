@@ -1857,6 +1857,8 @@
       if (/^equipped creature has trample and "whenever this creature deals combat damage to a player, put that many \+1\/\+1 counters on it\."?$/.test(low)) return true;
       if (/^equipped creature gets \+1\/\+1 and has trample and "whenever this creature deals combat damage to a player or planeswalker, create that many treasure tokens\."?$/.test(low)) return true;
       if (/^nighthawk scavenger's power is equal to 1 plus the number of card types among cards in your opponents' graveyards\.?$/.test(low)) return true;
+      if (/^umbra armor(?: \(.*\))?\.?$/.test(low)) return true;
+      if (/^if an opponent would draw a card except the first one they draw in each of their draw steps, instead that player skips that draw and you draw a card\.?$/.test(low)) return true;
       if (/^equip \{?[\dwubrgc]+\}?$/.test(low)) return true;
       if (/^you may cast this spell as though it had flash/.test(low)) return true;
       if (/^(equipped|enchanted) creature gets [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
