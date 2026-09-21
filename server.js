@@ -9010,6 +9010,17 @@ function activatedAbilityCostReductionFor(lobby, ownerId) {
 // no-fixed-name-list precedent as spellCostReductionFor above. Scoped to the real automated counter
 // effects (EFFECTS.counterTargetSpell*) -- the manual ad-hoc Counter button stays a trusted freeform
 // tool like every other manual action in this app, so it's deliberately not checked here.
+// True when a stack item's locked-in target is `playerId` themself or a creature they control (Siren Stormtamer).
+// Abilities carry chosenTargetId on their own effects; spells on _resolvedSpellEffects (set once a target was chosen at cast).
+function stackItemTargetsPlayerOrTheirCreature(lobby, item, playerId) {
+  const effects = (item.kind === "ability" ? item.effects : item._resolvedSpellEffects) || [];
+  return effects.some((e) => {
+    if (!e || !e.chosenTargetId) return false;
+    if (e.chosenTargetId === playerId) return true;
+    const c = lobby.cards[e.chosenTargetId];
+    return !!c && c.zoneType === "creature" && c.owner === playerId;
+  });
+}
 function isProtectedFromCountering(lobby, stackItem) {
   if (!stackItem || stackItem.kind === "ability") return false;
   // Hit-Monkey and similar -- a spell's own printed "This spell can't be countered," checked
@@ -9019,6 +9030,8 @@ function isProtectedFromCountering(lobby, stackItem) {
   // Delighted Halfling -- "...and that spell can't be countered," set on the cast card itself in
   // attemptPlay only when mana carrying this specific bonus was actually spent on it.
   if (stackItem.castWithUncounterableMana) return true;
+  // Hexing Squelcher -- "Spells you control can't be countered." (line-anchored so it never matches "Creature spells you control ...")
+  if (Object.values(lobby.cards).some((c) => c.owner === stackItem.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /(?:^|\n)spells you control can'?t be countered/i.test(c.text || ""))) return true;
   if (!(stackItem.type || "").toLowerCase().includes("creature")) return false;
   return Object.values(lobby.cards).some((c) => c.owner === stackItem.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /creature spells you control can'?t be countered/i.test(c.text || ""));
 }
@@ -10938,6 +10951,12 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!lobby.stack.some((s) => s.id === targetId)) return { ok: false, error: "Choose a spell or ability on the stack." };
     return { ok: true };
   }
+  // Siren Stormtamer -- "target spell or ability that targets you or a creature you control."
+  if (targetKind === "stackTargetingController") {
+    const s = lobby.stack.find((s) => s.id === targetId);
+    if (!s || !stackItemTargetsPlayerOrTheirCreature(lobby, s, entry.controllerId)) return { ok: false, error: "Choose a spell or ability that targets you or a creature you control." };
+    return { ok: true };
+  }
   // Fierce Guardianship -- "counter target NONcreature spell" -- same stack lookup as "spell"
   // above, narrowed by the stack item's own printed type line (a real triggered/activated ability
   // sitting on the stack has no "creature" in its type either, so it's still a legal target here,
@@ -11813,7 +11832,9 @@ function fireAnyCreatureEtbTriggers(lobby, enteringCard) {
       if (ability.excludeSelf && c.id === enteringCard.id) return;
       if (ability.ifSourceUntapped && c.tapped) return; // Genesis Chamber
       if (ability.nontokenOnly && /token/i.test(enteringCard.type || "")) return;
-      const fireAbility = ability.dynamicTargetOwner ? { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: enteringCard.owner })) } : ability;
+      let fireAbility = ability.dynamicTargetOwner ? { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: enteringCard.owner })) } : ability;
+      // Shielded by Faith -- the effect needs to know WHICH creature entered.
+      if (ability.bakeEntering) fireAbility = { ...fireAbility, effects: (fireAbility.effects || []).map((e) => ({ ...e, enteringCardId: enteringCard.id })) };
       fireTrigger(lobby, c, fireAbility);
     });
   }
@@ -14630,6 +14651,11 @@ io.on("connection", (socket) => {
     if (ability.requiresTarget && ability.targetKind === "attackingCreature") {
       const hasMatch = Object.keys(lobby.combat.attackers || {}).length > 0;
       if (!hasMatch) { socket.emit("actionError", "There's no attacking creature to target."); return; }
+    }
+    // Siren Stormtamer -- same "reject before paying" reason: nothing on the stack targets you or your creatures.
+    if (ability.requiresTarget && ability.targetKind === "stackTargetingController") {
+      const hasMatch = lobby.stack.some((s) => stackItemTargetsPlayerOrTheirCreature(lobby, s, socket.id));
+      if (!hasMatch) { socket.emit("actionError", "Nothing on the stack targets you or a creature you control."); return; }
     }
     // Torch Courier -- same "reject before paying" reason, for when there's no OTHER creature on
     // the battlefield to target (checked before this creature sacrifices itself as part of the cost).

@@ -1870,6 +1870,10 @@
       if (anthemLooksAutomated(sentence)) return true;
       if (/^\w+ spells you cast cost \{\d+\} less to cast\.?$/.test(low)) return true;
       if (/^creature spells you control can'?t be countered\.?$/.test(low)) return true;
+      if (/^spells you control can'?t be countered\.?$/.test(low)) return true;
+      if (/^ward\s*[\u2014-]+\s*pay 2 life\.?$/.test(low)) return true;
+      if (/^other creatures you control have "ward\s*[\u2014-]+\s*pay 2 life\.?"\.?$/.test(low)) return true;
+      if (/^if a creature you control that entered this turn would deal damage, it deals twice that much damage instead\.?$/.test(low)) return true;
       if (/^nontoken creatures you control have riot\.?$/.test(low)) return true;
       if (/^whenever a creature you control attacks, it gets \+1\/\+0 until end of turn for each other attacking creature that shares a creature type with it\.?$/.test(low)) return true;
       if (/^battle cry \(.*\)$/.test(low) || low === "battle cry") return true;
@@ -2299,13 +2303,14 @@
         opponent: "Click an opponent to target them.",
         nonCreatureSpell: "Click a noncreature spell on the Stack to target it.",
         instantOrSorcerySpell: "Click an instant or sorcery spell on the Stack to target it.",
+        stackTargetingController: "Click a spell or ability on the Stack that targets you or a creature you control.",
         spellMvFilter: "Click a spell on the Stack to target it."
       };
       if (KIND_LABELS[kind]) return KIND_LABELS[kind];
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone" || kind === "opponent" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "ownGraveyard" || kind === "ownGraveyardMvFilter") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
+      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone" || kind === "opponent" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "stackTargetingController" || kind === "ownGraveyard" || kind === "ownGraveyardMvFilter") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
@@ -2381,7 +2386,7 @@
       return card.zoneType === kind;
     }
     // Stack-targeting kinds (spells/abilities on the Stack panel) and player-targeting kinds.
-    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "opponentSpellOrNonlandPermanent"; }
+    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "stackTargetingController" || kind === "opponentSpellOrNonlandPermanent"; }
     function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any" || kind === "playerOrPlaneswalker" || kind === "opponent"; }
     // Serra's Emissary's ETB choice -- same fixed list as the server's own CARD_TYPE_CHOICES.
     const CARD_TYPE_CHOICES = ["Creature", "Instant", "Sorcery", "Artifact", "Enchantment", "Planeswalker", "Land"];
