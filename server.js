@@ -3550,7 +3550,7 @@ const EFFECTS = {
       if (p.library.length === 0) {
         if (hasWinOnEmptyDraw(lobby, ctx.controllerId)) {
           pushLog(lobby, `${p.name} would draw from an empty library -- wins the game instead!`);
-          io.to(lobby.id).emit("gameOver", { winnerId: ctx.controllerId, winnerName: p.name });
+          emitGameOver(lobby, { winnerId: ctx.controllerId, winnerName: p.name });
         }
         break;
       }
@@ -6437,7 +6437,7 @@ const EFFECTS = {
     const p = lobby.players[ctx.controllerId];
     if (p && p.library.length === 0) {
       pushLog(lobby, `${p.name}'s library is empty after drawing -- they win the game (Jace, Wielder of Mysteries)`);
-      io.to(lobby.id).emit("gameOver", { winnerId: ctx.controllerId, winnerName: p.name });
+      emitGameOver(lobby, { winnerId: ctx.controllerId, winnerName: p.name });
     }
   },
   // Chandra, Awakened Inferno -- "+2: Each opponent gets an emblem with 'At the beginning of your upkeep, this
@@ -7785,7 +7785,7 @@ function removePlayerFromLobby(lobby, socketId, verb) {
   removeFromCombatRefs(lobby, socketId);
   discardPendingTargetChoices(lobby, socketId);
   if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators || {}).length === 0) {
-    delete lobbies[lobby.id];
+    journalEnd(lobby, "closed"); delete lobbies[lobby.id];
   } else {
     broadcastVoiceRoster(lobby);
     broadcastTurn(lobby);
@@ -7827,10 +7827,10 @@ function checkGameOver(lobby) {
     const winner = lobby.players[lobby.turn.order[0]];
     if (!winner) return;
     pushLog(lobby, `${winner.name} wins the game!`);
-    io.to(lobby.id).emit("gameOver", { winnerId: lobby.turn.order[0], winnerName: winner.name });
+    emitGameOver(lobby, { winnerId: lobby.turn.order[0], winnerName: winner.name });
   } else if (lobby.turn.order.length === 0) {
     pushLog(lobby, `The game ends in a draw -- no players remaining.`);
-    io.to(lobby.id).emit("gameOver", { winnerId: null, winnerName: null });
+    emitGameOver(lobby, { winnerId: null, winnerName: null });
   }
 }
 
@@ -9704,10 +9704,187 @@ function broadcastPlayers(lobby) {
   }
 }
 
+// ---------------- player-input journal ----------------
+// Passive, server-side-only record of every full game, so finished playthroughs can be studied later to see where players had to do
+// things by hand (manual counters, zone moves, mana) because a card's automation is missing or wrong. One JSONL file per game:
+// DATA_DIR/journal/<lobbyId>-<startEpoch>.jsonl, one record per line, every record has t (ms since game start), seq and k (its type):
+//   start {seats:[{seat,deck,commanders}]}  in {seat,ev,p,turn,phase}  log {msg}  err {seat,msg}  snap {turn,phase,active,players,stack}  end {reason}
+// Gameplay only and pseudonymous: players are labelled P1..P4 (seat order, stable across reconnects), card ids become {card,zone},
+// and account names, display names, socket ids, chat, voice, cursors, deck editing and account settings are never written.
+// The journal must never affect a game: every entry point is try/catch-wrapped, writes are one small appendFileSync, and a failed or
+// oversized journal just switches itself off. Set ARCHON_JOURNAL=0 to disable it entirely (default on).
+const JOURNAL_ON = process.env.ARCHON_JOURNAL !== "0";
+const JOURNAL_DIR = path.join(DATA_DIR, "journal");
+const JOURNAL_MAX_BYTES = 64 * 1024 * 1024;
+const JOURNAL_EVENTS = new Set(("playCard freeCastCard cycleCard castWithAltCost tap resolveManaChoice flip counter activateAbility castSpellAltCost channelAbility setKeywords attachCard detachCard takeControl " +
+  "returnControl copyCard removeCard toHand untapAll chooseTargetFor skipTargetChoice cancelTargetChoice payOptionalCost declineOptionalCost toGraveyard toExile toLibraryTop toLibraryBottom " +
+  "zoneToBattlefield castFlashback zoneToHand commanderToCommandZone shuffleLibrary drawCard drawSpecific fetchLand cancelFetch tutorCard resolveScry resolveSurveil cancelTutor millCard " +
+  "drawOpeningHand keepHand mulligan castCommander commanderTax nextPhase resolveDiscard passPriority counterStackItem declareAttackers declareBlockers undo spawnCard changeZone addMana removeMana " +
+  "landDropBonus statChange concede toggleTarget").split(" "));
+const JOURNAL_DROP_KEYS = new Set(["img", "image", "art", "url", "avatar", "token", "password", "username", "text"]); // never journaled even if short
+const journals = new WeakMap(); // lobby -> journal state; kept out of the lobby object so it can never be persisted or broadcast
+
+function journalRefresh(lobby, j) {
+  // Learn seats/socket ids/names (cheap: <= 4 players) and rebuild the name scrubber when a new one shows up.
+  let changed = false;
+  const learn = (key, label) => { if (key && typeof key === "string" && j.scrubMap[key.toLowerCase()] === undefined) { j.scrubMap[key.toLowerCase()] = label; changed = true; } };
+  for (const sid in lobby.players) {
+    const p = lobby.players[sid];
+    if (!j.seats[p.username]) j.seats[p.username] = "P" + (Object.keys(j.seats).length + 1);
+    const label = j.seats[p.username];
+    j.sids[sid] = label;
+    learn(sid, label); learn(p.username, label); learn(p.name, label);
+  }
+  for (const sid in (lobby.spectators || {})) { const s = lobby.spectators[sid]; learn(sid, "S"); learn(s && s.username, "S"); learn(s && s.name, "S"); }
+  learn(lobby.hostUsername, j.seats[lobby.hostUsername] || "S");
+  if (changed) {
+    const alts = Object.keys(j.scrubMap).sort((a, b) => b.length - a.length).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    j.scrub = alts.length ? new RegExp("(?<![\\p{L}\\p{N}_])(?:" + alts.join("|") + ")(?![\\p{L}\\p{N}_])", "giu") : null;
+  }
+}
+function journalScrub(j, s) { return j.scrub ? s.replace(j.scrub, (m) => j.scrubMap[m.toLowerCase()] || "?") : s; }
+
+// A string that is a card/stack-item id (battlefield, hand, graveyard, exile, library) becomes {card,zone}; a socket id becomes its seat label.
+function journalResolveId(lobby, j, s) {
+  if (j.sids[s]) return j.sids[s];
+  if (!/^[\w-]{3,40}$/.test(s)) return null;
+  const c = lobby.cards[s];
+  if (c) return { card: c.name, zone: c.zoneType };
+  const item = lobby.stack.find((i) => i.id === s);
+  if (item) return { card: item.name, zone: "stack" };
+  for (const pid in lobby.players) {
+    const p = lobby.players[pid];
+    for (const zone of ["graveyard", "exile", "library"]) {
+      const e = (p[zone] || []).find((x) => x && x.id === s);
+      if (e) return { card: e.name, zone };
+    }
+  }
+  return null;
+}
+
+// Whitelist-style payload sanitizer: ids resolved as above, numbers/booleans as is, strings > 80 chars dropped, arrays capped at 20 items,
+// objects at 30 keys and depth 4, keys that could carry art/urls/credentials or start with "_" skipped.
+function journalSanitize(lobby, j, v, depth = 0) {
+  if (v === null || typeof v === "boolean") return v;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    if (v.length > 80) return undefined;
+    const id = journalResolveId(lobby, j, v);
+    return id !== null ? id : journalScrub(j, v);
+  }
+  if (depth >= 4 || typeof v !== "object") return undefined;
+  if (Array.isArray(v)) return v.slice(0, 20).map((x) => journalSanitize(lobby, j, x, depth + 1)).filter((x) => x !== undefined);
+  const out = {};
+  for (const key of Object.keys(v).slice(0, 30)) {
+    if (JOURNAL_DROP_KEYS.has(key) || key[0] === "_") continue;
+    const val = journalSanitize(lobby, j, v[key], depth + 1);
+    if (val === undefined) continue;
+    const idKey = key.length <= 40 ? journalResolveId(lobby, j, key) : null; // objects keyed by card/socket id
+    out[idKey === null ? journalScrub(j, key) : (typeof idKey === "string" ? idKey : "card:" + idKey.card)] = val;
+  }
+  return out;
+}
+
+function journalWrite(j, rec) {
+  if (j.dead) return;
+  const line = JSON.stringify({ t: Date.now() - j.t0, seq: j.seq++, ...rec }) + "\n";
+  j.bytes += line.length;
+  if (j.bytes > JOURNAL_MAX_BYTES) { j.dead = true; console.warn(`journal ${j.file}: size cap reached, journaling stopped for this game`); return; }
+  fs.appendFileSync(j.file, line);
+}
+// Runs a journal action for a lobby that has a live journal; swallows every error so the game is never affected.
+function journalDo(lobby, fn) {
+  try {
+    const j = JOURNAL_ON && lobby ? journals.get(lobby) : null;
+    if (!j || j.dead) return;
+    journalRefresh(lobby, j);
+    fn(j);
+  } catch (e) {
+    try { const j = journals.get(lobby); if (j) j.dead = true; console.warn("journal disabled after error:", e && e.message); } catch (e2) {}
+  }
+}
+const journalSeatOf = (lobby, j, sid) => (lobby.players[sid] && j.seats[lobby.players[sid].username]) || j.sids[sid] || "?";
+
+function journalStart(lobby) {
+  if (!JOURNAL_ON) return;
+  try {
+    journalEnd(lobby, "restarted");
+    fs.mkdirSync(JOURNAL_DIR, { recursive: true });
+    const t0 = Date.now();
+    const j = { file: path.join(JOURNAL_DIR, `${String(lobby.id).replace(/[^\w-]/g, "")}-${t0}.jsonl`), t0, seq: 0, bytes: 0, dead: false, seats: Object.create(null), sids: Object.create(null), scrubMap: Object.create(null), scrub: null };
+    journals.set(lobby, j);
+    journalRefresh(lobby, j);
+    const seats = Object.keys(lobby.players).map((sid) => {
+      const p = lobby.players[sid];
+      return { seat: j.seats[p.username], deck: p.library.map((c) => c.name).sort(), commanders: (p.commanders || []).filter(Boolean).map((c) => c.name) };
+    });
+    journalWrite(j, { k: "start", seats });
+  } catch (e) { console.warn("journal start failed:", e && e.message); journals.delete(lobby); }
+}
+function journalEnd(lobby, reason) {
+  journalDo(lobby, (j) => { journalSnap(lobby); journalWrite(j, { k: "end", reason }); });
+  if (lobby) journals.delete(lobby); // one end record per game; later inputs are not recorded
+}
+// Called from the guarded socket.on wrapper BEFORE the handler runs, so ids resolve against the state the player acted on.
+function journalIn(socket, ev, args) {
+  try {
+    if (!JOURNAL_ON || !JOURNAL_EVENTS.has(ev)) return;
+    const lobby = socket.data && socket.data.lobbyId ? lobbies[socket.data.lobbyId] : null;
+    if (!lobby || !lobby.players[socket.id]) return; // spectators / players outside a lobby are not gameplay
+    journalDo(lobby, (j) => {
+      const rec = { k: "in", seat: journalSeatOf(lobby, j, socket.id), ev };
+      const p = journalSanitize(lobby, j, args[0]);
+      if (p !== undefined) rec.p = p;
+      rec.turn = lobby.turn.turnNumber; rec.phase = lobby.turn.phase;
+      journalWrite(j, rec);
+    });
+  } catch (e) {}
+}
+function journalLog(lobby, msg) { journalDo(lobby, (j) => journalWrite(j, { k: "log", msg: journalScrub(j, String(msg)).slice(0, 500) })); }
+function journalErr(socket, msg) {
+  try {
+    const lobby = socket.data && socket.data.lobbyId ? lobbies[socket.data.lobbyId] : null;
+    if (!lobby || !lobby.players[socket.id]) return;
+    journalDo(lobby, (j) => journalWrite(j, { k: "err", seat: journalSeatOf(lobby, j, socket.id), msg: journalScrub(j, String(msg)).slice(0, 300) }));
+  } catch (e) {}
+}
+// Board state at every place the game stops for players (after a phase/turn change): what each player has, everywhere, and what is on the stack.
+function journalSnap(lobby) {
+  journalDo(lobby, (j) => {
+    const cards = Object.values(lobby.cards);
+    const names = (zone) => (zone || []).map((e) => e && e.name);
+    const players = Object.keys(lobby.players).map((sid) => {
+      const p = lobby.players[sid];
+      const snap = {
+        seat: journalSeatOf(lobby, j, sid), life: p.life, poison: p.poison,
+        handCount: cards.filter((c) => c.owner === sid && c.zoneType === "hand").length, libCount: p.library.length,
+        graveyard: names(p.graveyard), exile: names(p.exile), commanders: (p.commanders || []).filter(Boolean).map((c) => c.name),
+        battlefield: cards.filter((c) => c.owner === sid && c.zoneType !== "hand" && c.zoneType !== "stack").map((c) => {
+          const e = { n: c.name, z: c.zoneType };
+          if (c.counters) e.c = c.counters;
+          if (c.tapped) e.t = true;
+          e.type = c.type;
+          return e;
+        })
+      };
+      if (p.eliminated) snap.out = true;
+      if (Object.values(p.mana || {}).some((n) => n)) snap.mana = p.mana; // floating mana, useful for spotting manual mana
+      return snap;
+    }).sort((a, b) => a.seat.localeCompare(b.seat));
+    journalWrite(j, { k: "snap", turn: lobby.turn.turnNumber, phase: lobby.turn.phase, active: journalSeatOf(lobby, j, lobby.turn.order[lobby.turn.activeIndex]), players, stack: lobby.stack.map((i) => i.name) });
+  });
+}
+// The one place "gameOver" is announced (several win paths exist); also closes the journal.
+function emitGameOver(lobby, payload) {
+  journalEnd(lobby, payload && payload.winnerId ? "win" : "draw");
+  io.to(lobby.id).emit("gameOver", payload);
+}
+
 function pushLog(lobby, msg) {
   lobby.gameState.log.push(msg);
   if (lobby.gameState.log.length > 150) lobby.gameState.log.shift();
   io.to(lobby.id).emit("log", msg);
+  journalLog(lobby, msg);
 }
 
 // ---------------- single-slot per-player "undo my last action" ----------------
@@ -10034,7 +10211,7 @@ function drawN(lobby, ownerId, n) {
     if (p.library.length === 0) {
       if (hasWinOnEmptyDraw(lobby, ownerId)) {
         pushLog(lobby, `${p.name} would draw from an empty library -- wins the game instead!`);
-        io.to(lobby.id).emit("gameOver", { winnerId: ownerId, winnerName: p.name });
+        emitGameOver(lobby, { winnerId: ownerId, winnerName: p.name });
       }
       break;
     }
@@ -12732,6 +12909,7 @@ function shouldAutoAdvance(lobby) {
 function advancePhase(lobby) {
   advanceOnePhase(lobby);
   while (shouldAutoAdvance(lobby)) advanceOnePhase(lobby);
+  journalSnap(lobby); // the game has now stopped in a phase players can act in
 }
 
 // CR 800.4a: when a player leaves the game (concedes, is eliminated by life/damage, or disconnects)
@@ -12769,6 +12947,7 @@ function beginTurnFlowOnceHandsReady(lobby) {
   if (!lobby.turn.started || lobby.turn.turnNumber !== 1 || lobby.turn.phase !== "Untap") return;
   if (!Object.values(lobby.players).every((p) => p.handKept)) return;
   while (shouldAutoAdvance(lobby)) advanceOnePhase(lobby);
+  journalSnap(lobby);
   broadcastTurn(lobby);
   broadcastCombat(lobby);
   broadcastPlayers(lobby);
@@ -13585,9 +13764,13 @@ io.on("connection", (socket) => {
   // tell the sender, and keep serving everyone else.
   const rawOn = socket.on.bind(socket);
   socket.on = (ev, fn) => rawOn(ev, (...handlerArgs) => {
+    journalIn(socket, ev, handlerArgs); // player-input journal: never throws, runs before the handler
     const fail = (e) => { console.error(`Handler error in "${ev}":`, e && e.stack ? e.stack.split("\n").slice(0, 3).join(" | ") : e); try { socket.emit("actionError", "That action could not be processed."); } catch (e2) {} };
     try { const r = fn(...handlerArgs); if (r && typeof r.catch === "function") r.catch(fail); } catch (e) { fail(e); }
   });
+  // Journal every actionError this player is sent (best-effort; the emit itself always goes through unchanged).
+  const rawEmit = socket.emit.bind(socket);
+  socket.emit = (ev, ...emitArgs) => { if (ev === "actionError") journalErr(socket, emitArgs[0]); return rawEmit(ev, ...emitArgs); };
   const token = socket.handshake.auth && socket.handshake.auth.token;
   const username = sessionUsername(token);
   if (!username) {
@@ -13754,7 +13937,7 @@ io.on("connection", (socket) => {
     if (lobby.spectators[socket.id]) {
       delete lobby.spectators[socket.id];
       if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators).length === 0) {
-        delete lobbies[lobby.id];
+        journalEnd(lobby, "closed"); delete lobbies[lobby.id];
       } else {
         broadcastSpectators(lobby);
         pushLog(lobby, `${username} stopped spectating`);
@@ -13839,7 +14022,7 @@ io.on("connection", (socket) => {
       sock.leave(lobby.id);
       sock.data.lobbyId = null;
     }
-    delete lobbies[id];
+    journalEnd(lobbies[id], "closed"); delete lobbies[id];
     saveLobbies();
     broadcastLobbyList();
   });
@@ -16039,6 +16222,7 @@ io.on("connection", (socket) => {
       socket.emit("actionError", `Everyone needs a deck loaded before starting — still waiting on: ${noDeck.map((p) => p.name).join(", ")}.`);
       return;
     }
+    journalStart(lobby); // player-input journal (see its section above); started before the first pushLog so the turn-order rolls are captured
     // Pregame dice roll decides turn order — everyone rolls a d20, highest goes first, ties
     // broken randomly, and the log shows every roll so it's not just a silent shuffle.
     const rolls = Object.keys(lobby.players).map((sid) => ({ sid, roll: gameRandInt(20) + 1, tiebreak: gameRand() }));
@@ -16752,7 +16936,7 @@ io.on("connection", (socket) => {
       // instead of running the reconnect-grace machinery built for seated players.
       delete lobby.spectators[socket.id];
       if (Object.keys(lobby.players).length === 0 && Object.keys(lobby.spectators).length === 0) {
-        delete lobbies[lobby.id];
+        journalEnd(lobby, "closed"); delete lobbies[lobby.id];
       } else {
         broadcastSpectators(lobby);
       }
