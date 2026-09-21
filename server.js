@@ -9829,7 +9829,7 @@ function checkControlDurations(lobby) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     // Treachery-style Aura -- "You control enchanted creature." Applies while attached; the durable link is _controlSourceId.
-    if (c.zoneType !== "hand" && c.zoneType !== "stack" && c.attachedTo && /you control enchanted (?:creature|permanent)/i.test(c.text || "")) {
+    if (c.zoneType !== "hand" && c.zoneType !== "stack" && c.attachedTo && /you control enchanted (?:creature|permanent|enchantment|artifact|land)/i.test(c.text || "")) {
       const host = lobby.cards[c.attachedTo];
       if (host && host.owner !== c.owner) changeControl(lobby, host, c.owner, { sourceId: c.id });
     }
@@ -11089,6 +11089,20 @@ function resolveChosenTarget(lobby, entry, targetId) {
   // Kor Haven -- "target attacking creature," checked against the real live combat state (any
   // controller's, matching the real card's own unrestricted wording) rather than just "creature".
   // Backlash -- "target UNTAPPED creature".
+  // Sink into Stupor -- "target spell or nonland permanent an opponent controls."
+  if (targetKind === "opponentSpellOrNonlandPermanent") {
+    const s = lobby.stack.find((x) => x.id === targetId);
+    if (s) {
+      if (s.kind === "ability") return { ok: false, error: "Choose a spell, not an ability." };
+      if (s.owner === entry.controllerId) return { ok: false, error: "Choose a spell an opponent controls." };
+      return { ok: true };
+    }
+    const c = lobby.cards[targetId];
+    if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a spell or a nonland permanent." };
+    if (c.owner === entry.controllerId) return { ok: false, error: "Choose a permanent an opponent controls." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
   if (targetKind === "untappedCreature") {
     const c = lobby.cards[targetId];
     if (!c || c.zoneType !== "creature" || c.tapped) return { ok: false, error: "Choose an untapped creature." };

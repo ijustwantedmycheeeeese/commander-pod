@@ -1852,7 +1852,8 @@
       if (/^this (land|artifact) deals \d+ damage to you\.?$/.test(low)) return true;
       if (/^\{t\}, pay \d+ life:\s*add\b/.test(low)) return true;
       if (/^(basic landcycling|cycling) \{[^}]+\}\.?$/.test(low)) return true;
-      if (/^enchant creature$/.test(low)) return true;
+      if (/^enchant (creature|enchantment)$/.test(low)) return true;
+      if (/^you control enchanted enchantment\.?$/.test(low)) return true;
       if (/^equip \{?[\dwubrgc]+\}?$/.test(low)) return true;
       if (/^you may cast this spell as though it had flash/.test(low)) return true;
       if (/^(equipped|enchanted) creature gets [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
@@ -2356,6 +2357,7 @@
           case "commander": return z === "creature" && !!card.isCommander;
           case "attackingCreature": return z === "creature" && isAttacking;
           case "untappedCreature": return z === "creature" && !card.tapped;
+          case "opponentSpellOrNonlandPermanent": return nonland && card.owner !== myId;
           case "attackingOrBlockingCreature": return z === "creature" && (isAttacking || isBlocking);
           case "opponentPermanent": return onBattlefield && card.owner !== myId;
           case "opponentNonlandPermanent": return nonland && card.owner !== myId;
@@ -2374,7 +2376,7 @@
       return card.zoneType === kind;
     }
     // Stack-targeting kinds (spells/abilities on the Stack panel) and player-targeting kinds.
-    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter"; }
+    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "opponentSpellOrNonlandPermanent"; }
     function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any" || kind === "playerOrPlaneswalker" || kind === "opponent"; }
     // Serra's Emissary's ETB choice -- same fixed list as the server's own CARD_TYPE_CHOICES.
     const CARD_TYPE_CHOICES = ["Creature", "Instant", "Sorcery", "Artifact", "Enchantment", "Planeswalker", "Land"];
