@@ -7926,6 +7926,13 @@ function reattachPlayer(lobby, oldId, newId) {
   }
   lobby.combat.defendersPending = (lobby.combat.defendersPending || []).map((id) => (id === oldId ? newId : id));
   lobby.pendingTargetChoices.forEach((c) => { if (c.controllerId === oldId) c.controllerId = newId; });
+  // Everything else that remembers a player by socket id. Found by bot games that reconnected mid-turn: a pending optional payment (a shock land's "pay 2 life?",
+  // Smothering Tithe...) stayed addressed to the OLD id, so it never surfaced for the reconnected player and blocked passPriority for the whole table.
+  lobby.pendingOptionalPayments.forEach((e) => { if (e.playerId === oldId) e.playerId = newId; if (e.controllerId === oldId) e.controllerId = newId; });
+  if (lobby.monarchId === oldId) lobby.monarchId = newId;
+  (lobby.extraTurns || []).forEach((id, i, arr) => { if (id === oldId) arr[i] = newId; });
+  (lobby.delayedTriggers || []).forEach((dt) => { if (dt.controllerId === oldId) dt.controllerId = newId; });
+  for (const id in lobby.cards) { if (lobby.cards[id]._goadedBy === oldId) lobby.cards[id]._goadedBy = newId; }
 }
 
 function buildLobbyJoinedPayload(lobby, socketId) {
@@ -13552,6 +13559,14 @@ app.post("/api/upload", (req, res) => {
 // ---------------- Socket.IO ----------------
 
 io.on("connection", (socket) => {
+  // Guard every handler. A malformed payload (null, a string where an object is expected) makes a destructuring parameter such as ({ id }) throw before the
+  // handler body even starts; that used to surface as a process-level "Uncaught exception" with no context. Catch it per event, log which event it was,
+  // tell the sender, and keep serving everyone else.
+  const rawOn = socket.on.bind(socket);
+  socket.on = (ev, fn) => rawOn(ev, (...handlerArgs) => {
+    const fail = (e) => { console.error(`Handler error in "${ev}":`, e && e.stack ? e.stack.split("\n").slice(0, 3).join(" | ") : e); try { socket.emit("actionError", "That action could not be processed."); } catch (e2) {} };
+    try { const r = fn(...handlerArgs); if (r && typeof r.catch === "function") r.catch(fail); } catch (e) { fail(e); }
+  });
   const token = socket.handshake.auth && socket.handshake.auth.token;
   const username = sessionUsername(token);
   if (!username) {
@@ -15873,7 +15888,13 @@ io.on("connection", (socket) => {
     return {
       turnNumber: turn.turnNumber || 0, phase: cap(turn.phase, 20), activePlayer: turn.order && lobby.players[turn.order[turn.activeIndex]] ? cap(lobby.players[turn.order[turn.activeIndex]].name, 40) : null,
       players, stack: (lobby.stack || []).slice(0, 20).map((s) => cap(s.name, 120)),
-      pendingChoices: (lobby.pendingTargetChoices || []).slice(0, 5).map((c) => ({ label: cap(c.label, 160), kind: cap(c.targetKind || c.kind, 40), step: (c.chosenTargetIds || []).length })),
+      // Who the engine is waiting on (this is what a frozen table needs): priority, open optional payments, each player's other open prompts.
+      priority: lobby.priority ? { holder: lobby.players[lobby.priority.holderId] ? cap(lobby.players[lobby.priority.holderId].name, 40) : cap(lobby.priority.holderId, 30), lastActor: lobby.players[lobby.priority.lastActorId] ? cap(lobby.players[lobby.priority.lastActorId].name, 40) : null } : null,
+      pendingDiscard: turn.pendingDiscard ? { player: lobby.players[turn.pendingDiscard.playerId] ? cap(lobby.players[turn.pendingDiscard.playerId].name, 40) : cap(turn.pendingDiscard.playerId, 30), count: turn.pendingDiscard.count } : null,
+      optionalPayments: (lobby.pendingOptionalPayments || []).slice(0, 5).map((e) => ({ label: cap(e.label, 120), player: lobby.players[e.playerId] ? cap(lobby.players[e.playerId].name, 40) : "UNSEATED " + cap(e.playerId, 30) })),
+      playerPrompts: Object.keys(lobby.players).map((pid) => { const pl = lobby.players[pid]; const open = ["pendingScry", "pendingSurveil", "pendingFetch", "pendingTutor", "pendingFreeManaChoice"].filter((k) => pl[k]); return open.length ? { player: cap(pl.name, 40), open } : null; }).filter(Boolean),
+      combatStep: lobby.combat ? cap(lobby.combat.step, 20) : null, defendersPending: lobby.combat ? (lobby.combat.defendersPending || []).map((id) => (lobby.players[id] ? cap(lobby.players[id].name, 40) : "UNSEATED")) : [],
+      pendingChoices: (lobby.pendingTargetChoices || []).slice(0, 5).map((c, i) => ({ pos: i, label: cap(c.label, 160), kind: cap(c.targetKind || c.kind, 40), entryKind: cap(c.kind, 20), step: (c.chosenTargetIds || []).length, controller: lobby.players[c.controllerId] ? cap(lobby.players[c.controllerId].name, 40) : "UNSEATED", socketAlive: !!io.sockets.sockets.get(c.controllerId), hasSpellCard: !!c.spellCard, spellStillInHand: !!(c.spellCard && lobby.cards[c.spellCard.id] && lobby.cards[c.spellCard.id].zoneType === "hand") })),
       log: (lobby.gameState && lobby.gameState.log ? lobby.gameState.log : []).slice(-30).map((l) => cap(l, 200))
     };
   }
