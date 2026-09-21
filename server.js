@@ -9161,6 +9161,18 @@ function staticBonusFor(lobby, card) {
     const n = colorsAmongPermanentsFor(lobby, card.owner);
     powerBonus += n; toughnessBonus += n;
   }
+  // Nighthawk Scavenger -- "power is equal to 1 plus the number of card types among cards in your opponents' graveyards"
+  // (printed power "1+*" parses as its base 1; the type count is the dynamic part).
+  if (/power is equal to 1 plus the number of card types among cards in your opponents' graveyards/i.test(card.text || "")) {
+    const types = new Set();
+    for (const pid in lobby.players) {
+      if (pid === card.owner) continue;
+      ((lobby.players[pid] && lobby.players[pid].graveyard) || []).forEach((e) => {
+        ["artifact", "battle", "creature", "enchantment", "instant", "kindred", "land", "planeswalker", "sorcery"].forEach((t) => { if ((e.type || "").toLowerCase().includes(t)) types.add(t); });
+      });
+    }
+    powerBonus += types.size;
+  }
   // Construct token (Urza's Saga) -- "This token gets +1/+1 for each artifact you control."
   if (/(?:this creature|this token) gets \+1\/\+1 for each artifact you control/i.test(card.text || "")) {
     const n = Object.values(lobby.cards).filter((c) => c.owner === card.owner && c.zoneType !== "hand" && c.zoneType !== "stack" && /artifact/i.test(c.type || "")).length;

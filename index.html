@@ -1854,6 +1854,9 @@
       if (/^(basic landcycling|cycling) \{[^}]+\}\.?$/.test(low)) return true;
       if (/^enchant (creature|enchantment)$/.test(low)) return true;
       if (/^you control enchanted enchantment\.?$/.test(low)) return true;
+      if (/^equipped creature has trample and "whenever this creature deals combat damage to a player, put that many \+1\/\+1 counters on it\."?$/.test(low)) return true;
+      if (/^equipped creature gets \+1\/\+1 and has trample and "whenever this creature deals combat damage to a player or planeswalker, create that many treasure tokens\."?$/.test(low)) return true;
+      if (/^nighthawk scavenger's power is equal to 1 plus the number of card types among cards in your opponents' graveyards\.?$/.test(low)) return true;
       if (/^equip \{?[\dwubrgc]+\}?$/.test(low)) return true;
       if (/^you may cast this spell as though it had flash/.test(low)) return true;
       if (/^(equipped|enchanted) creature gets [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
@@ -4130,6 +4133,17 @@
       if (/gets \+1\/\+1 for each color among permanents you control/i.test(card.text || "")) {
         const n = colorsAmongPermanentsFor(card.owner);
         powerBonus += n; toughnessBonus += n;
+      }
+      // Nighthawk Scavenger -- "power is equal to 1 plus the number of card types among cards in your opponents' graveyards" (server.js mirror).
+      if (/power is equal to 1 plus the number of card types among cards in your opponents' graveyards/i.test(card.text || "")) {
+        const types = new Set();
+        Object.keys(players || {}).forEach((pid) => {
+          if (pid === card.owner) return;
+          ((players[pid] && players[pid].graveyard) || []).forEach((e) => {
+            ["artifact", "battle", "creature", "enchantment", "instant", "kindred", "land", "planeswalker", "sorcery"].forEach((t) => { if ((e.type || "").toLowerCase().includes(t)) types.add(t); });
+          });
+        });
+        powerBonus += types.size;
       }
       // Serra Ascendant -- P/T half, server-side mirror in staticBonusFor's own comment (server.js).
       const lifePTMatch = (card.text || "").match(/as long as you have (\d+) or more life, this creature gets \+(\d+)\/\+(\d+)/i);
