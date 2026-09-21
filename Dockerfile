@@ -15,6 +15,7 @@ COPY server.js ./
 COPY index.html ./public/index.html
 COPY audio ./public/audio
 COPY admin-server.js ./
+COPY cards ./cards
 COPY admin-public ./admin-public
 
 EXPOSE 8087
