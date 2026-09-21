@@ -8201,8 +8201,9 @@ function sharesCreatureTypeWithCommander(lobby, ownerId, castCard) {
 // this card's own specific grant, not a reusable oracle-text shape). Chromatic Lantern's own "{T}:
 // Add one mana of any color" ability needs no table entry at all -- Scryfall's producedMana already
 // lists all five colors for it, so the tap handler's existing multi-color prompt already covers it.
+// Dryad of the Ilysian Grove ("Lands you control are every basic land type") grants the same any-colour tap through this check.
 function controlsChromaticLantern(lobby, ownerId) {
-  return Object.values(lobby.cards).some((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "chromatic lantern");
+  return Object.values(lobby.cards).some((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && (archiveKey(c.name) === "chromatic lantern" || archiveKey(c.name) === "dryad of the ilysian grove"));
 }
 
 // The actual set of colors any opponent's lands could currently produce, for a source like
@@ -8308,6 +8309,22 @@ function checkEquipmentDeathToken(lobby, dyingCard) {
       keywords: parsed.keywords
     });
     pushLog(lobby, `${(lobby.players[c.owner] || {}).name || "Someone"} creates a token (${c.name || "Aura"} — enchanted creature died)`);
+  }
+}
+
+// Kaya's Ghostform -- "When enchanted permanent dies or is put into exile, return that card to the battlefield under your control."
+// Same "must run before removal, scans attachedTo" contract as checkEquipmentDeathToken; called from fireDeathTriggers AND exileCardInternal.
+// The actual return is the ghostformReturn effect (cards/w62_*.js), which finds the card in the owner's graveyard or exile once the trigger resolves.
+function checkGhostformReturn(lobby, dyingCard) {
+  if (dyingCard.zoneType === "hand" || dyingCard.zoneType === "stack" || /token/i.test(dyingCard.type || "")) return;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.attachedTo !== dyingCard.id || archiveKey(c.name) !== "kaya's ghostform") continue;
+    pushAbilityToStack(lobby, {
+      sourceCard: c, controllerId: c.owner,
+      label: `${dyingCard.name || "The enchanted permanent"} left the battlefield — return it under your control (Kaya's Ghostform)`,
+      effects: [{ type: "ghostformReturn", entryId: dyingCard.id, ownerId: dyingCard.originalOwner || dyingCard.owner }]
+    });
   }
 }
 
@@ -12002,6 +12019,7 @@ function fireDeathTriggers(lobby, card) {
   fireKardurDoomscourgeDeathTrigger(lobby, card);
   checkEquipmentDeathDraw(lobby, card);
   checkEquipmentDeathToken(lobby, card);
+  checkGhostformReturn(lobby, card);
   // Tarrian's Soulcleaver -- fireDeathTriggers is the ONE real universal choke point for "a
   // permanent genuinely died from the battlefield" (both the manual moveOut path and every
   // automated destroy/sacrifice site already call this before actually removing the card), unlike
@@ -12774,6 +12792,7 @@ function exileCardInternal(lobby, card) {
   // every exile path in this file (exileTarget, Soulherder's own blink below, any future mechanism)
   // already funnels through this one function.
   if (card.zoneType === "creature") checkCreatureExiledCounterGrant(lobby);
+  checkGhostformReturn(lobby, card);
   delete lobby.cards[card.id];
   if (lobby.targets[card.id]) delete lobby.targets[card.id];
   io.to(lobby.id).emit("cardRemove", card.id);
@@ -14589,7 +14608,10 @@ io.on("connection", (socket) => {
     }
     const card = lobby.cards[cardId];
     if (!card || card.owner !== socket.id || !card.tapped) return;
-    if (!Array.isArray(card.producedMana) || !card.producedMana.includes(color) || !["W", "U", "B", "R", "G", "C"].includes(color)) return;
+    // Chromatic Lantern / Dryad of the Ilysian Grove let ANY land add any of the five colours (the tap handler offers them), beyond its own producedMana.
+    const grantedAnyColour = ["W", "U", "B", "R", "G"].includes(color) && classifyType(card.type) === "mana" && controlsChromaticLantern(lobby, socket.id);
+    if (!(Array.isArray(card.producedMana) && card.producedMana.includes(color)) && !grantedAnyColour) return;
+    if (!["W", "U", "B", "R", "G", "C"].includes(color)) return;
     p.mana[color] = (p.mana[color] || 0) + 1;
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} tapped ${card.name} for {${color}}`);

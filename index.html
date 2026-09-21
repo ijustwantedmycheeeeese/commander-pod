@@ -1871,6 +1871,9 @@
       if (/^\w+ spells you cast cost \{\d+\} less to cast\.?$/.test(low)) return true;
       if (/^creature spells you control can'?t be countered\.?$/.test(low)) return true;
       if (/^spells you control can'?t be countered\.?$/.test(low)) return true;
+      if (/^when enchanted permanent dies or is put into exile, return that card to the battlefield under your control\.?$/.test(low)) return true;
+      if (/^lands you control are every basic land type in addition to their other types\.?$/.test(low)) return true;
+      if (/^enchant creature or planeswalker you control$/.test(low)) return true;
       if (/^the mindskinner can'?t be blocked\.?$/.test(low)) return true;
       if (/^if a source you control would deal damage to an opponent, prevent that damage and each opponent mills that many cards\.?$/.test(low)) return true;
       if (/^ward\s*[\u2014-]+\s*pay 2 life\.?$/.test(low)) return true;
