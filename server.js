@@ -3331,6 +3331,7 @@ function isVanillaKeywordLine(low) {
 }
 function isSentenceGenericallyAutomated(sentence) {
   const low = sentence.toLowerCase();
+  if (typeof GENERIC_SENTENCE_PATTERNS !== "undefined" && GENERIC_SENTENCE_PATTERNS.some((re) => re.test(low))) return true; // registered by cards/*.js
   if (isVanillaKeywordLine(low)) return true;
   if (/^(this (land|artifact) )?enters( the battlefield)? tapped\b/.test(low)) return true;
   if (/^\{t\}[^:]*:\s*add\b/.test(low)) return true;
@@ -13557,6 +13558,26 @@ app.post("/api/upload", (req, res) => {
 });
 
 // ---------------- Socket.IO ----------------
+
+// ---------------- per-batch card modules (cards/*.js) ----------------
+// New card automation lives in small files (see cards/README.md). Each is evaluated here with direct eval, so it sees every table and helper in this
+// file, but the six tables are handed in as guarded proxies: adding a key that already exists (here or in another module) throws, so a batch can never
+// silently override an older card. Loaded before the connection handler so the coverage extract (which cuts the source at that line) includes them too.
+const GENERIC_SENTENCE_PATTERNS = [];
+function loadCardModules() {
+  const dir = path.join(__dirname, "cards");
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => /\.js$/.test(f)).sort(); } catch (e) { return; }
+  const guard = (t, name, file) => new Proxy(t, { set(o, k, v) { if (Object.prototype.hasOwnProperty.call(o, k)) throw new Error(`cards/${file}: ${name}["${String(k)}"] already exists`); o[k] = v; return true; } });
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(dir, file), "utf8");
+    (function (CARD_ABILITIES, ACTIVATED_ABILITIES, SPELL_ABILITIES, CHANNEL_ABILITIES, ALT_COSTS, EFFECTS) { eval(src); })( // eslint-disable-line no-eval
+      guard(CARD_ABILITIES, "CARD_ABILITIES", file), guard(ACTIVATED_ABILITIES, "ACTIVATED_ABILITIES", file), guard(SPELL_ABILITIES, "SPELL_ABILITIES", file),
+      guard(CHANNEL_ABILITIES, "CHANNEL_ABILITIES", file), guard(ALT_COSTS, "ALT_COSTS", file), guard(EFFECTS, "EFFECTS", file));
+  }
+  if (files.length) console.log(`Loaded ${files.length} card module(s): ${files.join(", ")}`);
+}
+try { loadCardModules(); } catch (e) { console.error("FATAL: card module error:", e.message); process.exit(1); } // a broken module must stop the server, never half-load
 
 io.on("connection", (socket) => {
   // Guard every handler. A malformed payload (null, a string where an object is expected) makes a destructuring parameter such as ({ id }) throw before the
