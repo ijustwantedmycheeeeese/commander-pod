@@ -8329,6 +8329,20 @@ function checkGhostformReturn(lobby, dyingCard) {
   }
 }
 
+// Malakir Rebirth -- "Until end of turn, that creature gains 'When this creature dies, return it
+// to the battlefield tapped under its owner's control.'" The mark (card._deathReturnTappedTurn,
+// set by EFFECTS.markDeathReturnTapped, cards/w67) is turn-scoped exactly like Arcbond's
+// card._arcbondTurn. Death only (real text has no "or is put into exile" half), so unlike
+// checkGhostformReturn this is called from fireDeathTriggers alone, not exileCardInternal too.
+function checkDeathReturnTapped(lobby, dyingCard) {
+  if (dyingCard.zoneType !== "creature" || dyingCard._deathReturnTappedTurn !== lobby.turn.turnNumber) return;
+  pushAbilityToStack(lobby, {
+    sourceCard: dyingCard, controllerId: dyingCard.owner,
+    label: `${dyingCard.name || "The creature"} died — return it to the battlefield tapped under its owner's control (Malakir Rebirth)`,
+    effects: [{ type: "deathReturnTapped", entryId: dyingCard.id }]
+  });
+}
+
 // Rogue's Gloves / Curiosity / Ophidian Eye and their functional cousins -- "Whenever equipped/
 // enchanted creature deals [combat] damage to a[n] player/opponent, you may draw a card." Same
 // generic, name-independent, oracle-text-detected precedent as equipDeathDrawFromText just above
@@ -10565,6 +10579,24 @@ function pushToStack(lobby, card, casterId) {
   const castCounter = lobby.players[casterId];
   if (castCounter) {
     if (!(card.type || "").toLowerCase().includes("creature")) castCounter.noncreatureSpellsCastThisTurn = (castCounter.noncreatureSpellsCastThisTurn || 0) + 1;
+    // Thousand-Year Storm -- "copy it for each other instant and sorcery spell you've cast before
+    // it this turn." Incremented AFTER fireGlobalTrigger("youCastSpell", ...) above, so the
+    // fireGlobalTrigger's own bakeStormCopy branch reads the PRE-increment count (spells cast
+    // strictly before this one), same "bake the dynamic bit in at cast time" contract as
+    // bakeCastSpell/bakeEventCard -- Storm count is locked in when the spell is cast, not read
+    // again whenever the triggered copy-ability itself later resolves off the stack.
+    const castType = (card.type || "").toLowerCase();
+    if (castType.includes("instant") || castType.includes("sorcery")) castCounter._instSorcCastThisTurn = (castCounter._instSorcCastThisTurn || 0) + 1;
+    // Nuka-Nuke Launcher -- "until the end of defending player's next turn, that player gets two
+    // rad counters whenever they cast a spell." The arming (_nukaNukeUntilTurnNumber) happens on
+    // attack (EFFECTS.armNukaNukeDefender, cards/w67); checked here against EVERY cast by ANY
+    // player, same "delayed effect belongs to the player, not a permanent" shape as
+    // Veil of Summer's _castColors -- the equipment/creature that armed it need not still exist.
+    if (castCounter._nukaNukeUntilTurnNumber != null && lobby.turn.turnNumber <= castCounter._nukaNukeUntilTurnNumber) {
+      castCounter.radCounters = (castCounter.radCounters || 0) + 2;
+      pushLog(lobby, `${castCounter.name} gets two rad counters (Nuka-Nuke Launcher)`);
+      broadcastPlayers(lobby);
+    }
   }
   fireCastWatchTriggers(lobby, casterId, card);
   fireGlobalOpponentFirstNoncreatureSpellTriggers(lobby, casterId, card);
@@ -12076,6 +12108,7 @@ function fireDeathTriggers(lobby, card) {
   checkEquipmentDeathDraw(lobby, card);
   checkEquipmentDeathToken(lobby, card);
   checkGhostformReturn(lobby, card);
+  checkDeathReturnTapped(lobby, card);
   // Tarrian's Soulcleaver -- fireDeathTriggers is the ONE real universal choke point for "a
   // permanent genuinely died from the battlefield" (both the manual moveOut path and every
   // automated destroy/sacrifice site already call this before actually removing the card), unlike
@@ -12203,6 +12236,16 @@ function fireGlobalTrigger(lobby, eventType, forPlayerId, eventCard) {
         const snap = {};
         ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"].forEach((f) => { snap[f] = eventCard[f]; });
         fireAbility = { ...fireAbility, effects: (fireAbility.effects || []).map((e) => ({ ...e, eventCardSnapshot: snap })) };
+      }
+      // Thousand-Year Storm -- bakes the just-cast spell's own stack id (spellId, for
+      // EFFECTS.copySpellForStorm to find it on the stack) and the PRE-increment storm count
+      // (stormCopies, read off _instSorcCastThisTurn before castSpell's own increment right after
+      // this fireGlobalTrigger call returns) into every effect, same bake-at-cast-time shape as
+      // bakeCastSpell/bakeEventWasAttacking above.
+      if (ability.bakeStormCopy && eventCard) {
+        const stormP = lobby.players[forPlayerId];
+        const stormCopies = (stormP && stormP._instSorcCastThisTurn) || 0;
+        fireAbility = { ...fireAbility, effects: (fireAbility.effects || []).map((e) => ({ ...e, spellId: eventCard.id, stormCopies })) };
       }
       fireTrigger(lobby, c, fireAbility);
     });
@@ -12448,7 +12491,12 @@ function fireAttackTriggers(lobby, card) {
   for (const id in lobby.cards) {
     const att = lobby.cards[id];
     if (att.attachedTo !== card.id) continue;
-    getAutomatedAbilities(att.name, "enchantedCreatureAttacks").forEach((ability) => { for (let i = attackTriggerCopies(lobby, att.owner); i > 0; i--) fireTrigger(lobby, att, ability); });
+    // Nuka-Nuke Launcher -- needs to know WHO the equipped/enchanted creature is attacking
+    // (attackerDefenderId), same bake as fireAttackTriggers' own self-referential "attack" loop above.
+    getAutomatedAbilities(att.name, "enchantedCreatureAttacks").forEach((ability) => {
+      const effects = (ability.effects || []).map((e) => ({ ...e, attackerDefenderId: defenderId }));
+      for (let i = attackTriggerCopies(lobby, att.owner); i > 0; i--) fireTrigger(lobby, att, { ...ability, effects });
+    });
   }
 }
 
@@ -13041,7 +13089,7 @@ function advanceOnePhase(lobby) {
     // shared game turn (any player's spells, incl. instants cast on someone else's turn), so this
     // resets for EVERY player here at the one real turn-wraparound point, not just the newly active
     // player -- a per-player-own-turn reset would silently undercount instants cast off-turn.
-    Object.values(lobby.players).forEach((p) => { p.spellsCastThisTurn = 0; });
+    Object.values(lobby.players).forEach((p) => { p.spellsCastThisTurn = 0; p._instSorcCastThisTurn = 0; });
     cleanupTemporaryKeywords(lobby);
     // Kardur, Doomscourge -- "until your next turn" ends exactly when the new active player IS
     // that Kardur's own controller (their next turn has now begun).
@@ -13098,7 +13146,7 @@ function advanceOnePhase(lobby) {
     activePlayer.landsPlayedThisTurn = 0;
     Object.values(lobby.cards).forEach((gc) => { if (gc._goadedBy === activeId) gc._goadedBy = null; }); // goad lasts until the goader's next turn
     if (activePlayer._flashUntilNextTurn) { activePlayer._flashUntilNextTurn = false; activePlayer.hasFlashUntilEndOfTurn = false; } // Teferi, Time Raveler +1 expires
-    for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; lobby.players[pid].spellsCastThisTurn = 0; lobby.players[pid].noncreatureSpellsCastThisTurn = 0; lobby.players[pid].lifeGainedThisTurn = 0; lobby.players[pid].gyEntriesThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind
+    for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; lobby.players[pid].spellsCastThisTurn = 0; lobby.players[pid].noncreatureSpellsCastThisTurn = 0; lobby.players[pid].lifeGainedThisTurn = 0; lobby.players[pid].gyEntriesThisTurn = 0; lobby.players[pid]._instSorcCastThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind / Thousand-Year Storm
     activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
     // Real pre-existing bug found while building Rites of Flourishing: landDropBonus (Explore's own
     // "you may play an additional land THIS TURN") was never reset anywhere per turn in this file --
