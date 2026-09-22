@@ -10898,7 +10898,7 @@ function castSpell(lobby, card, casterId, logSuffix) {
         // typeFilter already are, a real gap found while building it (this field never had a caller
         // before, so its absence here was never noticed).
         minCmc: spellAbility.minCmc || null, maxCmc: spellAbility.maxCmc != null ? spellAbility.maxCmc : null, typeFilter: spellAbility.typeFilter || null, logSuffix: logSuffix || "",
-        extraTargets: spellAbility.extraTargets || null, optional: !!spellAbility.optional || !!spellAbility.repeat, allowEmpty: !!spellAbility.allowEmpty, allowDupTargets: !!spellAbility.allowDupTargets,
+        extraTargets: spellAbility.extraTargets || null, optional: !!spellAbility.optional || !!spellAbility.repeat, allowEmpty: !!spellAbility.allowEmpty, allowDupTargets: !!spellAbility.allowDupTargets, capAtCastX: !!spellAbility.capAtCastX,
         // A spell whose own (first) step repeats ("any number of ...") re-asks that same step until Done, like extraTargets' repeat steps.
         repeat: !!spellAbility.repeat, repeatSpec: spellAbility.repeat ? { targetKind: spellAbility.targetKind, typeFilter: spellAbility.typeFilter || null, handTypeFilter: spellAbility.handTypeFilter || null, optional: true, repeat: true, label: spellAbility.repeatLabel || spellAbility.label } : null,
         handTypeFilter: spellAbility.handTypeFilter || null
@@ -15081,6 +15081,15 @@ io.on("connection", (socket) => {
       tapCreaturesToTap = qualifying.slice(0, cost.tapCreaturesCount);
     }
 
+    // Psychic Frog-style "Exile three cards from your graveyard" -- same auto-pick-first-N shape as
+    // autoDiscardCount above, scoped to the player's OWN graveyard array instead of their hand.
+    let autoGraveyardExileCards = [];
+    if (cost.autoExileGraveyardCount) {
+      const need = cost.autoExileGraveyardCount;
+      if ((p.graveyard || []).length < need) { socket.emit("actionError", `You need ${need} cards in your graveyard to activate ${card.name}'s ability.`); return; }
+      autoGraveyardExileCards = p.graveyard.slice(0, need);
+    }
+
     // Planeswalker loyalty abilities -- cost.loyalty is the signed loyalty change (+N adds, -N removes) and
     // cost.loyaltyX is "-X" with X taken from the activation. Sorcery speed on your own turn, one per
     // planeswalker per turn; loyalty is card.counters (a planeswalker never carries +1/+1 counters).
@@ -15200,6 +15209,12 @@ io.on("connection", (socket) => {
         sendToGraveyardInternal(lobby, extra);
         fireGlobalTrigger(lobby, "youDiscard", socket.id, extra);
       });
+    }
+    if (autoGraveyardExileCards.length) {
+      p.graveyard = p.graveyard.slice(autoGraveyardExileCards.length);
+      p.exile = [...(p.exile || []), ...autoGraveyardExileCards];
+      pushLog(lobby, `${p.name} exiles ${autoGraveyardExileCards.length} cards from their graveyard to pay the cost`);
+      broadcastPlayers(lobby);
     }
     if (tapCreaturesToTap.length) {
       tapCreaturesToTap.forEach((c) => { c.tapped = true; broadcastCard(lobby, c); });
@@ -15514,7 +15529,11 @@ io.on("connection", (socket) => {
     // the whole chain is answered, with chosenTargetIds baked into its effects.
     const chosenIds = (entry.chosenTargetIds || []).concat(targetId);
     // Fire Covenant: each pick is one point of the X life paid, so the chain ends by itself once X picks are in.
-    const pickCapReached = entry.allowDupTargets && entry.spellCard && chosenIds.length >= (entry.spellCard._payXLife || 0);
+    // Red Sun's Twilight ("destroy up to X target artifacts"): same self-ending shape, capped by the
+    // spell's real cast-time {X} value (_castXValue) instead of life paid, and without allowDupTargets
+    // since each target must be distinct.
+    const capValue = entry.spellCard ? (entry.allowDupTargets ? entry.spellCard._payXLife : (entry.capAtCastX ? entry.spellCard._castXValue : null)) : null;
+    const pickCapReached = capValue != null && chosenIds.length >= capValue;
     if (!pickCapReached && (entry.repeat || (entry.extraTargets && entry.extraTargets.length))) advanceTargetChain(lobby, entry, chosenIds);
     else finalizeTargetChoice(lobby, entry, chosenIds);
     socket.emit("targetChoiceResolved", id);
