@@ -4967,10 +4967,32 @@ const EFFECTS = {
     if (params.addKeywords) data.keywords = [...new Set([...(data.keywords || []), ...params.addKeywords])];
     data.owner = ctx.controllerId;
     data.zoneType = classifyType(data.type);
-    // Rite of Replication (kicked) -- "create five of those tokens instead" (params.count).
-    for (let i = 0; i < (params.count || 1); i++) spawnBattlefieldCard(lobby, { ...data });
+    // Rite of Replication (kicked) -- "create five of those tokens instead" (params.count). For the
+    // Common Good -- "Create X tokens" -- falls back to the real cast-time X (params.xAmount, merged
+    // in by executeSpellEffectsNow) when no fixed count is given.
+    const copies = params.count || params.xAmount || 1;
+    for (let i = 0; i < copies; i++) spawnBattlefieldCard(lobby, { ...data });
     const p = lobby.players[ctx.controllerId];
-    pushLog(lobby, `${p ? p.name : "Someone"} creates ${params.count > 1 ? params.count + " token copies" : "a token copy"} of ${source.name || "a creature"}`);
+    pushLog(lobby, `${p ? p.name : "Someone"} creates ${copies > 1 ? copies + " token copies" : "a token copy"} of ${source.name || "a creature"}`);
+  },
+  // For the Common Good -- "Then tokens you control gain indestructible until your next turn." Counted
+  // AFTER createTokenCopyOfTargetCreature above already ran (both share the one synchronous forEach in
+  // executeSpellEffectsNow), same token type-line substring test as ownToken/autoSacrificeToken (no
+  // separate isToken flag anywhere in this app).
+  tokensGainIndestructibleUntilNextTurn(lobby, ctx) {
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner !== ctx.controllerId) return;
+      if (c.zoneType !== "creature" && c.zoneType !== "artifact") return;
+      if (!/\btoken\b/i.test(c.type || "")) return;
+      grantTemporaryKeywordUntilNextTurn(lobby, c, "Indestructible");
+    });
+  },
+  // For the Common Good -- "You gain 1 life for each token you control," counted fresh here (after the
+  // copies exist) rather than threaded in as a param, same "recompute at resolution" precedent
+  // damageAllCreaturesOfPlayer's own creature count uses for Blasphemous Act.
+  gainLifeForTokenCount(lobby, ctx) {
+    const count = Object.values(lobby.cards).filter((c) => c.owner === ctx.controllerId && (c.zoneType === "creature" || c.zoneType === "artifact") && /\btoken\b/i.test(c.type || "")).length;
+    if (count > 0) EFFECTS.gainLife(lobby, ctx, { target: "controller", amount: count });
   },
   // Mithril Coat -- "When Mithril Coat enters, attach it to target legendary creature you control."
   // The actual grant ("Equipped creature has indestructible") is already handled generically by
@@ -7401,6 +7423,27 @@ const EFFECTS = {
     const sorted = [...creatures].sort((a, b) => effPower(b) - effPower(a));
     sorted.slice(keepCount).forEach((c) => { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); });
   },
+  // Blasphemous Edict -- "Each player sacrifices thirteen creatures of their choice." Same auto-pick
+  // precedent as targetPlayerSacrificesAllCreaturesExceptChosen just above (kept: the highest-
+  // effective-power creatures) but for EVERY player at once (not one chosen target) and a dynamic
+  // keepCount = max(0, count - amount) instead of a fixed keepCount -- "sacrifices thirteen" with
+  // fewer than thirteen creatures sacrifices all of them (same real-Magic edict-wording precedent as
+  // Barter in Blood).
+  eachPlayerSacrificesUpTo(lobby, ctx, params) {
+    const amount = params.amount || 1;
+    Object.keys(lobby.players).forEach((pid) => {
+      if (isProtectedFromForcedSacrifice(lobby, pid, ctx.controllerId)) return;
+      const creatures = Object.values(lobby.cards).filter((c) => c.owner === pid && c.zoneType === "creature");
+      const keepCount = Math.max(0, creatures.length - amount);
+      if (creatures.length <= keepCount) return;
+      const effPower = (c) => {
+        const bonus = attachedBonusFor(lobby, c), stat = staticBonusFor(lobby, c);
+        return parsePT(c.power) + (c.counters || 0) + bonus.powerBonus + stat.powerBonus;
+      };
+      const sorted = [...creatures].sort((a, b) => effPower(b) - effPower(a));
+      sorted.slice(keepCount).forEach((c) => { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); });
+    });
+  },
   // Chain Reaction / Blasphemous Act -- "deals X damage to each creature, where X is the number of
   // creatures on the battlefield." X is computed fresh here (BEFORE anything dies, matching the real
   // card's "counted as the spell begins to resolve" timing) rather than threaded in as a param, since
@@ -8478,6 +8521,18 @@ function grantTemporaryKeyword(lobby, card, keyword) {
     broadcastCard(lobby, card);
   }
 }
+// For the Common Good -- "tokens you control gain indestructible UNTIL YOUR NEXT TURN," a longer
+// duration than grantTemporaryKeyword's "until end of turn" (cleared every cleanup step regardless
+// of whose turn it is -- see the temporaryKeywords sweep). Stored in its own array so it survives
+// an opponent's turns; cleared only at the granting player's own next Untap step, same "your next
+// turn" precedent as Teferi's Protection's lifeLocked/protectionFromEverything flags.
+function grantTemporaryKeywordUntilNextTurn(lobby, card, keyword) {
+  if (!card.temporaryKeywordsUntilNextTurn) card.temporaryKeywordsUntilNextTurn = [];
+  if (!card.temporaryKeywordsUntilNextTurn.some((tk) => tk.keyword === keyword)) {
+    card.temporaryKeywordsUntilNextTurn.push({ keyword });
+    broadcastCard(lobby, card);
+  }
+}
 // The numeric counterpart to grantTemporaryKeyword -- a real "until end of turn" P/T buff (Shared
 // Animosity, Battle Cry Goblin), additive across multiple grants in the same turn (Shared Animosity
 // can fire more than once per combat). Read by staticBonusFor -- see its own comment -- so every
@@ -8631,7 +8686,7 @@ function cleanupTemporaryKeywords(lobby) {
 // that reads keywords).
 function effectiveKeywords(lobby, card) {
   const bonus = attachedBonusFor(lobby, card);
-  let extra = [...(card.keywords || []), ...bonus.keywords, ...(card.temporaryKeywords || []).map((tk) => tk.keyword)];
+  let extra = [...(card.keywords || []), ...bonus.keywords, ...(card.temporaryKeywords || []).map((tk) => tk.keyword), ...(card.temporaryKeywordsUntilNextTurn || []).map((tk) => tk.keyword)];
   // Blighted Agent -- a creature's OWN "This creature can't be blocked." line (a Scryfall keywords[]
   // array never lists it, unlike Flying/Infect), same "text-scan a self-referential static" precedent
   // as the life-conditional grants just below. Only the exact unconditional sentence -- never
@@ -9391,12 +9446,16 @@ function colorNameFor(code) {
   return { W: "white", U: "blue", B: "black", R: "red", G: "green" }[code] || code;
 }
 function parseManaCost(costStr) {
-  const cost = { generic: 0, W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, hybrid: [], x: false };
+  const cost = { generic: 0, W: 0, U: 0, B: 0, R: 0, G: 0, C: 0, hybrid: [], x: false, xCount: 0 };
   if (!costStr) return cost;
   const tokens = costStr.match(/\{[^}]+\}/g) || [];
   tokens.forEach((tok) => {
     const inner = tok.slice(1, -1).toUpperCase();
-    if (inner === "X") { cost.x = true; return; }
+    // For the Common Good / Pest Infestation -- both real {X}{X}{...} costs (two separate X symbols,
+    // the same chosen value paid twice), not just one. xCount counts the symbols so canAffordAndPay
+    // below can charge xValue that many times instead of assuming a single {X} like every X-cost card
+    // before these two.
+    if (inner === "X") { cost.x = true; cost.xCount++; return; }
     if (/^\d+$/.test(inner)) { cost.generic += parseInt(inner); return; }
     if (["W", "U", "B", "R", "G", "C"].includes(inner)) { cost[inner]++; return; }
     if (inner.includes("/")) {
@@ -9420,7 +9479,10 @@ function canAffordAndPay(pool, cost, xValue) {
     if (!colorWithMana) return null;
     p[colorWithMana]--;
   }
-  let genericNeeded = cost.generic + (xValue || 0);
+  // xCount (default 1 for any cost.x cost parsed before xCount existed, e.g. a hardcoded {generic:N,x:true}
+  // literal elsewhere in this file) so a double-{X} cost like For the Common Good/Pest Infestation charges
+  // the chosen value twice, not once.
+  let genericNeeded = cost.generic + (xValue || 0) * (cost.x ? (cost.xCount || 1) : 0);
   const spendOrder = ["C", "W", "U", "B", "R", "G"];
   for (const c of spendOrder) {
     while (genericNeeded > 0 && p[c] > 0) { p[c]--; genericNeeded--; }
@@ -11288,6 +11350,15 @@ function resolveChosenTarget(lobby, entry, targetId) {
   // Izzet Boilerworks (the "bounce land" cycle) -- "return A LAND YOU CONTROL to its owner's
   // hand," self-inclusive (real Magic lets you bounce the source itself if it's your only land),
   // same shape as ownCreature but for zoneType "mana" instead.
+  // For the Common Good -- "target token you control." Same shape as ownCreature/ownLand, filtered
+  // on the type line carrying "token" instead of a zoneType, since tokens can be creatures OR
+  // artifacts (isToken flag doesn't exist anywhere in this app -- see the note near the discard
+  // helpers -- so every token check in this file is this same type-line substring test).
+  if (targetKind === "ownToken") {
+    const c = lobby.cards[targetId];
+    if (!c || c.owner !== entry.controllerId || !(c.zoneType === "creature" || c.zoneType === "artifact") || !(c.type || "").toLowerCase().includes("token")) return { ok: false, error: "Choose a token you control." };
+    return { ok: true };
+  }
   if (targetKind === "ownLand") {
     const c = lobby.cards[targetId];
     if (!c || c.owner !== entry.controllerId || c.zoneType !== "mana") return { ok: false, error: "Choose a land you control." };
@@ -12579,6 +12650,15 @@ function fireGlobalCombatDamageToPlayerTrigger(lobby, dealingCard, defenderId, a
       // itself need not be the one dealing damage), same shape excludeTokenSources already
       // established for the dealing card's TYPE, just for commander-ness instead.
       if (ability.commanderSourceOnly && !dealingCard.isCommander) return;
+      // Professional Face-Breaker -- "Whenever ONE OR MORE creatures you control deal combat damage
+      // to a player, create a Treasure token." Unlike Old Gnawbone (which fires once per DEALING
+      // creature on purpose), this wording collapses multiple simultaneous dealers into a single
+      // trigger -- same per-card turn-number stamp fireGlobalTriggerAllPlayers' own oncePerTurn uses,
+      // just scoped to this dispatcher's own flag name to avoid colliding with that one.
+      if (ability.oncePerTurn) {
+        if (source._combatDmgOncePerTurnFired === lobby.turn.turnNumber) return;
+        source._combatDmgOncePerTurnFired = lobby.turn.turnNumber;
+      }
       if (ability.condition && !ability.condition(source, lobby)) return;
       // Impostor Syndrome's own token-copy effect needs to know WHICH creature dealt the damage --
       // dealingCard.id baked in as chosenTargetId, the same "capture the dynamic bit now" precedent
@@ -13167,6 +13247,14 @@ function advanceOnePhase(lobby) {
     }
     activePlayer.lifeLocked = false;
     activePlayer.protectionFromEverything = false;
+    // For the Common Good -- "until your next turn" indestructible expires here too, same moment as
+    // Teferi's Protection's own flags just above.
+    Object.values(lobby.cards).forEach((c) => {
+      if (c.owner === activeId && c.temporaryKeywordsUntilNextTurn && c.temporaryKeywordsUntilNextTurn.length) {
+        c.temporaryKeywordsUntilNextTurn = [];
+        broadcastCard(lobby, c);
+      }
+    });
     // Stasis -- "Players skip their untap steps." Table-wide (any controller), skips only the
     // actual UNTAPPING for everyone -- the rest of this phase's per-turn resets (landsPlayedThisTurn
     // etc, already applied above) still happen normally, matching real Magic's "the untap step is
@@ -14527,6 +14615,21 @@ io.on("connection", (socket) => {
     if (alt.kind === "freeIfOpponentCastSpells") {
       if (!Object.keys(lobby.players).some((pid) => pid !== socket.id && (lobby.players[pid].spellsCastThisTurn || 0) >= alt.minSpells)) { socket.emit("actionError", `${card.name} is only free if an opponent cast ${alt.minSpells} or more spells this turn.`); return; }
       castSpell(lobby, card, socket.id, ` for free (an opponent cast ${alt.minSpells}+ spells this turn)`);
+      return;
+    }
+    // Blasphemous Edict -- "You may pay {B} rather than pay this spell's mana cost if there are
+    // thirteen or more creatures on the battlefield." Same "condition then cast" shape as
+    // freeIfLandTypes/freeIfOpponentCastSpells just above, but the alternative cost isn't free -- it
+    // really charges alt.mana, same canAffordAndPay/p.mana-assignment the tapKeyword-shaped default
+    // branch below already uses for Sephara, Sky's Blade.
+    if (alt.kind === "manaIfCreatureCount") {
+      const creatureCount = Object.values(lobby.cards).filter((c) => c.zoneType === "creature").length;
+      if (creatureCount < alt.minCreatures) { socket.emit("actionError", `${card.name} only has its alternative cost while there are ${alt.minCreatures} or more creatures on the battlefield (currently ${creatureCount}).`); return; }
+      const remaining = canAffordAndPay(p.mana, parseManaCost(alt.mana), 0);
+      if (!remaining) { socket.emit("actionError", `Not enough mana to pay ${card.name}'s alternative cost.`); return; }
+      p.mana = remaining;
+      broadcastPlayers(lobby);
+      castSpell(lobby, card, socket.id, ` for ${alt.mana} (${alt.minCreatures}+ creatures on the battlefield)`);
       return;
     }
     if (alt.kind === "commanderFree") {

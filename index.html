@@ -2347,6 +2347,10 @@
       // real click did nothing, exactly matching resolveChosenTarget's own "otherOwnCreature" branch
       // server-side (see its own comment for the same source-card exclusion).
       if (kind === "ownCreature") return card.owner === myId && card.zoneType === "creature";
+      // For the Common Good -- "target token you control" -- mirrors resolveChosenTarget's own
+      // "ownToken" branch server-side (type-line "token" substring, since tokens can be creatures OR
+      // artifacts and this app has no separate isToken flag).
+      if (kind === "ownToken") return card.owner === myId && (card.zoneType === "creature" || card.zoneType === "artifact") && (card.type || "").toLowerCase().includes("token");
       if (kind === "otherOwnCreature") return card.owner === myId && card.zoneType === "creature" && card.id !== pendingTargetChoiceSourceId;
       // Acidic Slime ("target artifact, enchantment, or land") -- see resolveChosenTarget's own
       // "typeList" branch server-side, which this mirrors exactly.
