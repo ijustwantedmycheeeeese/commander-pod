@@ -4358,6 +4358,25 @@ const EFFECTS = {
     if (!lobby.players[ownerId]) return;
     EFFECTS.createToken(lobby, { controllerId: ownerId, sourceCard: ctx.sourceCard }, { amount: 1, name: params.name, tokenType: params.tokenType, power: params.power, toughness: params.toughness, colors: params.colors });
   },
+  // Saw in Half -- "Destroy target creature. If that creature dies this way, its controller creates
+  // two tokens that are copies of that creature [with halved P/T]." Same "read fields before
+  // destroying, then check it actually left the battlefield" shape as destroyTargetCreateTokenForOwner
+  // just above (no noRegen here -- unlike Pongify, this card's real text doesn't strip
+  // regeneration/indestructible, so "dies this way" naturally covers those cases via destroyTarget's
+  // own early returns), but copies the creature's OWN printed fields via
+  // createTokenCopyOfTargetCreature's new sourceOverride instead of a fixed token spec (the card is
+  // already deleted from lobby.cards by the time the copies are made, so chosenTargetId can't be
+  // re-looked-up).
+  destroyTargetCreateHalvedCopiesForController(lobby, ctx, params) {
+    const card = lobby.cards[params.chosenTargetId];
+    if (!card) return;
+    const ownerId = card.owner;
+    const snapshot = { ...card };
+    EFFECTS.destroyTarget(lobby, ctx, params);
+    if (lobby.cards[params.chosenTargetId]) return;
+    if (!lobby.players[ownerId]) return;
+    EFFECTS.createTokenCopyOfTargetCreature(lobby, { controllerId: ownerId, sourceCard: ctx.sourceCard }, { sourceOverride: snapshot, count: 2, halvePowerToughness: true });
+  },
   // Aerial Assault -- "Destroy target tapped creature. You gain 1 life for each creature you
   // control with flying." The life gain is unconditional (not "if it was destroyed"), so this just
   // reuses destroyTarget as-is for the destroy half rather than duplicating its
@@ -4956,7 +4975,10 @@ const EFFECTS = {
   // createDragonTokenCopiesOfTarget, since that one's hardcoded Dragon-specific type-add and log
   // text shouldn't need touching for an unrelated card.
   createTokenCopyOfTargetCreature(lobby, ctx, params) {
-    const source = lobby.cards[params.chosenTargetId];
+    // Saw in Half -- params.sourceOverride lets a caller pass an already-captured field snapshot
+    // instead of a live chosenTargetId lookup, for when the source card was destroyed (and so
+    // deleted from lobby.cards) before this runs.
+    const source = params.sourceOverride || lobby.cards[params.chosenTargetId];
     if (!source) return;
     const COPY_FIELDS = ["name", "type", "manaCost", "cmc", "colors", "colorIdentity", "power", "toughness", "text", "keywords", "img", "producedMana", "loyalty"];
     const data = {};
@@ -4965,6 +4987,14 @@ const EFFECTS = {
     // Saheeli's Artistry -- "except it's an artifact in addition to its other types."
     if (params.addTypeWord && !new RegExp(params.addTypeWord, "i").test(data.type || "")) data.type = `${params.addTypeWord} ${data.type || ""}`.trim();
     if (params.addKeywords) data.keywords = [...new Set([...(data.keywords || []), ...params.addKeywords])];
+    // Saw in Half -- "except their power is half that creature's power and their toughness is half
+    // that creature's toughness. Round up each time." The printed/copiable values (not the dying
+    // creature's effective P/T with counters/bonuses) are what a real copy effect copies, matching
+    // this file's existing precedent of only ever copying the raw power/toughness fields above.
+    if (params.halvePowerToughness) {
+      data.power = String(Math.ceil(parsePT(source.power) / 2));
+      data.toughness = String(Math.ceil(parsePT(source.toughness) / 2));
+    }
     data.owner = ctx.controllerId;
     data.zoneType = classifyType(data.type);
     // Rite of Replication (kicked) -- "create five of those tokens instead" (params.count). For the
@@ -7444,6 +7474,30 @@ const EFFECTS = {
       sorted.slice(keepCount).forEach((c) => { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); });
     });
   },
+  // Shadowgrange Archfiend -- "each opponent sacrifices a creature with the greatest power among
+  // creatures they control. You gain life equal to the greatest power among creatures sacrificed
+  // this way." Same effPower auto-pick-the-best precedent as eachPlayerSacrificesUpTo just above,
+  // scoped to opponents only (skips ctx.controllerId) and summing each sacrificed creature's own
+  // power into a single life gain instead of just sacrificing. Madness (its alternate discard-cast
+  // cost) isn't modeled anywhere in this engine -- only this front (hand-cast) ETB is automated,
+  // same disclosed narrowing as every other unmodeled alternate-cost mechanic in this file.
+  eachOpponentSacrificesGreatestPowerGainLife(lobby, ctx) {
+    const effPower = (c) => {
+      const bonus = attachedBonusFor(lobby, c), stat = staticBonusFor(lobby, c);
+      return parsePT(c.power) + (c.counters || 0) + bonus.powerBonus + stat.powerBonus;
+    };
+    let totalLife = 0;
+    Object.keys(lobby.players).forEach((pid) => {
+      if (pid === ctx.controllerId || isProtectedFromForcedSacrifice(lobby, pid, ctx.controllerId)) return;
+      const creatures = Object.values(lobby.cards).filter((c) => c.owner === pid && c.zoneType === "creature");
+      if (!creatures.length) return;
+      const best = creatures.reduce((a, b) => (effPower(b) > effPower(a) ? b : a));
+      totalLife += effPower(best);
+      fireDeathTriggers(lobby, best);
+      sendToGraveyardInternal(lobby, best);
+    });
+    if (totalLife > 0) EFFECTS.gainLife(lobby, ctx, { target: "controller", amount: totalLife });
+  },
   // Chain Reaction / Blasphemous Act -- "deals X damage to each creature, where X is the number of
   // creatures on the battlefield." X is computed fresh here (BEFORE anything dies, matching the real
   // card's "counted as the spell begins to resolve" timing) rather than threaded in as a param, since
@@ -7514,6 +7568,14 @@ const EFFECTS = {
   createTreasureTokenForAttacker(lobby, ctx, params) {
     if (!params.attackerId || !lobby.players[params.attackerId]) return;
     EFFECTS.createTreasureToken(lobby, { ...ctx, controllerId: params.attackerId }, params);
+  },
+  // Ellie, Brick Master -- "that attacking player creates a tapped ... token ... attacking that
+  // opponent." Same controllerId-override delegation shape as createTreasureTokenForAttacker just
+  // above (params.attackerId/defenderId are baked in by the playerAttacksOpponent dispatch), but to
+  // createAttackingToken instead so the token also enters already attacking the right defender.
+  createAttackingTokenForAttacker(lobby, ctx, params) {
+    if (!params.attackerId || !lobby.players[params.attackerId]) return;
+    EFFECTS.createAttackingToken(lobby, { ...ctx, controllerId: params.attackerId }, { ...params, attackerDefenderId: params.defenderId });
   },
   rollD20CreateTreasures(lobby, ctx, params) {
     const roll = 1 + Math.floor(gameRand() * 20);
@@ -9234,7 +9296,10 @@ function tokenMultiplierFor(lobby, ownerId) {
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
-    if (/create[s]? .*tokens? under your control.*it creates twice that many/i.test(c.text || "")) mult *= 2;
+    // Mondrak, Glory Dominus phrases the same Anointed Procession-style doubler as "If one or more
+    // tokens would be created under your control, twice that many ... are created instead" (no "it
+    // creates" verb), so it needs its own alternation rather than matching the regex just above.
+    if (/create[s]? .*tokens? under your control.*it creates twice that many/i.test(c.text || "") || /one or more tokens would be created under your control, twice that many/i.test(c.text || "")) mult *= 2;
   }
   return mult;
 }
@@ -15100,6 +15165,17 @@ io.on("connection", (socket) => {
         if (!autoSacrificeArtifact) { socket.emit("actionError", `You have no ${filter} to sacrifice.`); return; }
         autoSacrificeArtifacts = [autoSacrificeArtifact];
       }
+    }
+    // Mondrak, Glory Dominus -- "Sacrifice two other artifacts and/or creatures" is a genuine OR
+    // across BOTH zoneTypes (an artifact creature's own zoneType is "creature", not "artifact", per
+    // classifyType, so autoSacrificeArtifactFilter above -- locked to zoneType "artifact" -- can't
+    // express this), excluding the activating permanent itself ("other"). Reuses the same
+    // autoSacrificeArtifacts array the execution code below already sacrifices, so no separate
+    // execution path is needed.
+    if (cost.autoSacrificeArtifactOrCreatureCount) {
+      const candidates = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.id !== card.id && (c.zoneType === "artifact" || c.zoneType === "creature"));
+      autoSacrificeArtifacts = candidates.slice(0, cost.autoSacrificeArtifactOrCreatureCount);
+      if (autoSacrificeArtifacts.length < cost.autoSacrificeArtifactOrCreatureCount) { socket.emit("actionError", `You don't have ${cost.autoSacrificeArtifactOrCreatureCount} other artifacts and/or creatures to sacrifice.`); return; }
     }
     // Fountainport-style "Sacrifice a token" -- same auto-pick-first-qualifying shape as the filters above, matching any
     // battlefield permanent whose type line carries "Token" (there is no isToken flag; see the note near the discard helpers).
