@@ -4170,7 +4170,7 @@ const EFFECTS = {
     if (!lobby.stack.some((s) => s.id === stackItemId)) return;
     queueTargetChoice(lobby, {
       controllerId: ctx.controllerId, sourceCard: ctx.sourceCard,
-      label: "Deflecting Swat — choose a new target", targetKind: "any",
+      label: `${params.sourceName || "Deflecting Swat"} — choose a new target`, targetKind: "any",
       effects: [{ type: "redirectStackItemTarget", stackItemId }]
     });
   },
@@ -10296,7 +10296,16 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
   if (payXLife && xValue > 0 && p.life <= xValue) {
     return { ok: false, error: `Not enough life to pay ${xValue} as an additional cost.` };
   }
+  if (payXLife && addlCost.minX && !(xValue >= addlCost.minX)) return { ok: false, error: `${card.name || "This spell"} needs X of at least ${addlCost.minX}.` };
   const xForMana = payXLife ? 0 : xValue;
+  // Redirect Lightning -- "pay 5 life or pay {2}": {2} is taken when the pool can afford it, else the life is paid (disclosed: no player choice).
+  let lifeForCost = 0;
+  if (addlCost && addlCost.lifeOrGeneric) {
+    const withExtra = { ...cost, generic: cost.generic + addlCost.lifeOrGeneric.generic };
+    if (affordWithRestricted(p, withExtra, xForMana, { kind: "cast", card })) cost.generic = withExtra.generic;
+    else if (p.life >= addlCost.lifeOrGeneric.life) lifeForCost = addlCost.lifeOrGeneric.life;
+    else return { ok: false, error: `Not enough mana or life to pay ${card.name || "this spell"}'s additional cost.` };
+  }
   const beforeMana = { ...p.mana };
   const paid = affordWithRestricted(p, cost, xForMana, { kind: "cast", card });
   if (!paid) {
@@ -10365,8 +10374,10 @@ function attemptPlay(lobby, p, card, targetZoneType, xValue) {
     broadcastPlayers(lobby);
     pushLog(lobby, `${p.name} discarded ${discardForCost.name || "a card"} to cast ${card.name || "a spell"}`);
   }
+  if (lifeForCost) { applyLifeLoss(lobby, card.owner, lifeForCost); checkEliminations(lobby); }
   if (payXLife) {
     const life = xValue || 0;
+    card._payXLife = life;
     if (life > 0) { applyLifeLoss(lobby, card.owner, life); checkEliminations(lobby); }
     // Same "bake the dynamic value into _resolvedSpellEffects, resolution reads it automatically"
     // precedent castSpell's own target-choice branches already use (line ~10598) -- Toxic Deluge
@@ -10781,7 +10792,7 @@ function castSpell(lobby, card, casterId, logSuffix) {
         // typeFilter already are, a real gap found while building it (this field never had a caller
         // before, so its absence here was never noticed).
         minCmc: spellAbility.minCmc || null, maxCmc: spellAbility.maxCmc != null ? spellAbility.maxCmc : null, typeFilter: spellAbility.typeFilter || null, logSuffix: logSuffix || "",
-        extraTargets: spellAbility.extraTargets || null, optional: !!spellAbility.optional || !!spellAbility.repeat, allowEmpty: !!spellAbility.allowEmpty,
+        extraTargets: spellAbility.extraTargets || null, optional: !!spellAbility.optional || !!spellAbility.repeat, allowEmpty: !!spellAbility.allowEmpty, allowDupTargets: !!spellAbility.allowDupTargets,
         // A spell whose own (first) step repeats ("any number of ...") re-asks that same step until Done, like extraTargets' repeat steps.
         repeat: !!spellAbility.repeat, repeatSpec: spellAbility.repeat ? { targetKind: spellAbility.targetKind, typeFilter: spellAbility.typeFilter || null, handTypeFilter: spellAbility.handTypeFilter || null, optional: true, repeat: true, label: spellAbility.repeatLabel || spellAbility.label } : null,
         handTypeFilter: spellAbility.handTypeFilter || null
@@ -10892,7 +10903,7 @@ function discardPendingTargetChoices(lobby, socketId) {
 // player picks "Done" ("any number of target ..."). Reuses every existing targetKind/typeFilter validator per step.
 function checkChainTargetRules(lobby, entry, targetId) {
   const prior = (entry.chosenTargetIds || []).filter((t) => t != null);
-  if (prior.includes(targetId)) return "That was already chosen as another target.";
+  if (!entry.allowDupTargets && prior.includes(targetId)) return "That was already chosen as another target.";
   if (entry.sharesCreatureType && prior.length) {
     const p = lobby.players[entry.controllerId];
     const subtypes = (type) => (((type || "").split(/—|-/)[1]) || "").toLowerCase().split(/\s+/).filter(Boolean);
@@ -15264,7 +15275,9 @@ io.on("connection", (socket) => {
     // Multi-target spells (extraTargets): every choice but the last just queues the next step; the spell only goes on the stack once
     // the whole chain is answered, with chosenTargetIds baked into its effects.
     const chosenIds = (entry.chosenTargetIds || []).concat(targetId);
-    if (entry.repeat || (entry.extraTargets && entry.extraTargets.length)) advanceTargetChain(lobby, entry, chosenIds);
+    // Fire Covenant: each pick is one point of the X life paid, so the chain ends by itself once X picks are in.
+    const pickCapReached = entry.allowDupTargets && entry.spellCard && chosenIds.length >= (entry.spellCard._payXLife || 0);
+    if (!pickCapReached && (entry.repeat || (entry.extraTargets && entry.extraTargets.length))) advanceTargetChain(lobby, entry, chosenIds);
     else finalizeTargetChoice(lobby, entry, chosenIds);
     socket.emit("targetChoiceResolved", id);
     if (lobby.pendingTargetChoices.length > 0) promptTargetChoice(lobby, lobby.pendingTargetChoices[0]);
@@ -16733,6 +16746,7 @@ io.on("connection", (socket) => {
         if (!blockerId || usedBlockers.has(blockerId) || validBlockers.includes(blockerId)) continue;
         const blockerCard = lobby.cards[blockerId];
         if (!blockerCard || blockerCard.owner !== socket.id || blockerCard.zoneType !== "creature" || blockerCard.tapped) continue;
+        if (blockerCard._cantBlockTurn === lobby.turn.turnNumber) continue; // Untimely Malfunction: "can't block this turn"
         // CR 509.1b: a creature without flying or reach can't block a flying attacker. Checked via
         // effectiveKeywords (not the printed card.keywords) so a Reach/Flying grant from an aura,
         // equipment, or anthem correctly makes an otherwise-grounded creature a legal blocker too.
