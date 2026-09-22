@@ -5871,6 +5871,7 @@ const EFFECTS = {
     if (lobby.targets[chosen.id]) { delete lobby.targets[chosen.id]; broadcastTargets(lobby); }
     io.to(lobby.id).emit("cardRemove", chosen.id);
     p.graveyard.push(toEntry(chosen));
+    noteGraveyardEntry(lobby, chosen.owner, chosen);
     pushLog(lobby, `${p.name} discards ${chosen.name || "a card"} at random`);
     // damageEachOpponent itself never broadcasts (every other caller relies on executeSpellEffectsNow
     // doing it once at the very end) -- this call happens OUTSIDE that path (thenEffects fires after
@@ -8604,6 +8605,7 @@ function cleanupTemporaryKeywords(lobby) {
     if (p.hasFlashUntilEndOfTurn && !p._flashUntilNextTurn) { p.hasFlashUntilEndOfTurn = false; restrictionsChanged = true; } // Teferi, Time Raveler persists until its controller's next turn
     // Deflecting Palm -- "this turn," swept here if the chosen source never actually dealt damage.
     if (p.deflectingPalmSource) { p.deflectingPalmSource = null; restrictionsChanged = true; }
+    if (p.inkshieldActive) p.inkshieldActive = false; // Inkshield -- "this turn"
   }
   if (restrictionsChanged) broadcastPlayers(lobby);
   if (lobby.creaturesCantAttack) lobby.creaturesCantAttack = false;
@@ -11773,7 +11775,7 @@ function checkMoxDiamondLandDiscard(lobby, card) {
   delete lobby.targets[card.id];
   io.to(lobby.id).emit("cardRemove", card.id);
   const p = lobby.players[card.owner];
-  if (p) { p.graveyard.push(toEntry(card)); broadcastPlayers(lobby); }
+  if (p) { p.graveyard.push(toEntry(card)); noteGraveyardEntry(lobby, card.owner, card); broadcastPlayers(lobby); }
 }
 // "Artifacts and creatures your opponents control enter tapped" (Blind Obedience) -- a static
 // replacement effect (CR 614), checked at the same single fireEtbTriggers choke point every real
@@ -12035,6 +12037,7 @@ function millLibraryCards(lobby, playerId, amount) {
     if (!entry.id) entry.id = newId(); // library entries carry no id; a graveyard card must be addressable as a target
     entry._milledTurn = lobby.turn.turnNumber; // Tato Farmer: "milled this turn"
     p.graveyard.push(entry);
+    noteGraveyardEntry(lobby, playerId, null);
     total++;
     if (!(entry.type || "").toLowerCase().includes("land")) nonlandCount++;
   }
@@ -12422,6 +12425,11 @@ function fireVilisDrawTrigger(lobby, playerId, amount) {
 // declareAttackers once combat.attackers is already committed -- combat-sequencing correctness
 // (the trigger resolving BEFORE damage, not after) is handled by resolveStackTop's combat.step
 // check AND declareAttackers' own pendingTargetChoices check, not by anything here.
+// Isshin, Two Heavens as One -- "If a creature attacking causes a triggered ability of a permanent you control to trigger, that ability triggers
+// an additional time." How many times an attack-caused trigger of one of `controllerId`'s permanents fires (2 with an Isshin in play).
+function attackTriggerCopies(lobby, controllerId) {
+  return Object.values(lobby.cards).some((c) => c.owner === controllerId && c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "isshin, two heavens as one") ? 2 : 1;
+}
 function fireAttackTriggers(lobby, card) {
   if (!lobby.turn.started) return;
   // Battle Cry Goblin's Pack Tactics -- bakes in attackerDefenderId (who THIS card is attacking) the
@@ -12431,7 +12439,7 @@ function fireAttackTriggers(lobby, card) {
   const defenderId = lobby.combat.attackers[card.id];
   getAutomatedAbilities(card.name, "attack").forEach((ability) => {
     const effects = (ability.effects || []).map((e) => ({ ...e, attackerDefenderId: defenderId }));
-    fireTrigger(lobby, card, { ...ability, effects });
+    for (let i = attackTriggerCopies(lobby, card.owner); i > 0; i--) fireTrigger(lobby, card, { ...ability, effects });
   });
   // Aqueous Form -- "Whenever ENCHANTED creature attacks": the trigger lives on an Aura/Equipment
   // attached to the attacker, not on the attacker itself, so it can't be a normal "attack" entry keyed
@@ -12440,7 +12448,7 @@ function fireAttackTriggers(lobby, card) {
   for (const id in lobby.cards) {
     const att = lobby.cards[id];
     if (att.attachedTo !== card.id) continue;
-    getAutomatedAbilities(att.name, "enchantedCreatureAttacks").forEach((ability) => fireTrigger(lobby, att, ability));
+    getAutomatedAbilities(att.name, "enchantedCreatureAttacks").forEach((ability) => { for (let i = attackTriggerCopies(lobby, att.owner); i > 0; i--) fireTrigger(lobby, att, ability); });
   }
 }
 
@@ -12463,7 +12471,7 @@ function fireGlobalAttackTypeTriggers(lobby, attackingCard) {
       // Raid Bombardment -- "a creature you control with power 2 or LESS attacks."
       if (ability.maxPower != null && (parsePT(attackingCard.power) + (attackingCard.counters || 0) + attachedBonusFor(lobby, attackingCard).powerBonus + staticBonusFor(lobby, attackingCard).powerBonus) > ability.maxPower) return;
       const effects = (ability.effects || []).map((e) => ({ ...e, attackerDefenderId: defenderId }));
-      pushAbilityToStack(lobby, { sourceCard: c, controllerId: c.owner, label: ability.label, effects });
+      for (let i = attackTriggerCopies(lobby, c.owner); i > 0; i--) pushAbilityToStack(lobby, { sourceCard: c, controllerId: c.owner, label: ability.label, effects });
     });
   }
 }
@@ -12786,7 +12794,19 @@ function damageMultiplierFor(lobby, controllerId, sourceCard) {
 // Gisela happens to be on both. Same PLAYER-directed-only scope as the doubling half above (not
 // creature-vs-creature combat damage) -- a disclosed narrowing, same precedent as everywhere else.
 const SELF_DAMAGE_HALVING_CARDS = ["gisela, blade of goldnight"];
-function reduceDamageForVictim(lobby, victimId, amount, sourceControllerId) {
+function reduceDamageForVictim(lobby, victimId, amount, sourceControllerId, isCombat) {
+  // Energy Field -- "Prevent all damage that would be dealt to you by sources you don't control."
+  if (sourceControllerId && amount > 0 && victimId !== sourceControllerId && lobby.players[victimId]) {
+    const field = Object.values(lobby.cards).find((c) => c.owner === victimId && c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "energy field");
+    if (field) { pushLog(lobby, `${amount} damage to ${lobby.players[victimId].name} is prevented (Energy Field)`); return 0; }
+  }
+  // Inkshield -- "Prevent all combat damage that would be dealt to you this turn. For each 1 damage prevented this way, create a 2/1 white and
+  // black Inkling creature token with flying."
+  if (isCombat && amount > 0 && lobby.players[victimId] && lobby.players[victimId].inkshieldActive) {
+    pushLog(lobby, `${amount} combat damage to ${lobby.players[victimId].name} is prevented (Inkshield)`);
+    EFFECTS.createToken(lobby, { controllerId: victimId, sourceCard: null }, { amount, name: "Inkling", tokenType: "Token Creature — Inkling", power: "2", toughness: "1", colors: ["W", "B"], keywords: ["Flying"] });
+    return 0;
+  }
   for (const id in lobby.cards) {
     const c = lobby.cards[id];
     if (c.owner === victimId && c.zoneType !== "hand" && c.zoneType !== "stack" && SELF_DAMAGE_HALVING_CARDS.includes(archiveKey(c.name))) { amount = Math.floor(amount / 2); break; }
@@ -12808,6 +12828,30 @@ function reduceDamageForVictim(lobby, victimId, amount, sourceControllerId) {
     }
   }
   return amount;
+}
+// Energy Field ("When a card is put into your graveyard from anywhere, sacrifice this enchantment") and Fraying Sanity ("the number of cards
+// put into their graveyard from anywhere this turn"): every graveyard insertion calls this once right after the push (tokens are not cards).
+function noteGraveyardEntry(lobby, ownerId, card) {
+  const p = lobby.players[ownerId];
+  if (!p || (card && /token/i.test(card.type || ""))) return;
+  p.gyEntriesThisTurn = (p.gyEntriesThisTurn || 0) + 1;
+  Object.values(lobby.cards).filter((c) => c.owner === ownerId && c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "energy field").forEach((c) => {
+    pushLog(lobby, `${p.name} sacrifices ${c.name} (a card was put into their graveyard)`);
+    fireDeathTriggers(lobby, c);
+    sendToGraveyardInternal(lobby, c);
+  });
+}
+// Fraying Sanity -- "At the beginning of each end step, enchanted player mills X cards, where X is the number of cards put into their graveyard
+// from anywhere this turn." The enchanted player is stored on the Aura (card._enchantedPlayerId) by its ETB target choice.
+function fireFrayingSanityMills(lobby) {
+  if (!lobby.turn.started) return;
+  Object.values(lobby.cards).filter((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && archiveKey(c.name) === "fraying sanity" && c._enchantedPlayerId).forEach((c) => {
+    const victim = lobby.players[c._enchantedPlayerId];
+    const x = victim ? (victim.gyEntriesThisTurn || 0) : 0;
+    if (!victim || x <= 0) return;
+    pushLog(lobby, `${victim.name} mills ${x} (Fraying Sanity)`);
+    millLibraryCards(lobby, c._enchantedPlayerId, x);
+  });
 }
 function sendToGraveyardInternal(lobby, card) {
   // A copy of a spell (Reverberate) is not a card: once it resolves or is countered it just ceases to exist.
@@ -12834,6 +12878,7 @@ function sendToGraveyardInternal(lobby, card) {
     return;
   }
   owner.graveyard.push(toEntry(card));
+  noteGraveyardEntry(lobby, card.originalOwner || card.owner, card);
 }
 
 // Same shape as sendToGraveyardInternal, for exileTarget -- kept as its own top-level function
@@ -13053,7 +13098,7 @@ function advanceOnePhase(lobby) {
     activePlayer.landsPlayedThisTurn = 0;
     Object.values(lobby.cards).forEach((gc) => { if (gc._goadedBy === activeId) gc._goadedBy = null; }); // goad lasts until the goader's next turn
     if (activePlayer._flashUntilNextTurn) { activePlayer._flashUntilNextTurn = false; activePlayer.hasFlashUntilEndOfTurn = false; } // Teferi, Time Raveler +1 expires
-    for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; lobby.players[pid].spellsCastThisTurn = 0; lobby.players[pid].noncreatureSpellsCastThisTurn = 0; lobby.players[pid].lifeGainedThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind
+    for (const pid in lobby.players) { lobby.players[pid].lifeLostThisTurn = 0; lobby.players[pid].cardsDrawnThisTurn = 0; lobby.players[pid].spellsCastThisTurn = 0; lobby.players[pid].noncreatureSpellsCastThisTurn = 0; lobby.players[pid].lifeGainedThisTurn = 0; lobby.players[pid].gyEntriesThisTurn = 0; } // Archfiend of Despair / Faerie Mastermind
     activePlayer.attackedThisTurn = false; // Raid (Searslicer Goblin and its functional cousins)
     // Real pre-existing bug found while building Rites of Flourishing: landDropBonus (Explore's own
     // "you may play an additional land THIS TURN") was never reset anywhere per turn in this file --
@@ -13159,6 +13204,7 @@ function advanceOnePhase(lobby) {
   // Archfiend of Despair -- "At the beginning of EACH end step, each opponent loses life equal to the
   // life that player lost this turn." Fires on every player's end step, for every controller of one.
   if (activePlayer && turn.phase === "End Step") fireEachEndStepLifeLossMatch(lobby);
+  if (activePlayer && turn.phase === "End Step") fireFrayingSanityMills(lobby);
   // Archfiend of Depravity / Goblin Spymaster -- "at the beginning of EACH OPPONENT's end step,
   // that player does X." Every player's end step qualifies as "an opponent's end step" from some
   // OTHER player's perspective, so this fires on every single End Step (not gated to the ability's
@@ -13326,7 +13372,7 @@ function resolveCombatDamage(lobby) {
               remaining -= toThis;
             });
             const toPlayerBase = atkTrample ? remaining : 0;
-            const toPlayer = reduceDamageForVictim(lobby, defenderId, toPlayerBase * damageMultiplierFor(lobby, attacker.owner, attacker), attacker.owner);
+            const toPlayer = reduceDamageForVictim(lobby, defenderId, toPlayerBase * damageMultiplierFor(lobby, attacker.owner, attacker), attacker.owner, true);
             if (toPlayer > 0) {
               const defender = lobby.players[defenderId];
               // Teferi's Protection -- see the non-trample branch below for why the whole event is
@@ -13391,7 +13437,7 @@ function resolveCombatDamage(lobby) {
         // whole damage event (no poison, no commander-damage tracking either) rather than just
         // zeroing the life change.
         if (defender && atkPower > 0 && !defender.protectionFromEverything) {
-          const dealt = reduceDamageForVictim(lobby, defenderId, atkPower * damageMultiplierFor(lobby, attacker.owner, attacker), attacker.owner);
+          const dealt = reduceDamageForVictim(lobby, defenderId, atkPower * damageMultiplierFor(lobby, attacker.owner, attacker), attacker.owner, true);
           // Deflecting Palm only intercepts real life loss -- infect's poison-counter conversion
           // (CR 702.90c) isn't a life change at all, so it's never redirectable and always lands.
           const tookIt = dealt <= 0 ? false : hasKw(attacker, "infect") ? (defender.poison = (defender.poison || 0) + dealt, true) : applyLifeLoss(lobby, defenderId, dealt, attacker.id);
@@ -14427,6 +14473,12 @@ io.on("connection", (socket) => {
       const hasLand = (pid, t) => Object.values(lobby.cards).some((c) => c.owner === pid && c.zoneType === "mana" && (c.type || "").toLowerCase().includes(t));
       if (!hasLand(socket.id, alt.ownLand) || !Object.keys(lobby.players).some((pid) => pid !== socket.id && hasLand(pid, alt.opponentLand))) { socket.emit("actionError", `${card.name} is only free if an opponent controls an ${alt.opponentLand} and you control a ${alt.ownLand}.`); return; }
       castSpell(lobby, card, socket.id, ` for free (${alt.opponentLand}/${alt.ownLand} condition)`);
+      return;
+    }
+    // Mindbreak Trap -- "If an opponent cast three or more spells this turn, you may pay {0} rather than pay this spell's mana cost."
+    if (alt.kind === "freeIfOpponentCastSpells") {
+      if (!Object.keys(lobby.players).some((pid) => pid !== socket.id && (lobby.players[pid].spellsCastThisTurn || 0) >= alt.minSpells)) { socket.emit("actionError", `${card.name} is only free if an opponent cast ${alt.minSpells} or more spells this turn.`); return; }
+      castSpell(lobby, card, socket.id, ` for free (an opponent cast ${alt.minSpells}+ spells this turn)`);
       return;
     }
     if (alt.kind === "commanderFree") {
@@ -15494,7 +15546,7 @@ io.on("connection", (socket) => {
       return;
     }
     const entry = toEntry(card);
-    if (zone === "graveyard") lobby.players[owner].graveyard.push(entry);
+    if (zone === "graveyard") { lobby.players[owner].graveyard.push(entry); noteGraveyardEntry(lobby, owner, card); }
     else if (zone === "exile") lobby.players[owner].exile.push(entry);
     else if (zone === "library") {
       if (pos === "top") lobby.players[owner].library.unshift(entry);
@@ -15696,6 +15748,7 @@ io.on("connection", (socket) => {
       pushLog(lobby, `${p.name} searched their library and put a card on top`);
     } else if (toGraveyard) {
       p.graveyard.push(entry);
+      noteGraveyardEntry(lobby, socket.id, null);
       pushLog(lobby, `${p.name} searched their library for ${entry.name} and put it into their graveyard`);
     } else if (toBattlefield) {
       // Whir of Invention / Reshape -- "put it onto the battlefield" (not into hand). Fires the
@@ -16532,6 +16585,7 @@ io.on("connection", (socket) => {
       delete lobby.cards[handCard.id];
       io.to(lobby.id).emit("cardRemove", handCard.id);
       p.graveyard.push(toEntry(handCard));
+      noteGraveyardEntry(lobby, handCard.owner, handCard);
       pushLog(lobby, `${p.name} countered ${ownerLabel}${card.name || "spell"} by casting ${handCard.name || "a card"}`);
     } else {
       pushLog(lobby, `${p.name} countered ${ownerLabel}${card.name || "spell"}`);
@@ -16698,7 +16752,7 @@ io.on("connection", (socket) => {
       for (const cid in lobby.cards) {
         const wc = lobby.cards[cid];
         if (wc.owner !== defId || wc.zoneType === "hand" || wc.zoneType === "stack") continue;
-        getAutomatedAbilities(wc.name, "opponentAttacksYou").forEach((ability) => fireTrigger(lobby, wc, ability));
+        getAutomatedAbilities(wc.name, "opponentAttacksYou").forEach((ability) => { for (let i = attackTriggerCopies(lobby, wc.owner); i > 0; i--) fireTrigger(lobby, wc, ability); });
       }
     });
     // Breena, the Demagogue -- "Whenever a player attacks one of your opponents, if that opponent has more life than another of
@@ -16710,7 +16764,7 @@ io.on("connection", (socket) => {
         getAutomatedAbilities(wc.name, "playerAttacksOpponent").forEach((ability) => {
           if (ability.condition && !ability.condition(wc, lobby, { attackerId: socket.id, defenderId: defId })) return;
           const effects = (ability.effects || []).map((e) => ({ ...e, attackerId: socket.id, defenderId: defId }));
-          pushAbilityToStack(lobby, { sourceCard: wc, controllerId: wc.owner, label: ability.label, effects });
+          for (let i = attackTriggerCopies(lobby, wc.owner); i > 0; i--) pushAbilityToStack(lobby, { sourceCard: wc, controllerId: wc.owner, label: ability.label, effects });
         });
       }
     });
@@ -16723,7 +16777,7 @@ io.on("connection", (socket) => {
       for (const cid in lobby.cards) {
         const wc = lobby.cards[cid];
         if (wc.zoneType === "hand" || wc.zoneType === "stack") continue;
-        getAutomatedAbilities(wc.name, "anyAttackDeclared").forEach((ability) => fireTrigger(lobby, wc, ability));
+        getAutomatedAbilities(wc.name, "anyAttackDeclared").forEach((ability) => { for (let i = attackTriggerCopies(lobby, wc.owner); i > 0; i--) fireTrigger(lobby, wc, ability); });
       }
     }
     applySharedAnimosity(lobby, Object.keys(validAttackers));
