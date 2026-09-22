@@ -9015,6 +9015,14 @@ function activatedAbilityCostReductionFor(lobby, ownerId) {
     const m = (c.text || "").match(/activated abilities of creatures you control cost \{(\d+)\} less to activate/i);
     if (m) reduction += parseInt(m[1], 10) || 0;
   }
+  // Agatha of the Vile Cauldron -- "cost {X} less to activate, where X is Agatha's power" (each copy adds its own power).
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType !== "creature") continue;
+    if (/activated abilities of creatures you control cost \{x\} less to activate, where x is [^']+'s power/i.test(c.text || "")) {
+      reduction += Math.max(0, parsePT(c.power) + (c.counters || 0) + attachedBonusFor(lobby, c).powerBonus + staticBonusFor(lobby, c).powerBonus);
+    }
+  }
   // Heartstone -- "Activated abilities of creatures cost {1} less to activate" (ANY controller's copy
   // helps every creature on the table, unlike Training Grounds' "you control" scope).
   for (const id in lobby.cards) {
@@ -10701,7 +10709,9 @@ function fireCastWatchTriggers(lobby, casterId, spellCard) {
       // Nezahal, Primal Tide -- "Whenever an opponent casts a NONcreature spell": the inverse of spellTypeFilter.
       if (ability.excludeTypeFilter && ability.excludeTypeFilter.some((t) => type.includes(t))) return;
       // Mana Breach -- "that player returns a land they control": the caster baked into chosenTargetId.
-      const fireAbility = ability.dynamicTargetCaster ? { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: casterId })) } : ability;
+      let fireAbility = ability.dynamicTargetCaster ? { ...ability, effects: (ability.effects || []).map((e) => ({ ...e, chosenTargetId: casterId })) } : ability;
+      // Counterbalance -- the cast spell's stack id baked in as spellId.
+      if (ability.bakeCastSpell) fireAbility = { ...fireAbility, effects: (fireAbility.effects || []).map((e) => ({ ...e, spellId: spellCard.id })) };
       fireTrigger(lobby, c, fireAbility);
     });
   }
@@ -10965,7 +10975,7 @@ function finalizeTargetChoice(lobby, entry, chosenIds) {
 // SPELL_ABILITIES entries ever set targetKind to "player"/"any"/"spell". Returns { ok, error } or
 // { ok: true }; doesn't mutate anything, just answers "is this a legal choice."
 // Silent Gravestone -- "Cards in graveyards can't be the targets of spells or abilities."
-const GRAVEYARD_TARGET_KINDS = new Set(["ownGraveyardCreature", "ownGraveyard", "ownGraveyardMvFilter", "ownGraveyardTypeList", "anyGraveyardCreature"]);
+const GRAVEYARD_TARGET_KINDS = new Set(["ownGraveyardCreature", "ownGraveyard", "ownGraveyardMvFilter", "ownGraveyardTypeList", "anyGraveyardCreature", "milledLandInGraveyard"]);
 function graveyardTargetsBlocked(lobby) {
   return Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /cards in graveyards can'?t be the targets of spells or abilities/i.test(c.text || ""));
 }
@@ -11203,6 +11213,19 @@ function resolveChosenTarget(lobby, entry, targetId) {
     if (!c || !(c.zoneType === "creature" || c.zoneType === "artifact")) return { ok: false, error: "Choose a spell or a nonland permanent." };
     if (c.owner === entry.controllerId) return { ok: false, error: "Choose a permanent an opponent controls." };
     if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That permanent"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Sweet-Gum Recluse -- "creatures that entered this turn" (controllerSince is stamped with the entering turn).
+  if (targetKind === "creatureEnteredThisTurn") {
+    const c = lobby.cards[targetId];
+    if (!c || c.zoneType !== "creature" || !lobby.turn.started || c.controllerSince !== lobby.turn.turnNumber) return { ok: false, error: "Choose a creature that entered this turn." };
+    if (targetIsUntargetableBy(lobby, c, entry.controllerId, entry.spellCard || entry.sourceCard)) return { ok: false, error: `${c.name || "That creature"} can't be targeted by this.` };
+    return { ok: true };
+  }
+  // Tato Farmer -- "target land card in a graveyard that was milled this turn" (millLibraryCards stamps _milledTurn).
+  if (targetKind === "milledLandInGraveyard") {
+    const found = findGraveyardEntry(lobby, targetId, "land");
+    if (!found || !lobby.turn.started || found.entry._milledTurn !== lobby.turn.turnNumber) return { ok: false, error: "Choose a land card in a graveyard that was milled this turn." };
     return { ok: true };
   }
   if (targetKind === "untappedCreature") {
@@ -11449,6 +11472,11 @@ function fireTrigger(lobby, card, ability, xValue) {
       const hasMatch = Object.values(lobby.cards).some((c) => c.zoneType === "creature" && effectiveKeywords(lobby, c).some((k) => (k || "").toLowerCase() === "flying"));
       if (!hasMatch) return;
     }
+    // Tato Farmer -- same CR 603.3c auto-fizzle: no land card was milled this turn, nothing to target.
+    if (ability.targetKind === "milledLandInGraveyard") {
+      const hasMatch = Object.values(lobby.players).some((pl) => (pl.graveyard || []).some((e) => (e.type || "").toLowerCase().includes("land") && e._milledTurn === lobby.turn.turnNumber));
+      if (!hasMatch) return;
+    }
     // Astral Dragon -- same CR 603.3c auto-fizzle, for the case no noncreature permanent exists
     // anywhere on the battlefield yet.
     if (ability.targetKind === "noncreaturePermanent") {
@@ -11496,7 +11524,9 @@ function fireTrigger(lobby, card, ability, xValue) {
       const hasMatch = Object.values(lobby.cards).some((c) => (c.zoneType === "creature" || c.zoneType === "artifact" || c.zoneType === "mana") && filter.some((t) => (c.type || "").toLowerCase().includes(t)));
       if (!hasMatch) return;
     }
-    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, maxCmc: ability.maxCmc, maxPower: ability.maxPower, excludeSelf: ability.excludeSelf, commanderChoices });
+    queueTargetChoice(lobby, { controllerId: card.owner, sourceCard: card, label: ability.label, effects, targetZoneType: ability.targetZoneType, targetKind: ability.targetKind, handTypeFilter: ability.handTypeFilter, typeFilter: ability.typeFilter, maxCmc: ability.maxCmc, maxPower: ability.maxPower, excludeSelf: ability.excludeSelf, commanderChoices,
+      // "Any number of target ..." trigger (Sweet-Gum Recluse): re-asks the same step until Done, like a spell's repeat chain.
+      repeat: !!ability.repeat, optional: !!ability.repeat, repeatSpec: ability.repeat ? { targetKind: ability.targetKind, typeFilter: ability.typeFilter || null, optional: true, repeat: true, label: ability.label } : null });
   } else {
     pushAbilityToStack(lobby, { sourceCard: card, controllerId: card.owner, label: ability.label, effects });
   }
@@ -12002,6 +12032,8 @@ function millLibraryCards(lobby, playerId, amount) {
   let nonlandCount = 0, total = 0;
   for (let i = 0; i < amount && p.library.length > 0; i++) {
     const entry = p.library.shift();
+    if (!entry.id) entry.id = newId(); // library entries carry no id; a graveyard card must be addressable as a target
+    entry._milledTurn = lobby.turn.turnNumber; // Tato Farmer: "milled this turn"
     p.graveyard.push(entry);
     total++;
     if (!(entry.type || "").toLowerCase().includes("land")) nonlandCount++;
@@ -12778,6 +12810,8 @@ function reduceDamageForVictim(lobby, victimId, amount, sourceControllerId) {
   return amount;
 }
 function sendToGraveyardInternal(lobby, card) {
+  // A copy of a spell (Reverberate) is not a card: once it resolves or is countered it just ceases to exist.
+  if (card._isSpellCopy) { delete lobby.cards[card.id]; io.to(lobby.id).emit("cardRemove", card.id); return; }
   if (graveyardRedirectFor(lobby, card)) { exileCardInternal(lobby, card); return; }
   delete lobby.cards[card.id];
   if (lobby.targets[card.id]) delete lobby.targets[card.id];
@@ -12806,6 +12840,7 @@ function sendToGraveyardInternal(lobby, card) {
 // (rather than calling the socket-closure-scoped moveOut) since it needs to be callable from
 // EFFECTS, which is defined outside any single connection's closure.
 function exileCardInternal(lobby, card) {
+  if (card._isSpellCopy) { delete lobby.cards[card.id]; io.to(lobby.id).emit("cardRemove", card.id); return; }
   // Soulherder -- "Whenever a creature is exiled from the battlefield, put a +1/+1 counter on this
   // creature." No "you control"/"another" qualifier on WHICH creature gets exiled, so this checks
   // BEFORE the card is actually removed (card.zoneType still reflects its real pre-exile state) and

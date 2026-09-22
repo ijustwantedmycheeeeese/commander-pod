@@ -2280,6 +2280,7 @@
       if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
       if (kind === "ownGraveyardCreature") return "Open your Graveyard and click \"Target This\" on a creature card.";
       if (kind === "anyGraveyardCreature") return "Open any player's Graveyard and click \"Target This\" on a creature card.";
+      if (kind === "milledLandInGraveyard") return "Open any player's Graveyard and click \"Target This\" on a land card that was milled this turn.";
       if (kind === "ownGraveyardTypeList") return `Open your Graveyard and click "Target This" on a ${(pendingTargetChoiceTypeFilter || []).join("/") || "matching"} card.`;
       if (kind === "ownCommanderInZone") return "Choose a commander from the Command Zone:";
       if (kind === "ownCreature") return "Click a creature you control to target it.";
@@ -2315,7 +2316,7 @@
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone" || kind === "opponent" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "stackTargetingController" || kind === "ownGraveyard" || kind === "ownGraveyardMvFilter") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
+      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "milledLandInGraveyard" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone" || kind === "opponent" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "stackTargetingController" || kind === "ownGraveyard" || kind === "ownGraveyardMvFilter") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
@@ -2372,6 +2373,7 @@
           case "commander": return z === "creature" && !!card.isCommander;
           case "attackingCreature": return z === "creature" && isAttacking;
           case "untappedCreature": return z === "creature" && !card.tapped;
+          case "creatureEnteredThisTurn": return z === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber;
           case "opponentSpellOrNonlandPermanent": return nonland && card.owner !== myId;
           case "attackingOrBlockingCreature": return z === "creature" && (isAttacking || isBlocking);
           case "opponentPermanent": return onBattlefield && card.owner !== myId;
@@ -4708,11 +4710,12 @@
             const entryType = (entry.type || "").toLowerCase();
             const wantsOwnGY = pendingTargetChoiceKind === "ownGraveyardCreature" && isMine && entryType.includes("creature");
             const wantsAnyGY = pendingTargetChoiceKind === "anyGraveyardCreature" && entryType.includes("creature");
+            const wantsMilledLand = pendingTargetChoiceKind === "milledLandInGraveyard" && entryType.includes("land");
             // Argivian Find ("artifact or enchantment card from your graveyard") -- same "own
             // graveyard, filtered by type" shape as ownGraveyardCreature, generalized with
             // pendingTargetChoiceTypeFilter instead of a hardcoded "creature" check.
             const wantsOwnTypeList = pendingTargetChoiceKind === "ownGraveyardTypeList" && isMine && (pendingTargetChoiceTypeFilter || []).some((t) => entryType.includes(t));
-            if (wantsOwnGY || wantsAnyGY || wantsOwnTypeList) {
+            if (wantsOwnGY || wantsAnyGY || wantsMilledLand || wantsOwnTypeList) {
               actions += ` <button class="mini-btn" style="background:#7f9fd4;" onclick="chooseTargetFor('${entry.id}')">Target This</button>`;
             }
           }
