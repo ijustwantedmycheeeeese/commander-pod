@@ -1852,7 +1852,13 @@
       if (/^this (land|artifact) deals \d+ damage to you\.?$/.test(low)) return true;
       if (/^\{t\}, pay \d+ life:\s*add\b/.test(low)) return true;
       if (/^(basic landcycling|cycling) \{[^}]+\}\.?$/.test(low)) return true;
-      if (/^enchant creature$/.test(low)) return true;
+      if (/^enchant (creature|enchantment)$/.test(low)) return true;
+      if (/^you control enchanted enchantment\.?$/.test(low)) return true;
+      if (/^equipped creature has trample and "whenever this creature deals combat damage to a player, put that many \+1\/\+1 counters on it\."?$/.test(low)) return true;
+      if (/^equipped creature gets \+1\/\+1 and has trample and "whenever this creature deals combat damage to a player or planeswalker, create that many treasure tokens\."?$/.test(low)) return true;
+      if (/^nighthawk scavenger's power is equal to 1 plus the number of card types among cards in your opponents' graveyards\.?$/.test(low)) return true;
+      if (/^umbra armor(?: \(.*\))?\.?$/.test(low)) return true;
+      if (/^if an opponent would draw a card except the first one they draw in each of their draw steps, instead that player skips that draw and you draw a card\.?$/.test(low)) return true;
       if (/^equip \{?[\dwubrgc]+\}?$/.test(low)) return true;
       if (/^you may cast this spell as though it had flash/.test(low)) return true;
       if (/^(equipped|enchanted) creature gets [+-]\d+\/[+-]\d+\.?$/.test(low)) return true;
@@ -1864,6 +1870,15 @@
       if (anthemLooksAutomated(sentence)) return true;
       if (/^\w+ spells you cast cost \{\d+\} less to cast\.?$/.test(low)) return true;
       if (/^creature spells you control can'?t be countered\.?$/.test(low)) return true;
+      if (/^spells you control can'?t be countered\.?$/.test(low)) return true;
+      if (/^when enchanted permanent dies or is put into exile, return that card to the battlefield under your control\.?$/.test(low)) return true;
+      if (/^lands you control are every basic land type in addition to their other types\.?$/.test(low)) return true;
+      if (/^enchant creature or planeswalker you control$/.test(low)) return true;
+      if (/^the mindskinner can'?t be blocked\.?$/.test(low)) return true;
+      if (/^if a source you control would deal damage to an opponent, prevent that damage and each opponent mills that many cards\.?$/.test(low)) return true;
+      if (/^ward\s*[\u2014-]+\s*pay 2 life\.?$/.test(low)) return true;
+      if (/^other creatures you control have "ward\s*[\u2014-]+\s*pay 2 life\.?"\.?$/.test(low)) return true;
+      if (/^if a creature you control that entered this turn would deal damage, it deals twice that much damage instead\.?$/.test(low)) return true;
       if (/^nontoken creatures you control have riot\.?$/.test(low)) return true;
       if (/^whenever a creature you control attacks, it gets \+1\/\+0 until end of turn for each other attacking creature that shares a creature type with it\.?$/.test(low)) return true;
       if (/^battle cry \(.*\)$/.test(low) || low === "battle cry") return true;
@@ -2265,6 +2280,7 @@
       if (kind === "handCard") return `Click a ${(pendingTargetChoiceHandFilter || []).join("/") || "matching"} card in your hand.`;
       if (kind === "ownGraveyardCreature") return "Open your Graveyard and click \"Target This\" on a creature card.";
       if (kind === "anyGraveyardCreature") return "Open any player's Graveyard and click \"Target This\" on a creature card.";
+      if (kind === "milledLandInGraveyard") return "Open any player's Graveyard and click \"Target This\" on a land card that was milled this turn.";
       if (kind === "ownGraveyardTypeList") return `Open your Graveyard and click "Target This" on a ${(pendingTargetChoiceTypeFilter || []).join("/") || "matching"} card.`;
       if (kind === "ownCommanderInZone") return "Choose a commander from the Command Zone:";
       if (kind === "ownCreature") return "Click a creature you control to target it.";
@@ -2293,13 +2309,14 @@
         opponent: "Click an opponent to target them.",
         nonCreatureSpell: "Click a noncreature spell on the Stack to target it.",
         instantOrSorcerySpell: "Click an instant or sorcery spell on the Stack to target it.",
+        stackTargetingController: "Click a spell or ability on the Stack that targets you or a creature you control.",
         spellMvFilter: "Click a spell on the Stack to target it."
       };
       if (KIND_LABELS[kind]) return KIND_LABELS[kind];
       return `Click a ${kind === "creature" ? "creature" : kind} on the battlefield to target it.`;
     }
     function targetKindMatchesCard(kind, card) {
-      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone" || kind === "opponent" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "ownGraveyard" || kind === "ownGraveyardMvFilter") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
+      if (kind === "player" || kind === "spell" || kind === "mode" || kind === "cardType" || kind === "creatureType" || kind === "ownGraveyardCreature" || kind === "anyGraveyardCreature" || kind === "milledLandInGraveyard" || kind === "ownGraveyardTypeList" || kind === "ownCommanderInZone" || kind === "opponent" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "stackTargetingController" || kind === "ownGraveyard" || kind === "ownGraveyardMvFilter") return false; // battlefield cards are never legal for these -- these are chosen from inside the zone-modal, as mode-style buttons, or via a free-text prompt instead
       if (kind === "handCard") {
         if (card.zoneType !== "hand") return false;
         const filter = pendingTargetChoiceHandFilter || [];
@@ -2330,6 +2347,10 @@
       // real click did nothing, exactly matching resolveChosenTarget's own "otherOwnCreature" branch
       // server-side (see its own comment for the same source-card exclusion).
       if (kind === "ownCreature") return card.owner === myId && card.zoneType === "creature";
+      // For the Common Good -- "target token you control" -- mirrors resolveChosenTarget's own
+      // "ownToken" branch server-side (type-line "token" substring, since tokens can be creatures OR
+      // artifacts and this app has no separate isToken flag).
+      if (kind === "ownToken") return card.owner === myId && (card.zoneType === "creature" || card.zoneType === "artifact") && (card.type || "").toLowerCase().includes("token");
       if (kind === "otherOwnCreature") return card.owner === myId && card.zoneType === "creature" && card.id !== pendingTargetChoiceSourceId;
       // Acidic Slime ("target artifact, enchantment, or land") -- see resolveChosenTarget's own
       // "typeList" branch server-side, which this mirrors exactly.
@@ -2355,6 +2376,9 @@
           case "ownNontokenArtifact": return z === "artifact" && card.owner === myId && !t.includes("token");
           case "commander": return z === "creature" && !!card.isCommander;
           case "attackingCreature": return z === "creature" && isAttacking;
+          case "untappedCreature": return z === "creature" && !card.tapped;
+          case "creatureEnteredThisTurn": return z === "creature" && currentTurn.started && card.controllerSince === currentTurn.turnNumber;
+          case "opponentSpellOrNonlandPermanent": return nonland && card.owner !== myId;
           case "attackingOrBlockingCreature": return z === "creature" && (isAttacking || isBlocking);
           case "opponentPermanent": return onBattlefield && card.owner !== myId;
           case "opponentNonlandPermanent": return nonland && card.owner !== myId;
@@ -2373,7 +2397,7 @@
       return card.zoneType === kind;
     }
     // Stack-targeting kinds (spells/abilities on the Stack panel) and player-targeting kinds.
-    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter"; }
+    function targetKindClickableOnStack(kind) { return kind === "spell" || kind === "any" || kind === "nonCreatureSpell" || kind === "instantOrSorcerySpell" || kind === "spellMvFilter" || kind === "stackTargetingController" || kind === "opponentSpellOrNonlandPermanent"; }
     function targetKindClickableOnPlayer(kind) { return kind === "player" || kind === "any" || kind === "playerOrPlaneswalker" || kind === "opponent"; }
     // Serra's Emissary's ETB choice -- same fixed list as the server's own CARD_TYPE_CHOICES.
     const CARD_TYPE_CHOICES = ["Creature", "Instant", "Sorcery", "Artifact", "Enchantment", "Planeswalker", "Land"];
@@ -4128,6 +4152,17 @@
         const n = colorsAmongPermanentsFor(card.owner);
         powerBonus += n; toughnessBonus += n;
       }
+      // Nighthawk Scavenger -- "power is equal to 1 plus the number of card types among cards in your opponents' graveyards" (server.js mirror).
+      if (/power is equal to 1 plus the number of card types among cards in your opponents' graveyards/i.test(card.text || "")) {
+        const types = new Set();
+        Object.keys(players || {}).forEach((pid) => {
+          if (pid === card.owner) return;
+          ((players[pid] && players[pid].graveyard) || []).forEach((e) => {
+            ["artifact", "battle", "creature", "enchantment", "instant", "kindred", "land", "planeswalker", "sorcery"].forEach((t) => { if ((e.type || "").toLowerCase().includes(t)) types.add(t); });
+          });
+        });
+        powerBonus += types.size;
+      }
       // Serra Ascendant -- P/T half, server-side mirror in staticBonusFor's own comment (server.js).
       const lifePTMatch = (card.text || "").match(/as long as you have (\d+) or more life, this creature gets \+(\d+)\/\+(\d+)/i);
       if (lifePTMatch) {
@@ -4679,11 +4714,12 @@
             const entryType = (entry.type || "").toLowerCase();
             const wantsOwnGY = pendingTargetChoiceKind === "ownGraveyardCreature" && isMine && entryType.includes("creature");
             const wantsAnyGY = pendingTargetChoiceKind === "anyGraveyardCreature" && entryType.includes("creature");
+            const wantsMilledLand = pendingTargetChoiceKind === "milledLandInGraveyard" && entryType.includes("land");
             // Argivian Find ("artifact or enchantment card from your graveyard") -- same "own
             // graveyard, filtered by type" shape as ownGraveyardCreature, generalized with
             // pendingTargetChoiceTypeFilter instead of a hardcoded "creature" check.
             const wantsOwnTypeList = pendingTargetChoiceKind === "ownGraveyardTypeList" && isMine && (pendingTargetChoiceTypeFilter || []).some((t) => entryType.includes(t));
-            if (wantsOwnGY || wantsAnyGY || wantsOwnTypeList) {
+            if (wantsOwnGY || wantsAnyGY || wantsMilledLand || wantsOwnTypeList) {
               actions += ` <button class="mini-btn" style="background:#7f9fd4;" onclick="chooseTargetFor('${entry.id}')">Target This</button>`;
             }
           }
