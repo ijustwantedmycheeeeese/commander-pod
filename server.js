@@ -9361,7 +9361,14 @@ function colorsAmongPermanentsFor(lobby, ownerId) {
 // Coat of Arms -- creature SUBTYPES only (the words after the type line's own em dash), lowercased
 // for comparison. "Legendary Creature — Elder Dinosaur" -> ["elder","dinosaur"]; a type line with no
 // em dash (a plain "Creature" token with no named subtype) returns [].
-function creatureSubtypesOf(typeLine) {
+// Named distinctly from creatureSubtypesOf(card) above (Shared Animosity, wave 16): the two used to
+// share the name "creatureSubtypesOf", and since both were plain top-level function declarations,
+// this later one silently replaced the earlier one for EVERY caller table-wide -- including Shared
+// Animosity's applySharedAnimosity, which passes a CARD OBJECT here, not a type-line string, so
+// `(typeLine || "").split` threw a TypeError the instant any attacker triggered it. Found during the
+// wave 55-72 review (flagged but left unfixed by wave 69's Folk Hero, whose own comment names this
+// exact collision); verified by test_shared_animosity.js.
+function creatureSubtypesFromTypeLine(typeLine) {
   const parts = (typeLine || "").split("—");
   if (parts.length < 2) return [];
   return parts[parts.length - 1].trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -9430,9 +9437,9 @@ function staticBonusFor(lobby, card) {
   // (creatureSubtypesOf returns []) can never share one with anything, correctly contributing/
   // receiving nothing either way.
   if (card.zoneType === "creature" && Object.values(lobby.cards).some((c) => c.zoneType !== "hand" && c.zoneType !== "stack" && /each creature gets \+1\/\+1 for each other creature on the battlefield that shares at least one creature type with it/i.test(c.text || ""))) {
-    const cardTypes = creatureSubtypesOf(card.type);
+    const cardTypes = creatureSubtypesFromTypeLine(card.type);
     if (cardTypes.length) {
-      const sharedTypeCount = Object.values(lobby.cards).filter((x) => x.id !== card.id && x.zoneType === "creature" && creatureSubtypesOf(x.type).some((t) => cardTypes.includes(t))).length;
+      const sharedTypeCount = Object.values(lobby.cards).filter((x) => x.id !== card.id && x.zoneType === "creature" && creatureSubtypesFromTypeLine(x.type).some((t) => cardTypes.includes(t))).length;
       powerBonus += sharedTypeCount; toughnessBonus += sharedTypeCount;
     }
   }
