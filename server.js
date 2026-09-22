@@ -7491,6 +7491,29 @@ const EFFECTS = {
   // apply for free, with less code than before.
   createTreasureToken(lobby, ctx, params) {
     EFFECTS.createToken(lobby, ctx, { name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg" });
+    // Jolene, the Plunder Queen -- "If you would create one or more Treasure tokens, instead
+    // create those tokens plus an additional Treasure token." An ADDITIVE (+1) replacement, unlike
+    // tokenMultiplierFor's doubling -- same additive-vs-multiplicative split bonusCountersFor draws
+    // against Corpsejack Menace's doubling. Scoped to Treasure specifically (not folded into
+    // createToken generically) since Jolene's own text only ever mentions Treasure tokens, and this
+    // is the one shared entry point every Treasure-creating effect in the file already funnels
+    // through (the rare direct EFFECTS.createToken({tokenType:"Token Artifact — Treasure"}) callers
+    // that bypass this, like rollD20CreateTreasures's variable-amount roll, are a real gap for a
+    // FUTURE wave to fold in if a Treasure-doubling card ever needs it there too).
+    if (bonusTreasureTokensFor(lobby, ctx.controllerId) > 0) {
+      EFFECTS.createToken(lobby, ctx, { name: "Treasure", tokenType: "Token Artifact — Treasure", img: "https://cards.scryfall.io/normal/front/6/8/68894c85-fb43-4c9a-9de3-2fa1c9c31543.jpg" });
+    }
+  },
+  // Jolene's OWN first ability -- "that attacking player creates a Treasure token" -- benefits
+  // whoever attacked (params.attackerId), not Jolene's controller (ctx.controllerId). Delegates to
+  // createTreasureToken with controllerId overridden to the attacker rather than duplicating it,
+  // so the +1 replacement above is evaluated against the ATTACKER's own statics -- correctly
+  // applying when the attacker happens to be Jolene's own controller (attacking one's own
+  // opponents triggers this too), and correctly NOT applying Jolene's controller's copy to some
+  // unrelated third player's attack.
+  createTreasureTokenForAttacker(lobby, ctx, params) {
+    if (!params.attackerId || !lobby.players[params.attackerId]) return;
+    EFFECTS.createTreasureToken(lobby, { ...ctx, controllerId: params.attackerId }, params);
   },
   rollD20CreateTreasures(lobby, ctx, params) {
     const roll = 1 + Math.floor(gameRand() * 20);
@@ -9214,6 +9237,16 @@ function tokenMultiplierFor(lobby, ownerId) {
     if (/create[s]? .*tokens? under your control.*it creates twice that many/i.test(c.text || "")) mult *= 2;
   }
   return mult;
+}
+// Jolene, the Plunder Queen -- see createTreasureToken's own comment.
+function bonusTreasureTokensFor(lobby, ownerId) {
+  let bonus = 0;
+  for (const id in lobby.cards) {
+    const c = lobby.cards[id];
+    if (c.owner !== ownerId || c.zoneType === "hand" || c.zoneType === "stack") continue;
+    if (/if you would create one or more treasure tokens, instead create those tokens plus an additional treasure token/i.test(c.text || "")) bonus += 1;
+  }
+  return bonus;
 }
 // Hardened Scales -- see addCountersToSelf's own comment for why this is a flat +1, not a doubling.
 function bonusCountersFor(lobby, ownerId) {
@@ -14580,6 +14613,19 @@ io.on("connection", (socket) => {
     // discard" spells this out explicitly, but even a plain "whenever you discard a card" ability
     // is real Magic-correct to fire here too.
     fireGlobalTrigger(lobby, "youDiscard", socket.id, card);
+    // Gempalm Incinerator ("When you cycle this card, you may have it deal X damage to target
+    // creature, where X is the number of Goblins on the battlefield") -- the first name-keyed
+    // "cycle" trigger; a genuinely new dispatch site (nothing previously fired per-card off of
+    // cycling), kept generic (any future card can add a CARD_ABILITIES trigger:"cycle" entry) even
+    // though only one card uses it today. Goblins are counted across the WHOLE battlefield (any
+    // owner), unlike fireGlobalOtherCreatureEtbTriggers' amountSource:"count" which is controller-
+    // scoped -- computed inline rather than reusing that machinery since it doesn't fit this shape.
+    getAutomatedAbilities(card.name, "cycle").forEach((ability) => {
+      const amount = Object.values(lobby.cards).filter((x) => x.zoneType === "creature" && /goblin/i.test(x.type || "")).length;
+      const effects = (ability.effects || []).map((e) => ({ ...e, amount: e.amount != null ? e.amount : amount }));
+      if (ability.requiresTarget) queueTargetChoice(lobby, { controllerId: socket.id, sourceCard: card, label: ability.label, effects, targetKind: ability.targetKind, optional: !!ability.optional });
+      else pushAbilityToStack(lobby, { sourceCard: card, controllerId: socket.id, label: ability.label, effects });
+    });
     if (cyc.kind === "basicLand") EFFECTS.tutorToHand(lobby, { controllerId: socket.id }, { typeFilter: cyc.landType || "land" });
     else drawN(lobby, socket.id, 1);
     broadcastPlayers(lobby);
@@ -15037,11 +15083,23 @@ io.on("connection", (socket) => {
     // separately from the plain autoSacrificeFilter above, which is hardcoded to zoneType
     // "creature" only). No "another" in the real text, so sacrificing itself is a legal candidate.
     let autoSacrificeArtifact = null;
+    // Jolene, the Plunder Queen -- "Sacrifice five Treasures." cost.autoSacrificeCount (absent for
+    // every existing caller, so fully backward compatible with the single-artifact shape above)
+    // auto-picks the first N qualifying artifacts instead of just one -- Mondrak's own deferred
+    // "sacrifice two other artifacts and/or creatures" would need a further OR-filter extension on
+    // top of this, not built here since Jolene's cost is same-type-only.
+    let autoSacrificeArtifacts = [];
     if (cost.autoSacrificeArtifactFilter) {
       const filter = cost.autoSacrificeArtifactFilter;
       const candidates = Object.values(lobby.cards).filter((c) => c.owner === socket.id && c.zoneType === "artifact" && (filter === "artifact" || (c.type || "").toLowerCase().includes(filter)));
-      autoSacrificeArtifact = candidates[0] || null;
-      if (!autoSacrificeArtifact) { socket.emit("actionError", `You have no ${filter} to sacrifice.`); return; }
+      if (cost.autoSacrificeCount) {
+        autoSacrificeArtifacts = candidates.slice(0, cost.autoSacrificeCount);
+        if (autoSacrificeArtifacts.length < cost.autoSacrificeCount) { socket.emit("actionError", `You don't have ${cost.autoSacrificeCount} ${filter}s to sacrifice.`); return; }
+      } else {
+        autoSacrificeArtifact = candidates[0] || null;
+        if (!autoSacrificeArtifact) { socket.emit("actionError", `You have no ${filter} to sacrifice.`); return; }
+        autoSacrificeArtifacts = [autoSacrificeArtifact];
+      }
     }
     // Fountainport-style "Sacrifice a token" -- same auto-pick-first-qualifying shape as the filters above, matching any
     // battlefield permanent whose type line carries "Token" (there is no isToken flag; see the note near the discard helpers).
@@ -15142,6 +15200,12 @@ io.on("connection", (socket) => {
           parsedCost.generic = Math.max(minGeneric, parsedCost.generic - reduction);
         }
       }
+      // Mariposa Military Base -- "This ability costs {1} less to activate for each rad counter
+      // you have." A per-card self-reduction (not creature-scoped like Training Grounds/Agatha
+      // above), floored at 0 since the real card has no "never below one mana" clause.
+      if (cost.reduceByOwnRadCounters) {
+        parsedCost.generic = Math.max(0, parsedCost.generic - (p.radCounters || 0));
+      }
       const paid = affordWithRestricted(p, parsedCost, xVal, { kind: "activate", card });
       if (!paid) { socket.emit("actionError", `Not enough mana to activate ${card.name}'s ability.`); return; }
       remainingMana = paid.normalPool;
@@ -15195,10 +15259,9 @@ io.on("connection", (socket) => {
       fireDeathTriggers(lobby, autoSacrificeTokenCard);
       sendToGraveyardInternal(lobby, autoSacrificeTokenCard);
     }
-    if (autoSacrificeArtifact) {
-      pushLog(lobby, `${p.name} sacrifices ${autoSacrificeArtifact.name || "an artifact"} to pay the cost`);
-      fireDeathTriggers(lobby, autoSacrificeArtifact);
-      sendToGraveyardInternal(lobby, autoSacrificeArtifact);
+    if (autoSacrificeArtifacts.length) {
+      pushLog(lobby, `${p.name} sacrifices ${autoSacrificeArtifacts.length > 1 ? `${autoSacrificeArtifacts.length} artifacts` : (autoSacrificeArtifacts[0].name || "an artifact")} to pay the cost`);
+      autoSacrificeArtifacts.forEach((c) => { fireDeathTriggers(lobby, c); sendToGraveyardInternal(lobby, c); });
     }
     if (autoDiscardCard) {
       pushLog(lobby, `${p.name} discards ${autoDiscardCard.name || "a card"} to pay the cost`);
